@@ -289,17 +289,17 @@ server changes. Only calendar/email need a decision, and audio needs a new phase
 Small emit/expose gaps found while wiring the hero UI. Each makes *every* front-end
 better, so they belong in the backend. Ordered roughly by effort.
 
-**Status (updated 2026-07-30, DAWN side).** Three of the six landed in DAWN (implemented
-+ live-verified on the wire, pending commit); one is still open; two stay parked under
-SAGE. **Read §9.1 for the exact shapes you can now consume and §9.2 for behaviour you
-must handle** — several of these changed the wire contract.
+**Status (updated 2026-07-30, DAWN side).** All four actionable items landed in DAWN
+(implemented + live-verified on the wire, committed); the two remaining are proactive-alert
+work parked under SAGE. **Read §9.1 for the exact shapes you can now consume and §9.2 for
+behaviour you must handle** — several of these changed the wire contract.
 
 | # | Item | Status |
 |---|------|--------|
 | 1 | `llm_runtime` reasoning fields | ✅ **Shipped + consumed** — hero UI reads `thinking_mode`/`reasoning_effort` from `llm_runtime` on connect and reflects the `set_session_llm_response` echo; the old localStorage reasoning/effort workaround is deleted. §9.1a/d/e |
 | 2 | `error` frame severity | ✅ **Shipped + consumed** — hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
 | 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
-| 6 | `music_control` bare `play` starts a stopped session | ⏳ **Open** — not started; hero UI keeps its `play_index`-from-stopped workaround |
+| 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
 | 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`) |
 | 4 | Calendar / email content feeds | ⏸ **Deferred** — *pull* version is a small standalone request; *push* is SAGE |
 
@@ -348,6 +348,15 @@ object and `get_config`'s `llm_runtime` always carry concrete `thinking_mode` /
 `reasoning_effort` / `model` (effective defaults are substituted server-side for legacy
 rows that predate this). You can trust these fields are populated — no more empty strings
 to special-case.
+
+**f. `music_control {action:"play"}` with no `path`/`query` now restarts a *stopped*
+session.** Previously a bare `play` only resumed a pause; on a stopped session (after
+`stop`) it silently echoed state, so a "press play" button looked dead until the client
+sent `play_index`. Now, if the shared queue is non-empty, a bare `play` starts the current
+`queue_index` track (clamped into range) and you get the normal `music_state` + audio
+stream. No wire-shape change — same request, same `music_state` response; only the stopped
+case behaves. An empty queue still just echoes state. **You can drop the
+`play_index`-from-stopped workaround** (keeping it is harmless — `play_index` still works).
 
 ### 9.2 Behaviour your reasoning controls must handle
 
@@ -407,20 +416,20 @@ is a Tier-A on-connect push, exactly as §3.7 lists it.
    listens on `webui_server_get_port() + 1`, never announced; the `config` frame now carries
    `music_port` + `music_enabled`.
 
-6. **`music_control` bare `play` should start a stopped session.** ⏳ Open. DAWN streams music
-   audio only to the session that actively *starts* a track (`play` with a path/query,
-   `play_index`, `next`); a bare `play` only resumes a pause (`webui_music_handlers.c`
-   ~L334-343). A client that merely subscribed while audio is "already playing" elsewhere
-   gets metadata but no stream, and its play button appears dead until it sends `play_index`.
-   Bare `play` starting playback at the current queue index when stopped + queue non-empty
-   would make "press play" behave everywhere. (Hero UI works around this by sending
-   `play_index` from a stopped state.)
+6. **`music_control` bare `play` should start a stopped session.** ✅ Done (§9.1f). A bare
+   `play` used to only resume a pause (`webui_music_handlers.c` ~L334-343); on a stopped
+   session it silently echoed state, so a "press play" button looked dead until the client
+   sent `play_index`. Now a bare `play` on a stopped-with-non-empty-queue session starts the
+   current `queue_index` track (clamped into range), following the same queue→state lock
+   discipline as `next`/`previous`. Empty queue still echoes state.
 
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
 channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
-2026-07-30 recording items #1/#2/#5 shipped (pending commit) + the reasoning-control
-behaviour and validation tool. Hero UI consumed #1/#2/#5 (verified against
-`webui_config.c` / `webui_send.c` / `webui_message_dispatch.c`) 2026-07-30.*
+2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
+validation tool. Hero UI consumed #1/#2/#5 (verified against `webui_config.c` /
+`webui_send.c` / `webui_message_dispatch.c`) 2026-07-30. Item #6 shipped 2026-07-30
+(commit on `background-jobs-p2-observe`); §9.1f added. All four actionable items now
+committed in DAWN; #3/#4 remain SAGE-tier.*

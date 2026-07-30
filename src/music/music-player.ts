@@ -247,11 +247,12 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
             opts.control("previous");
             break;
          case "playpause":
-            /* Three cases, because DAWN streams audio only to the session that
-               actively STARTS a track: a bare `play` merely resumes a pause, so on
-               a session that never started (a dashboard that just subscribed) it
-               no-ops and no audio ever streams here. Start it for real with
-               play_index; use bare `play` only to resume an actual pause. */
+            /* Three cases. Current DAWN starts a stopped-with-queue session on a bare
+               `play` (signal-map §9.1f), but we still start it explicitly with
+               play_index: that works on every server, whereas a bare `play` no-ops on
+               older DAWN (streams audio only to the session that actively STARTS a
+               track, so a dashboard that merely subscribed sees a dead play button).
+               Bare `play` is used only to resume an actual pause. */
             if (state?.playing && !state.paused) opts.control("pause");
             else if (state?.paused) opts.control("play");
             else opts.control("play_index", { index: state?.queueIndex ?? 0 });
