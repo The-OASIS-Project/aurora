@@ -94,14 +94,18 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
    };
    bar.addEventListener("click", onBarClick);
 
-   const onDocClick = (e: Event): void => {
+   /* Close on mousedown, not click: the MODEL panel rebuilds its rows during a
+      change click, which detaches the clicked control before a document-level
+      click handler would run, and `bar.contains` on a detached node reads as
+      "outside" and closes the menu. mousedown fires before any such rebuild. */
+   const onDocDown = (e: Event): void => {
       if (!bar.contains(e.target as Node)) closeAll();
    };
-   document.addEventListener("click", onDocClick);
+   document.addEventListener("mousedown", onDocDown);
 
    return {
       destroy: () => {
-         document.removeEventListener("click", onDocClick);
+         document.removeEventListener("mousedown", onDocDown);
          bar.remove();
       }
    };

@@ -24,6 +24,15 @@ export interface ReactorSink {
    setHesitation(load: number): void;
 }
 
+/* What DAWN is doing right now, distilled from the `state` frame for the activity
+   chip. `tone: "alert"` is the warm/needs-you channel (errors); everything else is
+   the cool nominal channel. `detail` carries the specifics (e.g. the tool name). */
+export interface ActivityStatus {
+   label: string;
+   detail?: string;
+   tone?: "alert";
+}
+
 /* What ingest can push to the conversation console (a passive view). Streaming
    replies arrive as startReply -> appendDelta* -> endReply; a complete message
    (non-streamed or replayed history) arrives as showReply. */
@@ -39,6 +48,8 @@ export interface ConversationSink {
    loadHistory(msgs: { role: "user" | "assistant"; text: string }[]): void;
    /* A tool reset the conversation — empty the surface. */
    clear(): void;
+   /* Current activity (thinking / using tools / ...) or null to clear it. */
+   setStatus(status: ActivityStatus | null): void;
 }
 
 /* What ingest can push to the HUD telemetry readout. */

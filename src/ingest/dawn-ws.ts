@@ -23,7 +23,7 @@
  * Consumer map:       docs/DAWN_UI_SIGNAL_MAP.md
  */
 
-import type { Ingest, IngestSinks } from "./ingest.ts";
+import type { ActivityStatus, Ingest, IngestSinks } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { IMPORTANCE } from "../state/types.ts";
 import { TtsPlayback } from "../audio/tts.ts";
@@ -46,6 +46,26 @@ const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
    toward recent generations. Persisted so it survives a refresh. */
 const RATE_EMA_KEY = "dawn.hero.rateEma";
 const RATE_EMA_ALPHA = 0.15; // higher = more responsive to the latest samples
+
+/* Persisted reasoning/effort. DAWN does not report the session's values (they are
+   absent from llm_runtime), so on reconnect the client would otherwise fall back
+   to the global config default and appear to "reset". We remember the user's own
+   choice here and re-assert it on connect. Drop this once DAWN serializes
+   thinking_mode/reasoning_effort into llm_runtime (signal-map section 9). */
+const LLM_PREFS_KEY = "dawn.hero.llmPrefs";
+
+function loadLlmPrefs(): { reasoning?: Reasoning; effort?: string } {
+   try {
+      const raw = localStorage.getItem(LLM_PREFS_KEY);
+      if (!raw) return {};
+      const p = JSON.parse(raw) as { reasoning?: string; effort?: string };
+      const reasoning =
+         p.reasoning === "disabled" || p.reasoning === "enabled" ? (p.reasoning as Reasoning) : undefined;
+      return { reasoning, effort: typeof p.effort === "string" ? p.effort : undefined };
+   } catch {
+      return {};
+   }
+}
 
 interface JobRow {
    conversation_id?: number;
@@ -77,14 +97,18 @@ type StatusHandler = (status: LinkStatus, detail?: string) => void;
    and the daemon hits its per-user cap ("Max sessions reached"). */
 const TOKEN_KEY = "dawn.hero.sessionToken";
 
-/* DAWN's conversation state -> our reactor state. DAWN has one extra state
-   (`summarizing`) with no distinct reactor look; it reads as more thinking. */
+/* DAWN's conversation state -> our reactor state. DAWN has several states with no
+   distinct reactor look; they read as "busy" (thinking). Without folding
+   tool_call/processing/summarizing in here they hit the default and the core goes
+   dark mid-turn (e.g. during tool use). */
 function toReactorState(dawn: string): ReactorState {
    switch (dawn) {
       case "listening":
          return "listening";
       case "thinking":
       case "summarizing":
+      case "processing":
+      case "tool_call":
          return "thinking";
       case "speaking":
          return "speaking";
@@ -92,6 +116,32 @@ function toReactorState(dawn: string): ReactorState {
          return "error";
       default:
          return "idle";
+   }
+}
+
+/* DAWN's conversation state (+ its `detail` string) -> the activity chip. Returns
+   null for idle/unknown, which clears the chip. tool_call's detail is "Calling
+   <name>...", so we lift the tool name out for the chip's secondary text. */
+function toActivity(dawn: string, detail?: string): ActivityStatus | null {
+   switch (dawn) {
+      case "listening":
+         return { label: "Listening" };
+      case "thinking":
+         return { label: "Thinking" };
+      case "summarizing":
+         return { label: "Summarizing" };
+      case "processing":
+         return { label: "Working" };
+      case "tool_call": {
+         const name = detail?.match(/^Calling\s+(.+?)\.{0,3}\s*$/i)?.[1];
+         return { label: "Using tools", detail: name };
+      }
+      case "speaking":
+         return { label: "Speaking" };
+      case "error":
+         return { label: "Error", tone: "alert" };
+      default:
+         return null;
    }
 }
 
@@ -112,14 +162,23 @@ export class DawnIngest implements Ingest {
    private tts!: TtsPlayback;
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
+   /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
+      while the tool runs and its results are processed, so the tool_call state alone
+      flickers past unseen. We latch "using tools" from the ping until the turn leaves
+      the thinking phase (speaking/idle/etc), so even a fast tool call stays visible. */
+   private toolActive = false;
+   private toolName: string | undefined;
    /* LLM selection state (MODEL panel). Reasoning/effort are client-tracked (DAWN
-      does not push them); mode/provider/model/availability come from llm_state_update. */
+      does not push them); mode/provider/model/availability come from llm_state_update.
+      Reasoning/effort seed from the persisted user choice so a refresh does not revert
+      them to the config default before get_config lands. */
+   private readonly llmPrefs = loadLlmPrefs();
    private readonly llm = {
       mode: "cloud" as LlmMode,
       provider: "claude" as LlmProvider,
       model: "",
-      reasoning: "enabled" as Reasoning,
-      effort: "medium",
+      reasoning: this.llmPrefs.reasoning ?? ("enabled" as Reasoning),
+      effort: this.llmPrefs.effort ?? "medium",
       providers: { openai: false, claude: false, gemini: false } as Record<LlmProvider, boolean>
    };
    private readonly cloudModels: Record<LlmProvider, string[]> = {
@@ -312,11 +371,15 @@ export class DawnIngest implements Ingest {
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
             }
-            /* Seed reasoning/effort from DAWN's defaults (they are not pushed per
-               session). Legacy "auto" folds into "enabled". */
-            const t = cfg.llm?.thinking;
-            if (t?.mode) this.llm.reasoning = t.mode === "disabled" ? "disabled" : "enabled";
-            if (t?.reasoning_effort) this.llm.effort = t.reasoning_effort;
+            /* Reasoning/effort: DAWN does not report the session's values (absent
+               from llm_runtime), so seed from the config default ONLY when the user
+               has not chosen their own. A persisted choice wins and is re-asserted
+               below so the session matches. Legacy "auto" folds into "enabled". */
+            if (!this.hasLlmPrefs()) {
+               const t = cfg.llm?.thinking;
+               if (t?.mode) this.llm.reasoning = t.mode === "disabled" ? "disabled" : "enabled";
+               if (t?.reasoning_effort) this.llm.effort = t.reasoning_effort;
+            }
             /* CURRENT session state: llm_runtime (payload level, resolved for this
                session) — the reliable source, since llm_state_update only fires on a
                switch_llm tool call, never on connect. Provider is capitalized here. */
@@ -340,6 +403,8 @@ export class DawnIngest implements Ingest {
                };
             }
             this.notifyLlm();
+            /* Make the session match the persisted reasoning/effort (see below). */
+            this.reassertLlmPrefs();
             break;
          }
 
@@ -409,16 +474,20 @@ export class DawnIngest implements Ingest {
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             break;
 
-         case "state":
-            this.sinks.reactor.setState(toReactorState(String(p.state ?? "idle")));
-            this.sinks.conversation.setThinking(p.state === "thinking" || p.state === "summarizing");
+         case "state": {
+            const st = String(p.state ?? "idle");
+            const detail = typeof p.detail === "string" ? p.detail : undefined;
+            this.sinks.reactor.setState(toReactorState(st));
+            this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
+            this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
             /* Turn complete: persist the final answer once (the last stream's text).
                Tool-iteration rows are saved server-side; we own the final answer. */
-            if (p.state === "idle" && this.replyBuf.trim()) {
+            if (st === "idle" && this.replyBuf.trim()) {
                this.saveMessage("assistant", this.replyBuf);
                this.replyBuf = "";
             }
             break;
+         }
 
          case "error":
             this.sinks.reactor.setState("error");
@@ -613,6 +682,34 @@ export class DawnIngest implements Ingest {
       }
    }
 
+   /* Resolve the activity chip for a `state` frame, applying the tool-use latch.
+      A tool_call ping or a running tool in `tools[]` opens the latch; it holds
+      "Using tools" through the thinking frames DAWN emits while the tool runs and
+      its results are processed, and closes when the turn leaves the thinking phase
+      (speaking / idle / listening / error). Without this a fast tool is invisible. */
+   private activityFor(st: string, detail: string | undefined, toolsRaw: unknown): ActivityStatus | null {
+      const tools = Array.isArray(toolsRaw)
+         ? (toolsRaw as Array<{ name?: string; status?: string }>)
+         : [];
+      const runningTool = tools.find((t) => t.status === "running");
+      const inToolPhase = st === "tool_call" || Boolean(runningTool);
+
+      if (inToolPhase) {
+         this.toolActive = true;
+         this.toolName =
+            runningTool?.name ??
+            tools[0]?.name ??
+            detail?.match(/^Calling\s+(.+?)\.{0,3}\s*$/i)?.[1] ??
+            this.toolName;
+      } else if (st !== "thinking" && st !== "summarizing") {
+         this.toolActive = false;
+         this.toolName = undefined;
+      }
+
+      if (this.toolActive) return { label: "Using tools", detail: this.toolName };
+      return toActivity(st, detail);
+   }
+
    /* Deterministic "New Chat" (not routed through DAWN's LLM tool): reset the
       daemon's context (clear_session), drop our conversation id so the next message
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
@@ -673,6 +770,28 @@ export class DawnIngest implements Ingest {
       this.notifyLlm();
    }
 
+   /* Reasoning/effort persistence. DAWN cannot report the session's values back, so
+      we remember the user's explicit choice and re-apply it on connect. */
+   private hasLlmPrefs(): boolean {
+      return localStorage.getItem(LLM_PREFS_KEY) !== null;
+   }
+   private persistLlmPrefs(): void {
+      localStorage.setItem(
+         LLM_PREFS_KEY,
+         JSON.stringify({ reasoning: this.llm.reasoning, effort: this.llm.effort })
+      );
+   }
+   /* Push the persisted reasoning/effort to the session on (re)connect so a recycled
+      session (or a fresh one) matches what the UI shows. No-op until the user has
+      chosen a value, so it adds no write for a default setup. */
+   private reassertLlmPrefs(): void {
+      if (!this.hasLlmPrefs()) return;
+      this.send({
+         type: "set_session_llm",
+         payload: { thinking_mode: this.llm.reasoning, reasoning_effort: this.llm.effort }
+      });
+   }
+
    private modelsFor(mode: LlmMode, provider: LlmProvider): string[] {
       return mode === "local" ? this.localModels : this.cloudModels[provider];
    }
@@ -717,10 +836,12 @@ export class DawnIngest implements Ingest {
          },
          setReasoning: (reasoning) => {
             this.llm.reasoning = reasoning;
+            this.persistLlmPrefs();
             this.applyLlm({ thinking_mode: reasoning });
          },
          setEffort: (effort) => {
             this.llm.effort = effort;
+            this.persistLlmPrefs();
             this.applyLlm({ reasoning_effort: effort });
          },
          setPrivate: (on) => {

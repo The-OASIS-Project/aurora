@@ -116,11 +116,6 @@ const menu = mountMenu(stage, {
          label: "Bloom (glow)",
          get: () => display.bloom,
          toggle: () => anchor.setBloom((display.bloom = !display.bloom))
-      },
-      {
-         label: "Voice (TTS)",
-         get: () => ttsControl.get(),
-         toggle: () => ttsControl.toggle()
       }
    ]
 });
@@ -142,6 +137,23 @@ notifyDismiss = (id) => ingest.dismiss(id);
 ttsControl.get = () => dawn.isTtsEnabled();
 ttsControl.toggle = () => dawn.setTtsEnabled(!dawn.isTtsEnabled());
 newChatHook.fire = () => dawn.newChat();
+
+/* Voice (TTS) toggle: a small speaker icon on the composer, next to the mic. It is
+   a frequently-reached control, so it lives by the input rather than in a menu.
+   Reflects the persisted/live TTS state and drives dawn.setTtsEnabled. */
+const ttsBtn = document.getElementById("composer-tts") as HTMLButtonElement;
+const paintTts = (): void => {
+   const on = ttsControl.get();
+   ttsBtn.classList.toggle("tts-off", !on);
+   ttsBtn.setAttribute("aria-pressed", on ? "true" : "false");
+   ttsBtn.setAttribute("aria-label", on ? "Mute DAWN's voice" : "Unmute DAWN's voice");
+};
+const onTtsClick = (): void => {
+   ttsControl.toggle();
+   paintTts();
+};
+ttsBtn.addEventListener("click", onTtsClick);
+paintTts();
 
 /* Login overlay: collects credentials, hands them to the ingest, and reflects the
    connection status the ingest reports back. Connect is user-driven, so nothing
@@ -210,6 +222,7 @@ requestAnimationFrame(frame);
 function dispose(): void {
    running = false;
    window.removeEventListener("resize", onResize);
+   ttsBtn.removeEventListener("click", onTtsClick);
    ingest.stop();
    conversation.destroy();
    hud.destroy();

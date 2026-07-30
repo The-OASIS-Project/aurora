@@ -417,6 +417,15 @@ body.engaged #docks {
    }
 }
 
+/* Row that holds the input bar and hangs the TTS toggle in the gutter to its
+   left. Full console width, so the bar itself stays aligned with the convo
+   window above; the toggle is positioned out of flow and does not narrow it. */
+.composer-row {
+   position: relative;
+   width: 100%;
+   pointer-events: none; /* children re-enable; the gutter stays click-through */
+}
+
 /* The one morphing input bar. Same machined language as the panels: hairline
    inset edge + corner brackets, no radius, so the surface the user touches
    belongs to the instrument. */
@@ -466,9 +475,54 @@ body.engaged #docks {
    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-glow) 40%, transparent);
 }
 .composer-input:focus-visible,
-.composer-mic:focus-visible {
+.composer-mic:focus-visible,
+.composer-tts:focus-visible {
    outline: 2px solid var(--accent);
    outline-offset: 3px;
+}
+
+/* Voice-output (TTS) toggle. Speaker glyph tinted with the accent; ON glows and
+   shows its waves, OFF dims to a faint muted speaker with a slash. Sized to sit
+   quietly beside the mic. */
+.composer-tts {
+   position: absolute;
+   right: 100%; /* sit just left of the input bar */
+   top: 50%;
+   transform: translateY(-50%);
+   margin-right: 0.85rem; /* gutter gap between the icon and the bar */
+   pointer-events: auto;
+   box-sizing: content-box;
+   width: 18px;
+   height: 18px;
+   padding: 5px;
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   border: none;
+   background: none;
+   color: color-mix(in srgb, var(--accent) 82%, transparent);
+   cursor: pointer;
+   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent-glow) 35%, transparent));
+   transition: color 200ms ease, opacity 200ms ease, filter 200ms ease;
+}
+.composer-tts .tts-ico {
+   display: block;
+   width: 18px;
+   height: 18px;
+}
+.composer-tts .tts-slash {
+   display: none;
+}
+.composer-tts.tts-off {
+   color: var(--text-faint);
+   opacity: 0.85;
+   filter: none;
+}
+.composer-tts.tts-off .tts-wave {
+   display: none;
+}
+.composer-tts.tts-off .tts-slash {
+   display: block;
 }
 
 .composer-input {

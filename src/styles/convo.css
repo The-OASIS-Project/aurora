@@ -236,6 +236,72 @@
    }
 }
 
+/* Activity chip: what DAWN is doing (Thinking / Using tools / ...), parked just
+   above the input bar so it sits in the eye path where the reply streams in. Same
+   machined, frosted, angular language as the window. It is a readout, so it never
+   takes the pointer. Fades in on activity, out on idle. */
+.status-chip {
+   position: absolute;
+   bottom: 100%;
+   left: 50%;
+   transform: translateX(-50%) translateY(4px);
+   margin-bottom: 0.55rem;
+   display: inline-flex;
+   align-items: center;
+   gap: 0.5rem;
+   padding: 0.32rem 0.72rem;
+   white-space: nowrap;
+   pointer-events: none;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.2em;
+   text-transform: uppercase;
+   color: var(--accent-glow);
+   background: color-mix(in srgb, var(--ground-raise) 55%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   opacity: 0;
+   transition:
+      opacity 300ms ease,
+      transform 300ms ease;
+}
+.status-chip.on {
+   opacity: 1;
+   transform: translateX(-50%) translateY(0);
+}
+.status-dot {
+   width: 7px;
+   height: 7px;
+   border-radius: 50%;
+   background: var(--accent-glow);
+   box-shadow: 0 0 9px var(--accent-glow);
+   animation: convo-think 1.15s ease-in-out infinite;
+}
+.status-detail {
+   color: var(--text-faint);
+   letter-spacing: 0.12em;
+   text-transform: none;
+}
+.status-chip:not(.has-detail) .status-detail {
+   display: none;
+}
+.status-chip.has-detail .status-detail::before {
+   content: "·";
+   margin-right: 0.42rem;
+   color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* Failure: the warm alert channel, not the cool nominal one. */
+.status-chip.alert {
+   color: var(--alert-glow);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--alert) 45%, transparent);
+}
+.status-chip.alert .status-dot {
+   background: var(--alert-glow);
+   box-shadow: 0 0 9px var(--alert-glow);
+   animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
    .convo-window,
    .convo-window.receded {
@@ -244,5 +310,9 @@
    }
    .convo-window.thinking .convo-scroll::after {
       animation: none;
+   }
+   .status-dot {
+      animation: none;
+      opacity: 0.9;
    }
 }

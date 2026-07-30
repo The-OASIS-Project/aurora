@@ -15,6 +15,7 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
+import type { ActivityStatus } from "../ingest/ingest.ts";
 import { renderMarkdown } from "./format.ts";
 
 export interface ConversationController {
@@ -26,6 +27,7 @@ export interface ConversationController {
    setAssistantName(name: string): void;
    loadHistory(msgs: { role: "user" | "assistant"; text: string }[]): void;
    clear(): void;
+   setStatus(status: ActivityStatus | null): void;
    destroy(): void;
 }
 
@@ -52,6 +54,22 @@ export function mountConversation(
    const mount = root.querySelector<HTMLElement>("#convo")!;
    const form = root.querySelector<HTMLFormElement>("#composer")!;
    const input = root.querySelector<HTMLInputElement>("#composer-input")!;
+   const composerRow = root.querySelector<HTMLElement>(".composer-row")!;
+
+   /* Activity chip: what DAWN is doing, parked just above the input bar so it sits
+      in the eye path where the reply streams in. Driven by setStatus; hidden when
+      idle. A live dot + uppercase label, plus a dim detail (e.g. the tool name). */
+   const chip = document.createElement("div");
+   chip.className = "status-chip";
+   chip.setAttribute("aria-live", "polite");
+   const chipDot = document.createElement("span");
+   chipDot.className = "status-dot";
+   const chipLabel = document.createElement("span");
+   chipLabel.className = "status-label";
+   const chipDetail = document.createElement("span");
+   chipDetail.className = "status-detail";
+   chip.append(chipDot, chipLabel, chipDetail);
+   composerRow.appendChild(chip);
 
    const win = document.createElement("div");
    win.className = "convo-window empty";
@@ -189,6 +207,19 @@ export function mountConversation(
       }
    };
 
+   /* Reflect DAWN's current activity in the chip; null clears it (idle). */
+   const setStatus = (status: ActivityStatus | null): void => {
+      if (!status) {
+         chip.classList.remove("on");
+         return;
+      }
+      chipLabel.textContent = status.label.toUpperCase();
+      chipDetail.textContent = status.detail ?? "";
+      chip.classList.toggle("has-detail", Boolean(status.detail));
+      chip.classList.toggle("alert", status.tone === "alert");
+      chip.classList.add("on");
+   };
+
    /* Empty the surface (a tool reset the conversation). */
    const clear = (): void => {
       if (raf) {
@@ -204,6 +235,7 @@ export function mountConversation(
       messages.length = 0;
       win.classList.remove("thinking", "receded");
       win.classList.add("empty");
+      chip.classList.remove("on");
    };
 
    /* Replace the transcript with a loaded conversation, then show it briefly so
@@ -278,6 +310,7 @@ export function mountConversation(
       setAssistantName,
       loadHistory,
       clear,
+      setStatus,
       destroy: () => {
          window.clearTimeout(shortTimer);
          window.clearTimeout(longTimer);
@@ -288,6 +321,7 @@ export function mountConversation(
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
          win.remove();
+         chip.remove();
       }
    };
 }

@@ -30,29 +30,50 @@
                  conversation.ts) that recedes into the 3D crawl in the anchor
                  scene when idle. -->
             <div id="convo"></div>
-            <form id="composer" class="composer" autocomplete="off">
-               <span class="panel-corner tl"></span>
-               <span class="panel-corner tr"></span>
-               <span class="panel-corner bl"></span>
-               <span class="panel-corner br"></span>
-               <!-- Voice path is stubbed, so the mic is out of tab order until
-                    wired; the input is the primary control a keyboard lands on. -->
+            <!-- The input bar, plus the voice-output (TTS) toggle sitting in the
+                 gutter to its left (outside the bar itself). -->
+            <div class="composer-row">
+               <!-- TTS toggle. On shows a speaker with waves; off dims and shows the
+                    mute slash. Wired in main.ts to dawn's TTS. -->
                <button
                   type="button"
-                  id="composer-mic"
-                  class="composer-mic"
-                  aria-label="Speak to DAWN"
-                  tabindex="-1"
-               ></button>
-               <input
-                  id="composer-input"
-                  class="composer-input"
-                  type="text"
-                  placeholder="Ask DAWN, or speak"
-                  aria-label="Message DAWN"
-               />
-               <span class="composer-hint">ENTER</span>
-            </form>
+                  id="composer-tts"
+                  class="composer-tts"
+                  aria-label="Mute DAWN's voice"
+                  aria-pressed="true"
+               >
+                  <svg class="tts-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                     <path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" stroke="none" />
+                     <path class="tts-wave" d="M15.5 8.5a5 5 0 0 1 0 7" />
+                     <path class="tts-wave" d="M18.5 6a9 9 0 0 1 0 12" />
+                     <line class="tts-slash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" />
+                  </svg>
+               </button>
+               <form id="composer" class="composer" autocomplete="off">
+                  <span class="panel-corner tl"></span>
+                  <span class="panel-corner tr"></span>
+                  <span class="panel-corner bl"></span>
+                  <span class="panel-corner br"></span>
+                  <!-- Voice path is stubbed, so the mic is out of tab order until
+                       wired; the input is the primary control a keyboard lands on. -->
+                  <button
+                     type="button"
+                     id="composer-mic"
+                     class="composer-mic"
+                     aria-label="Speak to DAWN"
+                     tabindex="-1"
+                  ></button>
+                  <input
+                     id="composer-input"
+                     class="composer-input"
+                     type="text"
+                     placeholder="Ask DAWN, or speak"
+                     aria-label="Message DAWN"
+                  />
+                  <span class="composer-hint">ENTER</span>
+               </form>
+            </div>
          </div>
 
          <!-- Fixed HUD chrome: screen frame, clock, telemetry. Static, not
