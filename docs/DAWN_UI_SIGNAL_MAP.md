@@ -289,56 +289,138 @@ server changes. Only calendar/email need a decision, and audio needs a new phase
 Small emit/expose gaps found while wiring the hero UI. Each makes *every* front-end
 better, so they belong in the backend. Ordered roughly by effort.
 
-1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.**
-   `get_config`'s `payload.llm_runtime` (`webui_config.c` ~L179-230) carries the
-   session's resolved `type` / `provider` / `model` / `*_available` / `context_max`,
-   but NOT the two reasoning fields — so a UI can only show the *config default* for
-   Reasoning/Effort, not the session's actual value. `session_llm_config_t` already
-   holds `thinking_mode` and `reasoning_effort`; this is just serializing two more
-   fields into `llm_runtime`. (There is no per-session query for them otherwise:
-   `llm_state_update` only fires on a `switch_llm` tool call, never on connect.)
+**Status (updated 2026-07-30, DAWN side).** Three of the six landed in DAWN (implemented
++ live-verified on the wire, pending commit); one is still open; two stay parked under
+SAGE. **Read §9.1 for the exact shapes you can now consume and §9.2 for behaviour you
+must handle** — several of these changed the wire contract.
 
-2. **A Home Assistant state-change push** (e.g. an `ha_state_changed` broadcast).
-   HA is request/response only today (`ha_list_entities`), so an HA panel must
-   poll + diff to notice a light turning on. DAWN already talks to HA over REST but
-   does not subscribe to HA's own `state_changed` event stream; rebroadcasting it
+| # | Item | Status |
+|---|------|--------|
+| 1 | `llm_runtime` reasoning fields | ✅ **Shipped + consumed** — hero UI reads `thinking_mode`/`reasoning_effort` from `llm_runtime` on connect and reflects the `set_session_llm_response` echo; the old localStorage reasoning/effort workaround is deleted. §9.1a/d/e |
+| 2 | `error` frame severity | ✅ **Shipped + consumed** — hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
+| 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
+| 6 | `music_control` bare `play` starts a stopped session | ⏳ **Open** — not started; hero UI keeps its `play_index`-from-stopped workaround |
+| 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`) |
+| 4 | Calendar / email content feeds | ⏸ **Deferred** — *pull* version is a small standalone request; *push* is SAGE |
+
+(Original item write-ups #1–#6 with source cites are preserved below the two new
+subsections for reference.)
+
+### 9.1 What shipped — new/changed wire contracts
+
+All additive and back-compat (older servers just omit the fields; keep your fallbacks).
+
+**a. `get_config_response.payload.llm_runtime` now carries the session's *effective*
+reasoning state.** Two new fields alongside the existing `type`/`provider`/`model`/
+`*_available`/`context_max`:
+```json
+"llm_runtime": { …, "thinking_mode": "disabled", "reasoning_effort": "low" }
+```
+`thinking_mode` ∈ `disabled | auto | enabled`; `reasoning_effort` ∈ `none | low | medium |
+high | xhigh`. These are the resolved session values, not the config default — a fresh
+connection can now show the real Reasoning/Effort state. (Previously unavailable except
+after a `switch_llm` tool call.)
+
+**b. The `error` frame now has a real `severity`.** Route on it; stop sniffing the
+`INFO_` prefix (kept only as a fallback for older servers):
+```json
+"payload": { "code": "…", "message": "…", "severity": "info|warning|error", "recoverable": true }
+```
+`severity:"info"` = benign notice — do **not** flash the reactor red. Known info codes:
+`INFO_THINKING_DISABLED`, `INFO_THINKING_KEPT_ON` (both about reasoning — see §9.2).
+`recoverable` is retained but frozen `true`; treat it as legacy, prefer `severity`. Absent
+`severity` ⇒ treat as `error`.
+
+**c. The `config` frame (on-connect) now advertises the music-stream server:**
+```json
+"payload": { "audio_chunk_ms": 100, "music_enabled": true, "music_port": 3001 }
+```
+Use `music_port` for the `dawn-music` socket instead of assuming `main+1`; skip the socket
+entirely when `music_enabled` is `false`. (Fall back to `main+1` only for older servers.)
+
+**d. The `set_session_llm` response now echoes effective `thinking_mode` +
+`reasoning_effort`** (alongside `type`/`provider`/`model`). If your UI lets the user change
+reasoning, **reflect the value the server *returns*, not the one the user picked** — the
+server may clamp it (see §9.2). This is the authoritative post-change state.
+
+**e. Per-conversation LLM settings are never NULL.** `load_conversation`'s `llm_settings`
+object and `get_config`'s `llm_runtime` always carry concrete `thinking_mode` /
+`reasoning_effort` / `model` (effective defaults are substituted server-side for legacy
+rows that predate this). You can trust these fields are populated — no more empty strings
+to special-case.
+
+### 9.2 Behaviour your reasoning controls must handle
+
+DAWN now allows changing Reasoning **mode** and **effort** mid-conversation (only *tool
+mode* stays frozen after the first message). Two server-authoritative behaviours follow —
+your control should **display the effective value, not the picked one**:
+
+- **Effort** is freely changeable mid-conversation on every provider; it never errors.
+- **Thinking mode is a one-way ratchet on Claude.** Once a conversation contains reasoning,
+  Claude's API rejects turning thinking *off* ("assistant message cannot contain thinking").
+  So if the user picks **Disabled** on such a Claude conversation, the server **keeps thinking
+  on**, returns `thinking_mode:"enabled"` in the `set_session_llm` response (§9.1d), and emits
+  an `INFO_THINKING_KEPT_ON` `severity:"info"` notice. **Reflect the returned `enabled` and
+  surface the info toast; don't hard-block the control.** The inverse (`INFO_THINKING_DISABLED`)
+  fires when enabling thinking is incompatible with prior-provider history — same pattern,
+  opposite direction. Both are Claude-only; other providers accept either direction freely.
+
+### 9.3 Validation tool
+
+`dawn/scripts/ws_observer.py` — a read-only client that logs in like the WebUI (CSRF →
+login → cookie), opens the `dawn-1.0` socket, and dumps every pushed frame. Use it to see
+the exact shapes above:
+```
+DAWN_OBSERVER_PASSWORD=… python3 dawn/scripts/ws_observer.py \
+    --get-config --only config,get_config_response,error
+```
+Password via `$DAWN_OBSERVER_PASSWORD` or a prompt; `--only`/`--attach`/`--compact` flags.
+Note it caught a real gotcha we relied on: the `config` frame is emitted from
+`queue_init_messages` on connect (a former `send_config_impl` was dead code) — so `config`
+is a Tier-A on-connect push, exactly as §3.7 lists it.
+
+---
+
+**Original item write-ups (source cites preserved):**
+
+1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.** ✅ Done (§9.1a).
+   `get_config`'s `payload.llm_runtime` (`webui_config.c`) carried the session's resolved
+   `type` / `provider` / `model` / `*_available` / `context_max`, but NOT the two reasoning
+   fields — so a UI could only show the *config default*. Now serialized from the resolved
+   config.
+
+2. **A Home Assistant state-change push** (e.g. an `ha_state_changed` broadcast). ⏸ Deferred
+   (SAGE). HA is request/response only today (`ha_list_entities`), so an HA panel must
+   poll + diff. DAWN does not subscribe to HA's own `state_changed` stream; rebroadcasting it
    would give crisp, low-latency ambient spikes. See the alerts scope below.
 
-3. **Calendar / email content feeds.** The WS exposes only account *management*
-   for these (no "today's events" / "recent mail" request, no push). A UI can't
-   build a live calendar or inbox panel without a new request (e.g.
-   `calendar_upcoming_events`, `email_recent`). §5 covers this.
+3. **Calendar / email content feeds.** ⏸ Deferred. The WS exposes only account *management*
+   (no "today's events" / "recent mail" request, no push). A UI can't build a live calendar
+   or inbox panel without a new request (e.g. `calendar_upcoming_events`, `email_recent`). §5.
 
-4. **The `error` frame needs a real severity.** DAWN sends purely informational
-   notices as `error` frames (e.g. `INFO_THINKING_DISABLED`, "start a new
-   conversation to use thinking"), and `send_error_impl` (`webui_send.c` ~L428)
-   hardcodes `recoverable: true` on *every* error frame. So a client cannot tell
-   an info notice from an actual error except by sniffing the `INFO_` code prefix,
-   which is what the hero UI now does to avoid flashing the reactor red on a benign
-   notice. Fix options, cheapest first: (a) set `recoverable` meaningfully instead
-   of always-true; (b) add a `severity`/`level` field (`info` \| `warning` \|
-   `error`); or (c) route info notices through a non-error frame entirely. Any of
-   these lets a UI style/route them correctly without a prefix convention.
+4. **The `error` frame needs a real severity.** ✅ Done via option (b) — added a `severity`
+   field (§9.1b). DAWN sent purely informational notices as `error` frames with hardcoded
+   `recoverable: true`; the hero UI had to sniff the `INFO_` code prefix. Now `severity` ∈
+   `info | warning | error`; `recoverable` retained for back-compat.
 
-5. **Advertise the dedicated music-stream port.** The `dawn-music` audio server
-   (`webui_music_server.c`) listens on `webui_server_get_port() + 1`, but that port
-   is never announced in any frame — a client has to compute main+1 itself. The
-   `config` frame only carries `audio_chunk_ms` (`webui_send.c` ~L476). Including the
-   music port (and whether the music server is enabled) in `config` removes the guess
-   and lets a client skip the dedicated socket cleanly when it is off.
+5. **Advertise the dedicated music-stream port.** ✅ Done (§9.1c). The `dawn-music` server
+   listens on `webui_server_get_port() + 1`, never announced; the `config` frame now carries
+   `music_port` + `music_enabled`.
 
-6. **`music_control` bare `play` should start a stopped session.** DAWN streams music
+6. **`music_control` bare `play` should start a stopped session.** ⏳ Open. DAWN streams music
    audio only to the session that actively *starts* a track (`play` with a path/query,
    `play_index`, `next`); a bare `play` only resumes a pause (`webui_music_handlers.c`
-   ~L334-343). So a client that merely subscribed while audio is "already playing"
-   elsewhere gets metadata but no stream, and its play button appears dead until it
-   sends `play_index`. Having bare `play` start playback at the current queue index
-   when the session is stopped and the queue is non-empty would make "press play"
-   behave as expected in every client. (The hero UI works around this by sending
+   ~L334-343). A client that merely subscribed while audio is "already playing" elsewhere
+   gets metadata but no stream, and its play button appears dead until it sends `play_index`.
+   Bare `play` starting playback at the current queue index when stopped + queue non-empty
+   would make "press play" behave everywhere. (Hero UI works around this by sending
    `play_index` from a stopped state.)
 
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
 channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
-(#5, #6) added 2026-07-30 while wiring the dedicated audio socket.*
+(#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
+2026-07-30 recording items #1/#2/#5 shipped (pending commit) + the reasoning-control
+behaviour and validation tool. Hero UI consumed #1/#2/#5 (verified against
+`webui_config.c` / `webui_send.c` / `webui_message_dispatch.c`) 2026-07-30.*

@@ -82,8 +82,12 @@ depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the an
   does not work; that is why the proxy exists in `vite.config.ts`.
 - **`llm_state_update` only fires on a `switch_llm` tool call, never on connect.** Read
   the current model / provider from `get_config`'s `payload.llm_runtime` (provider names
-  are capitalized there). Reasoning and effort are not per-session at all; seed them
-  from the config default (`llm.thinking`).
+  are capitalized there). Reasoning and effort now come from that same `llm_runtime`
+  (`thinking_mode` / `reasoning_effort`, the session's resolved values; signal-map §9.1a),
+  so there is no client-side persistence: read them on connect and reflect the
+  `set_session_llm_response` echo after a change (native Claude clamps a mid-conversation
+  thinking-disable back on, §9.2). Fall back to the config default (`llm.thinking`) only
+  for older servers that omit the runtime fields.
 - **Message persistence is split.** With an active conversation the daemon persists the
   USER turn itself; the client persists only the FINAL ANSWER (on the `state: idle`
   transition). Saving the user turn too produces duplicate rows.

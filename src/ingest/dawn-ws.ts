@@ -50,26 +50,6 @@ const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const RATE_EMA_KEY = "dawn.hero.rateEma";
 const RATE_EMA_ALPHA = 0.15; // higher = more responsive to the latest samples
 
-/* Persisted reasoning/effort. DAWN does not report the session's values (they are
-   absent from llm_runtime), so on reconnect the client would otherwise fall back
-   to the global config default and appear to "reset". We remember the user's own
-   choice here and re-assert it on connect. Drop this once DAWN serializes
-   thinking_mode/reasoning_effort into llm_runtime (signal-map section 9). */
-const LLM_PREFS_KEY = "dawn.hero.llmPrefs";
-
-function loadLlmPrefs(): { reasoning?: Reasoning; effort?: string } {
-   try {
-      const raw = localStorage.getItem(LLM_PREFS_KEY);
-      if (!raw) return {};
-      const p = JSON.parse(raw) as { reasoning?: string; effort?: string };
-      const reasoning =
-         p.reasoning === "disabled" || p.reasoning === "enabled" ? (p.reasoning as Reasoning) : undefined;
-      return { reasoning, effort: typeof p.effort === "string" ? p.effort : undefined };
-   } catch {
-      return {};
-   }
-}
-
 interface JobRow {
    conversation_id?: number;
    title?: string;
@@ -190,6 +170,7 @@ export class DawnIngest implements Ingest {
    private musicWsTimer = 0;
    private musicWsFails = 0;
    private musicWsToken = ""; // token the current music socket is (re)connecting with
+   private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private loadedInitial = false; // guard: load the starting conversation only once
@@ -213,17 +194,18 @@ export class DawnIngest implements Ingest {
       the thinking phase (speaking/idle/etc), so even a fast tool call stays visible. */
    private toolActive = false;
    private toolName: string | undefined;
-   /* LLM selection state (MODEL panel). Reasoning/effort are client-tracked (DAWN
-      does not push them); mode/provider/model/availability come from llm_state_update.
-      Reasoning/effort seed from the persisted user choice so a refresh does not revert
-      them to the config default before get_config lands. */
-   private readonly llmPrefs = loadLlmPrefs();
+   /* LLM selection state (MODEL panel). All of it is server-authoritative: mode /
+      provider / model / availability and now reasoning / effort come from
+      get_config's llm_runtime on connect (DAWN reports the session's resolved
+      thinking_mode + reasoning_effort as of signal-map §9.1a), and every change is
+      echoed back by set_session_llm_response. The defaults below are placeholders
+      until that first frame lands. */
    private readonly llm = {
       mode: "cloud" as LlmMode,
       provider: "claude" as LlmProvider,
       model: "",
-      reasoning: this.llmPrefs.reasoning ?? ("enabled" as Reasoning),
-      effort: this.llmPrefs.effort ?? "medium",
+      reasoning: "enabled" as Reasoning,
+      effort: "medium",
       providers: { openai: false, claude: false, gemini: false } as Record<LlmProvider, boolean>
    };
    private readonly cloudModels: Record<LlmProvider, string[]> = {
@@ -383,18 +365,30 @@ export class DawnIngest implements Ingest {
       switch (type) {
          case "session":
             /* Store the token so a reload resumes this same session (see TOKEN_KEY).
-               The token also authenticates the dedicated music stream socket, so
-               (re)open it here where we have a fresh one. */
+               The token also authenticates the dedicated music stream socket, but we
+               wait for `config` (which follows session on connect) to open it, since
+               that frame tells us whether music is even enabled server-side. */
             if (typeof p.token === "string") {
                localStorage.setItem(TOKEN_KEY, p.token);
                this.musicWsFails = 0;
-               this.openMusicStream(p.token);
             }
             break;
 
-         case "config":
+         case "config": {
+            /* On-connect config. Advertises the dedicated music-stream server as of
+               signal-map §9.1c: skip the socket entirely when music is disabled, else
+               open it now with the token `session` just stored. (music_port is for a
+               non-proxied client; we always reach it through the /music-ws dev proxy.)
+               Older servers omit music_enabled -> the field stays true and we open. */
+            this.musicEnabled = p.music_enabled !== false;
+            const token = localStorage.getItem(TOKEN_KEY);
+            if (this.musicEnabled && token) this.openMusicStream(token);
+            else if (!this.musicEnabled) this.closeMusicStream();
+            break;
+         }
+
          case "server_features":
-            /* Handshake acknowledgements; nothing to render yet. */
+            /* Handshake acknowledgement; nothing to render. */
             break;
 
          case "force_logout":
@@ -429,22 +423,18 @@ export class DawnIngest implements Ingest {
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
             }
-            /* Reasoning/effort: DAWN does not report the session's values (absent
-               from llm_runtime), so seed from the config default ONLY when the user
-               has not chosen their own. A persisted choice wins and is re-asserted
-               below so the session matches. Legacy "auto" folds into "enabled". */
-            if (!this.hasLlmPrefs()) {
-               const t = cfg.llm?.thinking;
-               if (t?.mode) this.llm.reasoning = t.mode === "disabled" ? "disabled" : "enabled";
-               if (t?.reasoning_effort) this.llm.effort = t.reasoning_effort;
-            }
             /* CURRENT session state: llm_runtime (payload level, resolved for this
                session) — the reliable source, since llm_state_update only fires on a
-               switch_llm tool call, never on connect. Provider is capitalized here. */
+               switch_llm tool call, never on connect. Provider is capitalized here.
+               As of signal-map §9.1a it also carries the session's resolved
+               thinking_mode + reasoning_effort, so a fresh connection shows the real
+               Reasoning/Effort with no client-side persistence. */
             const rt = (p.llm_runtime ?? {}) as {
                type?: string;
                provider?: string;
                model?: string;
+               thinking_mode?: string;
+               reasoning_effort?: string;
                openai_available?: boolean;
                claude_available?: boolean;
                gemini_available?: boolean;
@@ -453,6 +443,10 @@ export class DawnIngest implements Ingest {
             const prov = (rt.provider ?? "").toLowerCase();
             if (prov === "openai" || prov === "claude" || prov === "gemini") this.llm.provider = prov;
             if (rt.model) this.llm.model = rt.model;
+            /* Reasoning/effort: prefer the session's resolved runtime values; fall
+               back to the global config default only for older servers that omit them
+               from llm_runtime. Legacy "auto" folds into "enabled". */
+            this.applyReasoning(rt.thinking_mode ?? cfg.llm?.thinking?.mode, rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort);
             if (rt.openai_available !== undefined) {
                this.llm.providers = {
                   openai: rt.openai_available === true,
@@ -461,8 +455,6 @@ export class DawnIngest implements Ingest {
                };
             }
             this.notifyLlm();
-            /* Make the session match the persisted reasoning/effort (see below). */
-            this.reassertLlmPrefs();
             break;
          }
 
@@ -472,6 +464,22 @@ export class DawnIngest implements Ingest {
             this.notifyLlm();
             break;
          }
+
+         case "set_session_llm_response":
+            /* Authoritative echo of a set_session_llm change (§9.1d). Reflect the
+               value the SERVER resolved, not the one the user picked: native Claude
+               clamps a mid-conversation thinking-disable back to enabled (§9.2), so
+               the panel must follow the returned thinking_mode/reasoning_effort or it
+               would show a state the session is not actually in. The paired
+               INFO_THINKING_KEPT_ON notice (an `error` frame) explains the why. */
+            if (p.success !== false) {
+               this.applyReasoning(
+                  typeof p.thinking_mode === "string" ? p.thinking_mode : undefined,
+                  typeof p.reasoning_effort === "string" ? p.reasoning_effort : undefined
+               );
+               this.notifyLlm();
+            }
+            break;
 
          case "get_my_settings_response": {
             const tz = (p as { timezone?: string }).timezone;
@@ -548,16 +556,29 @@ export class DawnIngest implements Ingest {
          }
 
          case "error": {
-            /* DAWN sends purely informational notices as `error` frames too (e.g.
-               INFO_THINKING_DISABLED, "start a new conversation to use thinking"),
-               and hardcodes recoverable:true on every error frame — so the `INFO_`
-               code prefix is the only signal. Don't paint the reactor red for those. */
+            /* Route on `severity` (§9.1b): info = benign notice (e.g.
+               INFO_THINKING_KEPT_ON), warning/error = a real problem. Fall back to the
+               `INFO_` code prefix for older servers that don't send severity. Never
+               paint the reactor red for an info notice; instead surface it as an
+               ambient spike so the user sees why (e.g. the thinking toggle held on). */
             const code = typeof p.code === "string" ? p.code : "";
-            if (code.startsWith("INFO_")) {
-               console.info("[dawn] notice:", code, p.message);
+            const severity =
+               typeof p.severity === "string" ? p.severity : code.startsWith("INFO_") ? "info" : "error";
+            if (severity === "info") {
+               const message = typeof p.message === "string" ? p.message : "";
+               console.info("[dawn] notice:", code, message);
+               if (message) {
+                  this.spikeNotice("llm-notice", "notice", message, {
+                     to: IMPORTANCE.notice,
+                     tone: "nominal",
+                     hold: 7,
+                     x: 0,
+                     y: -0.55
+                  });
+               }
             } else {
                this.sinks.reactor.setState("error");
-               console.warn("[dawn] error frame:", code, p.message);
+               console.warn("[dawn] error frame:", severity, code, p.message);
             }
             break;
          }
@@ -886,7 +907,7 @@ export class DawnIngest implements Ingest {
    }
 
    private scheduleMusicReconnect(): void {
-      if (!this.wantConnected || this.musicWsFails >= MUSIC_WS_MAX_FAILS) return;
+      if (!this.wantConnected || !this.musicEnabled || this.musicWsFails >= MUSIC_WS_MAX_FAILS) return;
       const token = localStorage.getItem(TOKEN_KEY);
       if (!token) return;
       this.musicWsFails++;
@@ -950,26 +971,13 @@ export class DawnIngest implements Ingest {
       this.notifyLlm();
    }
 
-   /* Reasoning/effort persistence. DAWN cannot report the session's values back, so
-      we remember the user's explicit choice and re-apply it on connect. */
-   private hasLlmPrefs(): boolean {
-      return localStorage.getItem(LLM_PREFS_KEY) !== null;
-   }
-   private persistLlmPrefs(): void {
-      localStorage.setItem(
-         LLM_PREFS_KEY,
-         JSON.stringify({ reasoning: this.llm.reasoning, effort: this.llm.effort })
-      );
-   }
-   /* Push the persisted reasoning/effort to the session on (re)connect so a recycled
-      session (or a fresh one) matches what the UI shows. No-op until the user has
-      chosen a value, so it adds no write for a default setup. */
-   private reassertLlmPrefs(): void {
-      if (!this.hasLlmPrefs()) return;
-      this.send({
-         type: "set_session_llm",
-         payload: { thinking_mode: this.llm.reasoning, reasoning_effort: this.llm.effort }
-      });
+   /* Set the panel's reasoning/effort from a server-provided (thinking_mode,
+      reasoning_effort) pair — get_config's llm_runtime on connect, or a
+      set_session_llm echo after a change. Both args are optional; a missing field
+      leaves the current value untouched. Legacy "auto" folds into binary "enabled". */
+   private applyReasoning(thinkingMode?: string, effort?: string): void {
+      if (thinkingMode) this.llm.reasoning = thinkingMode === "disabled" ? "disabled" : "enabled";
+      if (effort) this.llm.effort = effort;
    }
 
    private modelsFor(mode: LlmMode, provider: LlmProvider): string[] {
@@ -1015,13 +1023,12 @@ export class DawnIngest implements Ingest {
             this.applyLlm({ model });
          },
          setReasoning: (reasoning) => {
+            /* Optimistic; the set_session_llm_response echo confirms or clamps it. */
             this.llm.reasoning = reasoning;
-            this.persistLlmPrefs();
             this.applyLlm({ thinking_mode: reasoning });
          },
          setEffort: (effort) => {
             this.llm.effort = effort;
-            this.persistLlmPrefs();
             this.applyLlm({ reasoning_effort: effort });
          },
          setPrivate: (on) => {
