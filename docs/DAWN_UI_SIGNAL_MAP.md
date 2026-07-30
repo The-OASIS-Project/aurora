@@ -309,6 +309,17 @@ better, so they belong in the backend. Ordered roughly by effort.
    build a live calendar or inbox panel without a new request (e.g.
    `calendar_upcoming_events`, `email_recent`). §5 covers this.
 
+4. **The `error` frame needs a real severity.** DAWN sends purely informational
+   notices as `error` frames (e.g. `INFO_THINKING_DISABLED`, "start a new
+   conversation to use thinking"), and `send_error_impl` (`webui_send.c` ~L428)
+   hardcodes `recoverable: true` on *every* error frame. So a client cannot tell
+   an info notice from an actual error except by sniffing the `INFO_` code prefix,
+   which is what the hero UI now does to avoid flashing the reactor red on a benign
+   notice. Fix options, cheapest first: (a) set `recoverable` meaningfully instead
+   of always-true; (b) add a `severity`/`level` field (`info` \| `warning` \|
+   `error`); or (c) route info notices through a non-error frame entirely. Any of
+   these lets a UI style/route them correctly without a prefix convention.
+
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
 channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 

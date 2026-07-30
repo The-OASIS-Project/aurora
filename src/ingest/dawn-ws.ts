@@ -489,10 +489,20 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "error":
-            this.sinks.reactor.setState("error");
-            console.warn("[dawn] error frame:", p.code, p.message);
+         case "error": {
+            /* DAWN sends purely informational notices as `error` frames too (e.g.
+               INFO_THINKING_DISABLED, "start a new conversation to use thinking"),
+               and hardcodes recoverable:true on every error frame — so the `INFO_`
+               code prefix is the only signal. Don't paint the reactor red for those. */
+            const code = typeof p.code === "string" ? p.code : "";
+            if (code.startsWith("INFO_")) {
+               console.info("[dawn] notice:", code, p.message);
+            } else {
+               this.sinks.reactor.setState("error");
+               console.warn("[dawn] error frame:", code, p.message);
+            }
             break;
+         }
 
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
