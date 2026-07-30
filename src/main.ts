@@ -71,12 +71,14 @@ const anchor = new Anchor(canvas);
 const hud = mountHud(stage);
 
 /* Top-centre settings menu: enable/disable which panels the dashboard shows. */
+/* Store-backed ambient panels the Panels menu can enable/disable. The music player
+   is not here: it is a standalone view (mounted below) toggled through its own
+   controller, appended to the Panels list separately. */
 const PANEL_LABELS: Record<string, string> = {
    calendar: "Calendar",
    email: "Email",
    homeassistant: "Home Assistant",
    subsystems: "Subsystems",
-   music: "Music",
    documents: "Documents"
 };
 /* Display kill switches double as a profiling tool (bloom is the real GPU cost;
@@ -94,15 +96,30 @@ const newChatHook = { fire: (): void => {} };
 const dawn = new DawnIngest();
 const ingest: Ingest = dawn;
 
+/* The music player: a dedicated interactive view (like the conversation console).
+   It reflects DAWN's music_state/position and sends transport through the ingest;
+   its spectrum meter reads the music AudioNode's own analyser. Mounted here (before
+   the menu) so the Panels menu can bind to its show/hide. */
+const musicPlayer = mountMusicPlayer(stage, {
+   audio: dawn.getMusicAudio(),
+   control: (action, params) => ingest.musicControl(action, params)
+});
+
 const menu = mountMenu(stage, {
    onNewChat: () => newChatHook.fire(),
    model: dawn.getModelControl(),
-   getPanels: () =>
-      store
+   /* Store-backed panels, plus the standalone music player appended at the end. */
+   getPanels: () => [
+      ...store
          .snapshot()
          .filter((e) => PANEL_LABELS[e.id])
          .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
-   onTogglePanel: (id) => store.toggleEnabled(id),
+      { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
+   ],
+   onTogglePanel: (id) => {
+      if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
+      else store.toggleEnabled(id);
+   },
    displayToggles: [
       {
          label: "Star Field",
@@ -179,14 +196,6 @@ const conversation = mountConversation(stage, {
       document.body.classList.toggle("engaged", engaged);
       ingest.setEngaged(engaged);
    }
-});
-
-/* The music player: a dedicated interactive view (like the conversation console).
-   It reflects DAWN's music_state/position and sends transport through the ingest;
-   its spectrum meter reads the music AudioNode's own analyser. */
-const musicPlayer = mountMusicPlayer(stage, {
-   audio: dawn.getMusicAudio(),
-   control: (action, params) => ingest.musicControl(action, params)
 });
 
 ingest.start({

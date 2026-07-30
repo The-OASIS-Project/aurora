@@ -35,6 +35,11 @@
    cursor: grabbing;
    transition: none; /* follow the pointer 1:1 while dragging */
 }
+/* Operator hid the player from the Panels menu: gone entirely, no pointer capture,
+   overrides the track-presence fade above. */
+.music.music-off {
+   display: none;
+}
 .music button,
 .music input,
 .music-seek {

@@ -21,11 +21,19 @@ export interface MusicPlayerOptions {
 export interface MusicPlayerController extends MusicSink {
    /* Called from the one frame loop: draws the spectrum + interpolates progress. */
    frame(): void;
+   /* User show/hide (Panels menu). isVisible is the operator's choice, not whether
+      a track is currently playing. */
+   isVisible(): boolean;
+   setVisible(on: boolean): void;
    destroy(): void;
 }
 
 const VIZ_BARS = 24; // spectrum meter bar count
 const SVG = "http://www.w3.org/2000/svg";
+/* User-facing show/hide, toggled from the Panels menu and persisted. Distinct from
+   the track-presence fade (`.on`): this is the operator choosing not to show the
+   player at all, so a playing track stays hidden until they re-enable it. */
+const VISIBLE_KEY = "dawn.hero.musicShown";
 
 /* Transport glyphs. Solid (filled) for play/pause/skip; hairline (stroked) for the
    mode + volume affordances, matching the rest of the chrome. */
@@ -150,6 +158,14 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
 
    el.append(canvas, head, seek, times, controls, volRow);
    root.appendChild(el);
+
+   /* User visibility (Panels menu), persisted. `music-off` force-hides the player
+      regardless of the track-presence fade. Defaults to shown. */
+   let visible = localStorage.getItem(VISIBLE_KEY) !== "false";
+   const applyVisible = (): void => {
+      el.classList.toggle("music-off", !visible);
+   };
+   applyVisible();
 
    /* Grab-and-move: the player is user-arrangeable, not glued to a corner. Drags
       start anywhere except the interactive controls; position is persisted. */
@@ -280,7 +296,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    /* --- per-frame: spectrum + progress ------------------------------------ */
    let lastCur = -1;
    const frame = (): void => {
-      if (!el.classList.contains("on")) return;
+      if (!visible || !el.classList.contains("on")) return;
 
       /* Progress: interpolate from the last authoritative position while playing. */
       const playing = Boolean(state?.playing && !state.paused);
@@ -303,6 +319,12 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       setPosition,
       setError,
       frame,
+      isVisible: () => visible,
+      setVisible: (on) => {
+         visible = on;
+         localStorage.setItem(VISIBLE_KEY, on ? "true" : "false");
+         applyVisible();
+      },
       destroy: () => {
          window.clearTimeout(volTimer);
          window.clearTimeout(errorTimer);
