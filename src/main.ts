@@ -23,6 +23,7 @@ import "./styles/panels.css";
 import "./styles/login.css";
 import "./styles/convo.css";
 import "./styles/model.css";
+import "./styles/music.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import { Store } from "./state/store.ts";
@@ -36,6 +37,7 @@ import { mountHud } from "./hud/hud.ts";
 import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
 import { mountLogin } from "./auth/login-panel.ts";
+import { mountMusicPlayer } from "./music/music-player.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
       stylesheets and the anchor shader share one tunable source. */
@@ -179,6 +181,14 @@ const conversation = mountConversation(stage, {
    }
 });
 
+/* The music player: a dedicated interactive view (like the conversation console).
+   It reflects DAWN's music_state/position and sends transport through the ingest;
+   its spectrum meter reads the music AudioNode's own analyser. */
+const musicPlayer = mountMusicPlayer(stage, {
+   audio: dawn.getMusicAudio(),
+   control: (action, params) => ingest.musicControl(action, params)
+});
+
 ingest.start({
    store,
    reactor: anchor,
@@ -186,7 +196,8 @@ ingest.start({
    telemetry: {
       update: (values) => hud.updateTelemetry(values),
       setTimezone: (tz) => hud.setTimezone(tz)
-   }
+   },
+   music: musicPlayer
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -212,6 +223,7 @@ function frame(now: number): void {
    const nodes = choreographer.tick(store.snapshot(), dt); // state -> coordinates
    renderer.render(nodes); // coordinates -> pixels
    anchor.frame((now - start) / 1000); // the center light
+   musicPlayer.frame(); // spectrum meter + interpolated progress (when playing)
 
    requestAnimationFrame(frame);
 }
@@ -225,6 +237,7 @@ function dispose(): void {
    ttsBtn.removeEventListener("click", onTtsClick);
    ingest.stop();
    conversation.destroy();
+   musicPlayer.destroy();
    hud.destroy();
    menu.destroy();
    login.destroy();

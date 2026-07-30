@@ -1,8 +1,16 @@
 import { defineConfig } from "vite";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 
 // Minimal by design. Vite is the "make" of this project: one command to compile
 // TypeScript and serve with live-reload. The render layer is hand-rolled, so
 // there is nothing framework-specific to configure.
+//
+// HTTPS (basicSsl): the dev server is served over TLS with an auto-generated,
+// cached self-signed cert. This is REQUIRED for the music player: WebCodecs
+// (AudioDecoder) and AudioWorklet are secure-context-only, and `localhost` is the
+// only http origin browsers treat as secure. Without HTTPS, opening the dashboard
+// from another machine (http://<ip>:5273) cannot decode music audio. Accept the
+// self-signed cert once per browser (same as DAWN's own cert).
 //
 // The one addition is a DEV PROXY to DAWN. The dashboard talks only to its own
 // origin (localhost:5273) for /api and /ws; Vite forwards both to the DAWN daemon.
@@ -28,6 +36,7 @@ function stripCookieSecurity(setCookie: string[]): string[] {
 }
 
 export default defineConfig({
+   plugins: [basicSsl()],
    server: {
       host: true,
       port: 5273,

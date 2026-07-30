@@ -288,6 +288,18 @@ body.engaged #docks {
    outline-offset: 2px;
 }
 
+/* Snap-preview bars for a movable view: a glowing cyan line on each edge the view
+   is about to dock to (src/render/movable.ts). */
+.movable-snap-bar {
+   position: fixed;
+   z-index: 40;
+   display: none;
+   border-radius: 2px;
+   background: var(--accent-glow);
+   box-shadow: 0 0 12px color-mix(in srgb, var(--accent-glow) 75%, transparent);
+   pointer-events: none;
+}
+
 .menu-dropdown {
    position: absolute;
    top: 100%;

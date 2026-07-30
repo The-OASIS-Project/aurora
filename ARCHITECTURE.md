@@ -78,8 +78,10 @@ DAWN signals map to what is documented in `docs/DAWN_UI_SIGNAL_MAP.md`.
 
 The deliberate writes, i.e. the read-mostly exceptions: submitting a chat message,
 `set_session_llm` (the model panel), `set_private`, dismissing an alarm
-(`scheduler_action`), and `new_conversation` plus final-answer persistence for the UI's
-own conversation. Everything else is read.
+(`scheduler_action`), `new_conversation` plus final-answer persistence for the UI's
+own conversation, and music transport (`music_subscribe` plus `music_control` from the
+player). Music control is Tier C (it mutates DAWN) but benign, user-initiated playback,
+so it is treated like chat submit, not ambient control. Everything else is read.
 
 ## Directory structure
 
@@ -131,3 +133,8 @@ has no use for change-notification plumbing, and polling has no ordering surpris
 - No em dashes in prose.
 - Colors and feel come only from `src/design/tokens.ts` (the single source of truth,
   mirrored to CSS custom properties). Do not hardcode colors in components.
+- **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
+  (the music player today; future floating instruments) should be grab-to-move with a
+  persisted position, via `makeMovable` (`src/render/movable.ts`). This is distinct from
+  the store-backed ambient panels, which drag onto the side rails through `PanelDrag`.
+  Reserve a fixed screen position for fixed HUD chrome (clock, telemetry frame) only.

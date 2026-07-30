@@ -23,8 +23,14 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 - **Read-mostly.** Do not add control paths that could depower DAWN. Writes are limited
   to deliberate user actions (chat submit, `set_session_llm`, `set_private`,
   `scheduler_action` dismiss, `new_conversation` plus the UI's own message
-  persistence). If a new feature needs to write to DAWN, flag it and confirm first.
+  persistence, and music transport via `music_subscribe` / `music_control`). If a new
+  feature needs to write to DAWN, flag it and confirm first.
 - **Three-space indentation. No em dashes in prose.**
+- **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
+  (e.g. the music player) should be grab-to-move with a persisted position via
+  `makeMovable` (`src/render/movable.ts`). Only fixed HUD chrome (clock, telemetry frame)
+  gets a fixed screen position. Store-backed ambient panels dock to the rails through
+  `PanelDrag` instead.
 - **Colors and feel only from `src/design/tokens.ts`.** Never hardcode a color in a
   component; use or add a token (it is mirrored to CSS custom properties).
 - **Feedback before implementation.** For a question or a design choice, give analysis,
@@ -40,9 +46,13 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 
 ```
 npm install
-npm run dev      # http://localhost:5273 (Vite dev server + DAWN proxy)
+npm run dev      # https://localhost:5273 (Vite dev server, HTTPS + DAWN proxy)
 npm run build    # tsc typecheck + static bundle in dist/
 ```
+
+The dev server is HTTPS (self-signed via `@vitejs/plugin-basic-ssl`) because the music
+player needs a secure context (WebCodecs / AudioWorklet); a plain-http network origin
+cannot decode audio. Accept the self-signed cert once per browser.
 
 Run `npx tsc --noEmit` (or `npm run build`) after changes; strict TypeScript is how the
 seam is enforced. Browser verification uses the claude-in-chrome MCP against the running
@@ -84,6 +94,20 @@ depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the an
 - **TTS is raw PCM.** The client advertises only the `pcm` codec, so DAWN sends 48kHz
   PCM and no Opus decoder is needed. Binary frames: `0x11` = audio chunk, `0x12` = play
   the segment.
+- **Music is Opus, not PCM (unlike TTS).** `music_subscribe`'s `audio_codecs` is accepted
+  but never read; music is always Opus (48kHz stereo, 20ms/960-sample frames), so the
+  browser must decode it (`src/audio/music.ts` uses WebCodecs `AudioDecoder` -> a worklet
+  ring buffer). WebCodecs and AudioWorklet are **secure-context only**: `localhost` is
+  fine over http, but a network origin (`http://<ip>:5273`) is not, so music silently
+  will not decode there. The dev server therefore runs HTTPS (basicSsl). TTS is
+  unaffected (it uses plain `AudioContext`, which is not secure-context-gated). Frames arrive on the MAIN socket as `0x20` = `[uint16-LE len][opus]` when
+  no dedicated socket is attached (dropped under backpressure). A glitch-free dedicated
+  `dawn-music` socket exists at port main+1, subprotocol `dawn-music`, with its own
+  `{type:auth,token}` handshake, but it is optional and not yet wired.
+- **Music `volume` is server-stored only.** `music_control volume` sets a value DAWN
+  echoes in `music_state` but never applies to the audio, so real gain/mute is a
+  client-side Web Audio `GainNode` (the player owns it). `repeat_mode` is an int (0/1/2);
+  `track` is null when the queue is empty.
 
 ## Backend requests
 

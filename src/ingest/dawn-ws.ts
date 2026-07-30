@@ -23,10 +23,11 @@
  * Consumer map:       docs/DAWN_UI_SIGNAL_MAP.md
  */
 
-import type { ActivityStatus, Ingest, IngestSinks } from "./ingest.ts";
+import type { ActivityStatus, Ingest, IngestSinks, MusicState, MusicTrack } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { IMPORTANCE } from "../state/types.ts";
 import { TtsPlayback } from "../audio/tts.ts";
+import { MusicAudio } from "../audio/music.ts";
 import {
    effortOptionsForModel,
    type LlmMode,
@@ -37,9 +38,10 @@ import {
 } from "../model/model.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Audio is a 1-byte type prefix
-   then raw payload. We only consume the TTS output frames. */
+   then raw payload. We consume the TTS output frames and the music stream. */
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
+const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] run)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
@@ -145,6 +147,38 @@ function toActivity(dawn: string, detail?: string): ActivityStatus | null {
    }
 }
 
+/* A music_state payload -> our MusicState. `track` is null when the queue is
+   empty; `repeat_mode` is an int enum (0/1/2); `volume` is a server-stored hint. */
+function toMusicState(p: Record<string, unknown>): MusicState {
+   const t = p.track as Record<string, unknown> | null | undefined;
+   let track: MusicTrack | null = null;
+   if (t && typeof t === "object") {
+      track = {
+         path: String(t.path ?? ""),
+         title: String(t.title ?? ""),
+         artist: String(t.artist ?? ""),
+         album: String(t.album ?? ""),
+         durationSec: Number(t.duration_sec ?? 0)
+      };
+   }
+   return {
+      playing: p.playing === true,
+      paused: p.paused === true,
+      track,
+      positionSec: Number(p.position_sec ?? 0),
+      durationSec: track?.durationSec ?? 0,
+      queueLength: Number(p.queue_length ?? 0),
+      queueIndex: Number(p.queue_index ?? 0),
+      shuffle: p.shuffle === true,
+      repeatMode: Number(p.repeat_mode ?? 0),
+      volume: Number(p.volume ?? 1),
+      quality: String(p.quality ?? ""),
+      bitrate: Number(p.bitrate ?? 0),
+      sourceFormat: String(p.source_format ?? ""),
+      sourceRate: Number(p.source_rate ?? 0)
+   };
+}
+
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
@@ -160,6 +194,9 @@ export class DawnIngest implements Ingest {
    private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
    private uptimeBaseAt = 0; // performance.now() when that uptime was received
    private tts!: TtsPlayback;
+   /* Created at construction (not in start) so the player view can bind to it
+      before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
+   private readonly music = new MusicAudio();
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
@@ -197,6 +234,8 @@ export class DawnIngest implements Ingest {
       this.sinks = sinks;
       /* TTS playback drives the reactor's bar ring with DAWN's real voice. */
       this.tts = new TtsPlayback({ onLevels: (bins) => this.sinks.reactor.setLevels(bins) });
+      /* Surface a fatal music-audio problem (e.g. no secure context) in the player. */
+      this.music.setErrorHandler((msg) => this.sinks.music.setError(msg));
       /* Surface the persisted token-rate EMA immediately (survives refresh). */
       if (this.rateEma > 0) {
          this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
@@ -288,6 +327,10 @@ export class DawnIngest implements Ingest {
          ws.send(JSON.stringify({ type: "list_conversations", payload: { limit: 15, offset: 0 } }));
          /* The caller's active background jobs, for the jobs panel. */
          ws.send(JSON.stringify({ type: "jobs_request" }));
+         /* Subscribe to music: replies with the current music_state and, once a
+            track is playing, streams Opus audio as 0x20 binary frames. Subscribe
+            alone starts no audio. */
+         ws.send(JSON.stringify({ type: "music_subscribe", payload: { quality: "standard" } }));
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
@@ -503,6 +546,19 @@ export class DawnIngest implements Ingest {
             }
             break;
          }
+
+         case "music_state":
+            this.sinks.music.setState(toMusicState(p));
+            break;
+
+         case "music_position":
+            this.sinks.music.setPosition(Number(p.position_sec ?? 0), Number(p.duration_sec ?? 0));
+            break;
+
+         case "music_error":
+            this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
+            console.warn("[dawn] music_error:", p.code, p.message);
+            break;
 
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
@@ -729,14 +785,24 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.clear();
    }
 
-   /* Binary frame: a 1-byte opcode then payload. Only the TTS output frames matter
-      to a display — chunks accumulate, the segment-end plays them. */
+   /* Binary frame: a 1-byte opcode then payload. TTS chunks accumulate and the
+      segment-end plays them; music frames stream straight into the Opus decoder. */
    private onBinary(buf: ArrayBuffer): void {
       const bytes = new Uint8Array(buf);
       if (bytes.length === 0) return;
       const op = bytes[0];
       if (op === BIN_AUDIO_OUT) this.tts.queue(bytes.subarray(1));
       else if (op === BIN_AUDIO_SEGMENT_END) this.tts.play();
+      else if (op === BIN_MUSIC_DATA) void this.music.pushFrame(bytes.subarray(1));
+   }
+
+   /* Music transport: a music_control write (Tier C, a deliberate user action). */
+   musicControl(action: string, params: Record<string, unknown> = {}): void {
+      this.send({ type: "music_control", payload: { action, ...params } });
+   }
+
+   getMusicAudio(): MusicAudio {
+      return this.music;
    }
 
    /* --- MODEL panel -------------------------------------------------------- */

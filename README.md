@@ -43,16 +43,23 @@ particle field are not a concern on that hardware.
 
 ```
 npm install
-npm run dev      # http://localhost:5273
+npm run dev      # https://localhost:5273
 ```
 
 `npm run build` typechecks with `tsc` and produces a static bundle in `dist/`.
 
+The dev server runs over **HTTPS** with an auto-generated self-signed cert. This is
+required, not cosmetic: the music player decodes audio with WebCodecs and AudioWorklet,
+which browsers expose only in a secure context. `localhost` is treated as secure over
+http, but opening the dashboard from another machine (`http://<ip>:5273`) is not, so
+music would not play there. HTTPS makes every origin secure. Accept the self-signed cert
+once per browser (a one-time warning), the same as DAWN's own cert.
+
 The dev server proxies `/api` and `/ws` to the DAWN daemon, so the browser talks to a
 single origin (this is what lets the session cookie ride the WebSocket handshake).
 Point it at your daemon by editing `DAWN_TARGET` in `vite.config.ts` (default
-`https://localhost:3000`). If DAWN serves a self-signed cert, accept it once by visiting
-`https://localhost:3000` directly in the browser.
+`https://localhost:3000`). Accept DAWN's cert too, once, by visiting
+`https://localhost:3000` directly.
 
 ## Connecting
 

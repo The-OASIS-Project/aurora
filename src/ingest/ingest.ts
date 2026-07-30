@@ -59,12 +59,48 @@ export interface TelemetrySink {
    setTimezone(tz: string): void;
 }
 
-/* The four sinks ingest fans out to. */
+/* One track's metadata, from music_state.track (null when the queue is empty). */
+export interface MusicTrack {
+   path: string;
+   title: string;
+   artist: string;
+   album: string;
+   durationSec: number;
+}
+
+/* DAWN's music playback state, distilled from a music_state frame. */
+export interface MusicState {
+   playing: boolean;
+   paused: boolean;
+   track: MusicTrack | null;
+   positionSec: number;
+   durationSec: number;
+   queueLength: number;
+   queueIndex: number;
+   shuffle: boolean;
+   repeatMode: number; // 0 none | 1 all | 2 one
+   volume: number; // server-stored hint; real gain is client-side
+   quality: string;
+   bitrate: number; // Opus target bits/sec
+   sourceFormat: string;
+   sourceRate: number;
+}
+
+/* What ingest can push to the music player view (a passive view; transport is
+   sent back out via Ingest.musicControl). */
+export interface MusicSink {
+   setState(state: MusicState): void;
+   setPosition(positionSec: number, durationSec: number): void;
+   setError(message: string): void;
+}
+
+/* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
    reactor: ReactorSink;
    conversation: ConversationSink;
    telemetry: TelemetrySink;
+   music: MusicSink;
 }
 
 /*
@@ -81,5 +117,8 @@ export interface Ingest {
    dismiss(id: string): void;
    /* User engaged/left the input (focus), which affects the listening state. */
    setEngaged(engaged: boolean): void;
+   /* Music transport (a deliberate Tier-C write, like chat submit): a music_control
+      action verb plus its params, e.g. musicControl("seek", { position_sec: 42 }). */
+   musicControl(action: string, params?: Record<string, unknown>): void;
    stop(): void;
 }
