@@ -25,6 +25,11 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 // self-signed cert. Change DAWN_TARGET if your daemon lives elsewhere.
 const DAWN_TARGET = "https://localhost:3000";
 
+// DAWN's dedicated music-stream server runs on the main port + 1, same host, and
+// shares DAWN's TLS cert. Derived from DAWN_TARGET so there is one place to edit.
+const dawnUrl = new URL(DAWN_TARGET);
+const DAWN_MUSIC_TARGET = `https://${dawnUrl.hostname}:${Number(dawnUrl.port || "443") + 1}`;
+
 // Dev-only: the browser page is http://localhost:5273, but DAWN marks its cookie
 // `Secure` (only sent over https). Strip that flag off the proxied Set-Cookie so
 // the dev origin will store it; likewise relax SameSite to Lax. Never ships: this
@@ -54,6 +59,17 @@ export default defineConfig({
          },
          "/ws": {
             target: DAWN_TARGET,
+            changeOrigin: true,
+            secure: false,
+            ws: true
+         },
+         // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
+         // same-origin like /ws so it works for remote browsers too (it authenticates
+         // with the session token, not the cookie). NOTE: the path must NOT start with
+         // "/ws", or the broader "/ws" rule above captures it and routes it to the
+         // main server (which does not speak dawn-music). Hence "/music-ws".
+         "/music-ws": {
+            target: DAWN_MUSIC_TARGET,
             changeOrigin: true,
             secure: false,
             ws: true

@@ -42,6 +42,7 @@ import {
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] run)
+const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
@@ -182,6 +183,13 @@ function toMusicState(p: Record<string, unknown>): MusicState {
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
+   /* Dedicated dawn-music stream socket (main port + 1, proxied at /music-ws).
+      DAWN routes audio here once it authenticates, keeping it off the control
+      channel; if it never attaches, audio just keeps arriving on the main socket. */
+   private musicWs: WebSocket | null = null;
+   private musicWsTimer = 0;
+   private musicWsFails = 0;
+   private musicWsToken = ""; // token the current music socket is (re)connecting with
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private loadedInitial = false; // guard: load the starting conversation only once
@@ -351,6 +359,7 @@ export class DawnIngest implements Ingest {
       ws.onclose = (ev: CloseEvent): void => {
          this.ws = null;
          this.stopMetrics();
+         this.closeMusicStream();
          this.sinks.reactor.setState("idle");
          this.emit(this.wantConnected ? "error" : "disconnected", ev.reason || undefined);
       };
@@ -373,8 +382,14 @@ export class DawnIngest implements Ingest {
 
       switch (type) {
          case "session":
-            /* Store the token so a reload resumes this same session (see TOKEN_KEY). */
-            if (typeof p.token === "string") localStorage.setItem(TOKEN_KEY, p.token);
+            /* Store the token so a reload resumes this same session (see TOKEN_KEY).
+               The token also authenticates the dedicated music stream socket, so
+               (re)open it here where we have a fresh one. */
+            if (typeof p.token === "string") {
+               localStorage.setItem(TOKEN_KEY, p.token);
+               this.musicWsFails = 0;
+               this.openMusicStream(p.token);
+            }
             break;
 
          case "config":
@@ -805,6 +820,95 @@ export class DawnIngest implements Ingest {
       return this.music;
    }
 
+   /* Open the dedicated dawn-music stream socket and authenticate it with the
+      session token. Once DAWN sees it (set_stream_wsi), it sends music audio here
+      instead of on the main socket, keeping high-bandwidth audio off the control
+      channel (the main socket drops music frames under backpressure). Frames use the
+      same [0x20][uint16-LE len][opus] framing. Purely an enhancement: if this never
+      attaches, audio keeps flowing on the main socket. */
+   private openMusicStream(token: string): void {
+      if (!this.wantConnected || !token) return;
+      /* Idempotent: DAWN can send the `session` frame more than once per connect, and
+         we must not tear down a live socket each time (rapid reopen can race the
+         server's stream registration). Only (re)open if there is no live socket for
+         this token. */
+      const live =
+         this.musicWs &&
+         (this.musicWs.readyState === WebSocket.OPEN ||
+            this.musicWs.readyState === WebSocket.CONNECTING);
+      if (live && this.musicWsToken === token) return;
+      this.closeMusicStream();
+      this.musicWsToken = token;
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      let ws: WebSocket;
+      try {
+         ws = new WebSocket(`${proto}://${window.location.host}/music-ws`, "dawn-music");
+      } catch {
+         return;
+      }
+      ws.binaryType = "arraybuffer";
+      this.musicWs = ws;
+
+      ws.onopen = (): void => ws.send(JSON.stringify({ type: "auth", token }));
+
+      ws.onmessage = (ev: MessageEvent): void => {
+         if (ev.data instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(ev.data);
+            if (bytes.length === 0) return;
+            /* Same framing as the main socket, opcode-prefixed. */
+            void this.music.pushFrame(bytes[0] === BIN_MUSIC_DATA ? bytes.subarray(1) : bytes);
+            return;
+         }
+         try {
+            const m = JSON.parse(String(ev.data)) as { type?: string; reason?: string };
+            if (m.type === "auth_ok") {
+               this.musicWsFails = 0; // attached; audio now streams here
+               /* Debug, not info: an idle socket idle-times-out and reconnects to
+                  stay ready, so at info level this would spam every ~30s when nothing
+                  is playing. Playback keeps the socket alive (verified: stable). */
+               console.debug("[dawn] music stream attached (dedicated socket)");
+            } else if (m.type === "auth_failed") {
+               console.warn("[dawn] music stream auth failed:", m.reason);
+               this.closeMusicStream(); // fall back to the main socket
+            }
+         } catch {
+            /* ignore non-JSON text */
+         }
+      };
+
+      ws.onclose = (): void => {
+         if (this.musicWs === ws) this.musicWs = null;
+         this.scheduleMusicReconnect();
+      };
+      ws.onerror = (): void => {
+         /* onclose fires right after and handles the reconnect. */
+      };
+   }
+
+   private scheduleMusicReconnect(): void {
+      if (!this.wantConnected || this.musicWsFails >= MUSIC_WS_MAX_FAILS) return;
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) return;
+      this.musicWsFails++;
+      const delay = Math.min(15000, 1000 * 2 ** (this.musicWsFails - 1));
+      window.clearTimeout(this.musicWsTimer);
+      this.musicWsTimer = window.setTimeout(() => this.openMusicStream(token), delay);
+   }
+
+   private closeMusicStream(): void {
+      window.clearTimeout(this.musicWsTimer);
+      const ws = this.musicWs;
+      if (!ws) return;
+      this.musicWs = null;
+      ws.onclose = null; // an intentional close must not trigger a reconnect
+      ws.onerror = null;
+      try {
+         ws.close();
+      } catch {
+         /* already closing */
+      }
+   }
+
    /* --- MODEL panel -------------------------------------------------------- */
 
    private notifyLlm(): void {
@@ -986,6 +1090,7 @@ export class DawnIngest implements Ingest {
    disconnect(): void {
       this.wantConnected = false;
       this.stopMetrics();
+      this.closeMusicStream();
       this.tts?.stop();
       this.ws?.close();
       this.ws = null;

@@ -320,7 +320,25 @@ better, so they belong in the backend. Ordered roughly by effort.
    `error`); or (c) route info notices through a non-error frame entirely. Any of
    these lets a UI style/route them correctly without a prefix convention.
 
+5. **Advertise the dedicated music-stream port.** The `dawn-music` audio server
+   (`webui_music_server.c`) listens on `webui_server_get_port() + 1`, but that port
+   is never announced in any frame — a client has to compute main+1 itself. The
+   `config` frame only carries `audio_chunk_ms` (`webui_send.c` ~L476). Including the
+   music port (and whether the music server is enabled) in `config` removes the guess
+   and lets a client skip the dedicated socket cleanly when it is off.
+
+6. **`music_control` bare `play` should start a stopped session.** DAWN streams music
+   audio only to the session that actively *starts* a track (`play` with a path/query,
+   `play_index`, `next`); a bare `play` only resumes a pause (`webui_music_handlers.c`
+   ~L334-343). So a client that merely subscribed while audio is "already playing"
+   elsewhere gets metadata but no stream, and its play button appears dead until it
+   sends `play_index`. Having bare `play` start playback at the current queue index
+   when the session is stopped and the queue is non-empty would make "press play"
+   behave as expected in every client. (The hero UI works around this by sending
+   `play_index` from a stopped state.)
+
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
 channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 
-*Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30.*
+*Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
+(#5, #6) added 2026-07-30 while wiring the dedicated audio socket.*

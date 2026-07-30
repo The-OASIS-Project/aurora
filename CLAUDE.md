@@ -101,9 +101,13 @@ depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the an
   fine over http, but a network origin (`http://<ip>:5273`) is not, so music silently
   will not decode there. The dev server therefore runs HTTPS (basicSsl). TTS is
   unaffected (it uses plain `AudioContext`, which is not secure-context-gated). Frames arrive on the MAIN socket as `0x20` = `[uint16-LE len][opus]` when
-  no dedicated socket is attached (dropped under backpressure). A glitch-free dedicated
-  `dawn-music` socket exists at port main+1, subprotocol `dawn-music`, with its own
-  `{type:auth,token}` handshake, but it is optional and not yet wired.
+  no dedicated socket is attached (dropped under backpressure). For glitch-free audio,
+  `DawnIngest` also opens the **dedicated `dawn-music` socket** (port main+1, subprotocol
+  `dawn-music`, `{type:auth,token}` handshake with the session token); once DAWN sees it
+  it routes audio there, and on close it falls back to the main socket. In dev it is
+  proxied at **`/music-ws`** — NOT `/ws-music`, which the broader `/ws` proxy prefix
+  would capture and misroute to the main server (which has no `dawn-music` protocol and
+  no HTTP fallback, so the upgrade just hangs up).
 - **Music `volume` is server-stored only.** `music_control volume` sets a value DAWN
   echoes in `music_state` but never applies to the audio, so real gain/mute is a
   client-side Web Audio `GainNode` (the player owns it). `repeat_mode` is an int (0/1/2);
