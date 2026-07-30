@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Local / machine-specific
+*.local
+.claude/settings.local.json
+.DS_Store

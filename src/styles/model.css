@@ -1,0 +1,94 @@
+/*
+ * MODEL menu panel: LLM selection. Segmented controls (tactical toggles) for the
+ * small option sets, a dropdown for the model list, a privacy switch. Same frosted
+ * menu-dropdown surface as the other menus, just wider and laid out as label→control
+ * rows.
+ */
+
+.model-panel {
+   min-width: 21rem;
+   padding: 0.5rem 0.25rem;
+}
+
+.model-row {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 1rem;
+   padding: 0.4rem 0.6rem;
+}
+
+.model-label {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+
+/* Segmented control. */
+.model-seg {
+   display: flex;
+   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+   border-radius: 2px;
+   overflow: hidden;
+}
+.model-seg-btn {
+   padding: 0.22rem 0.6rem;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.08em;
+   color: var(--text-dim);
+   background: transparent;
+   border: none;
+   border-left: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+   cursor: pointer;
+   transition: background 120ms ease, color 120ms ease;
+}
+.model-seg-btn:first-child {
+   border-left: none;
+}
+.model-seg-btn:hover:not(.off):not(.active) {
+   background: color-mix(in srgb, var(--accent) 12%, transparent);
+   color: var(--text);
+}
+.model-seg-btn.active {
+   background: var(--accent);
+   color: var(--ground);
+}
+.model-seg-btn.off {
+   color: var(--text-faint);
+   opacity: 0.4;
+   cursor: default;
+}
+
+/* Model dropdown. */
+.model-select {
+   max-width: 11.5rem;
+   padding: 0.24rem 0.4rem;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground) 60%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+}
+.model-select:disabled {
+   color: var(--text-faint);
+   cursor: default;
+}
+
+.model-divider {
+   height: 1px;
+   margin: 0.45rem 0.6rem;
+   background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Privacy switch: left-aligned like the other menu toggles. */
+.model-privacy {
+   justify-content: flex-start;
+   gap: 0.6rem;
+   padding-left: 0.6rem;
+}

@@ -1,0 +1,248 @@
+/*
+ * Conversation front window: the readable, scrollable face of the exchange. Same
+ * frosted-glass + corner-bracket language as the panels. Each turn is a labelled
+ * block (USER / the AI's name) with a markdown body. When it recedes it does NOT
+ * fade out — it leans back from a fixed bottom edge into a trapezoid (real CSS-3D),
+ * frame and far edge dissolving, leaving dimmed text tipped away. The lean DOWN is
+ * slow (a recede); the raise back UP is quick.
+ */
+
+#convo {
+   width: 100%;
+   display: flex;
+   justify-content: center;
+   pointer-events: none;
+   perspective: 1100px;
+   perspective-origin: center bottom;
+}
+
+.convo-window {
+   position: relative;
+   width: min(680px, 92vw);
+   max-height: 52vh;
+   overflow-y: auto;
+   pointer-events: auto;
+   padding: 1rem 1.3rem;
+   display: flex;
+   flex-direction: column;
+   gap: 0.9rem;
+   background: color-mix(in srgb, var(--ground-raise) 30%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   transform-origin: center bottom;
+   /* RAISE (to front): quick and snappy. This is the base state's transition. */
+   transition:
+      transform 520ms cubic-bezier(0.2, 0.75, 0.2, 1),
+      opacity 420ms ease,
+      background 380ms ease,
+      box-shadow 380ms ease,
+      backdrop-filter 380ms ease,
+      -webkit-backdrop-filter 380ms ease;
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+
+.convo-window.empty {
+   opacity: 0;
+   transform: translateY(14px);
+   pointer-events: none;
+}
+
+/* RECEDED: tip back into a trapezoid, keeping the bottom edge fixed. The box
+   dissolves and a top-fade mask carries the far edge to nothing; the text dims but
+   never disappears. The transition here (destination state) governs the lean DOWN,
+   so it is deliberately long and eased-out — it reads as a slow recede. */
+.convo-window.receded {
+   transform: rotateX(36deg);
+   pointer-events: none;
+   background: transparent;
+   box-shadow: none;
+   backdrop-filter: none;
+   -webkit-backdrop-filter: none;
+   overflow: hidden;
+   -webkit-mask-image: linear-gradient(to top, #000 18%, transparent 96%);
+   mask-image: linear-gradient(to top, #000 18%, transparent 96%);
+   transition:
+      transform 1700ms cubic-bezier(0.16, 0.84, 0.28, 1),
+      background 1300ms ease,
+      box-shadow 1300ms ease,
+      backdrop-filter 1300ms ease,
+      -webkit-backdrop-filter 1300ms ease;
+}
+.convo-window.receded .convo-scroll {
+   opacity: 0.5; /* dim, but the text persists */
+   transition: opacity 1500ms ease;
+}
+.convo-window.receded .panel-corner {
+   opacity: 0;
+   transition: opacity 900ms ease;
+}
+
+.convo-window::-webkit-scrollbar {
+   width: 6px;
+}
+.convo-window::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 3px;
+}
+
+.convo-window .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+   transition: opacity 400ms ease;
+}
+
+.convo-scroll {
+   display: flex;
+   flex-direction: column;
+   gap: 1rem;
+   transition: opacity 400ms ease;
+}
+
+/* A turn: a colored left rail + a role header, then the body. Cooler than a filled
+   box — the rail and a glowing role tick carry the identity. */
+.convo-msg {
+   padding-left: 0.8rem;
+   border-left: 2px solid transparent;
+}
+.convo-msg.user {
+   border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+}
+.convo-msg.assistant {
+   border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.convo-role {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   margin-bottom: 0.35rem;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.2em;
+   text-transform: uppercase;
+}
+.convo-role::before {
+   content: "";
+   width: 6px;
+   height: 6px;
+   background: currentColor;
+   box-shadow: 0 0 8px currentColor;
+}
+.convo-msg.user .convo-role {
+   color: var(--warn);
+}
+.convo-msg.assistant .convo-role {
+   color: var(--accent-glow);
+}
+
+.convo-body {
+   line-height: 1.55;
+   word-break: break-word;
+}
+.convo-msg.user .convo-body {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-mono);
+   letter-spacing: 0.03em;
+   color: var(--text-faint);
+   white-space: pre-wrap;
+}
+.convo-msg.assistant .convo-body {
+   font-size: var(--fs-body);
+   color: var(--text);
+}
+
+/* Markdown inside an assistant body. */
+.convo-body p {
+   margin: 0 0 0.55em;
+}
+.convo-body > *:last-child {
+   margin-bottom: 0;
+}
+.convo-body strong {
+   font-weight: 600;
+   color: var(--accent-glow);
+}
+.convo-body em {
+   font-style: italic;
+}
+.convo-body a {
+   color: var(--accent-glow);
+   text-decoration: underline;
+   text-underline-offset: 2px;
+}
+.convo-body code {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: 0.9em;
+   padding: 0.08em 0.32em;
+   border-radius: 2px;
+   background: color-mix(in srgb, var(--ground) 55%, transparent);
+   color: var(--accent-glow);
+}
+.convo-body pre {
+   margin: 0.5em 0;
+   padding: 0.7rem 0.9rem;
+   overflow-x: auto;
+   border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+   background: color-mix(in srgb, var(--ground) 60%, transparent);
+}
+.convo-body pre code {
+   padding: 0;
+   background: none;
+   color: var(--text);
+}
+.convo-body ul,
+.convo-body ol {
+   margin: 0.3em 0 0.55em;
+   padding-left: 1.35em;
+}
+.convo-body li {
+   margin: 0.15em 0;
+}
+.convo-body h1,
+.convo-body h2,
+.convo-body h3 {
+   margin: 0.5em 0 0.3em;
+   font-size: 1.05em;
+   font-weight: 600;
+   color: var(--text);
+}
+.convo-body blockquote {
+   margin: 0.4em 0;
+   padding-left: 0.75rem;
+   border-left: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+   color: var(--text-dim);
+}
+
+/* Thinking dot before the first token lands. */
+.convo-window.thinking .convo-scroll::after {
+   content: "";
+   align-self: flex-start;
+   width: 0.5em;
+   height: 0.5em;
+   border-radius: 50%;
+   background: var(--accent);
+   box-shadow: 0 0 10px var(--accent-glow);
+   animation: convo-think 1s ease-in-out infinite;
+}
+
+@keyframes convo-think {
+   0%,
+   100% {
+      opacity: 0.25;
+   }
+   50% {
+      opacity: 1;
+   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+   .convo-window,
+   .convo-window.receded {
+      transition: opacity 200ms ease;
+      transform: none;
+   }
+   .convo-window.thinking .convo-scroll::after {
+      animation: none;
+   }
+}

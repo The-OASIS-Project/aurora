@@ -1,0 +1,179 @@
+/*
+ * Login overlay + linked chip. Same observatory language as the panels: frosted
+ * glass, phosphor accent, quiet by default. The overlay owns the screen only
+ * until the uplink is established, then collapses to a corner chip.
+ */
+
+#login-overlay {
+   position: fixed;
+   inset: 0;
+   z-index: 1000;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   background: color-mix(in srgb, var(--ground) 72%, transparent);
+   backdrop-filter: blur(6px);
+   -webkit-backdrop-filter: blur(6px);
+}
+
+#login-overlay[hidden] {
+   display: none;
+}
+
+#login-card {
+   display: flex;
+   flex-direction: column;
+   gap: 0.9rem;
+   width: min(20rem, 82vw);
+   padding: 1.9rem 1.7rem 1.6rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 46%, transparent) 88%
+   );
+   backdrop-filter: blur(8px);
+   -webkit-backdrop-filter: blur(8px);
+   box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+      0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+
+.login-brand {
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-h2, 1.1rem);
+   letter-spacing: 0.42em;
+   text-indent: 0.42em;
+   color: var(--accent-glow);
+   text-shadow: 0 0 12px color-mix(in srgb, var(--accent-glow) 40%, transparent);
+}
+
+.login-sub {
+   margin-top: -0.5rem;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.24em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+
+.login-field {
+   display: flex;
+   flex-direction: column;
+   gap: 0.3rem;
+}
+
+.login-field > span {
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.18em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+}
+
+.login-field input {
+   padding: 0.5rem 0.6rem;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-body);
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground) 55%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 2px;
+   outline: none;
+   transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.login-field input:focus {
+   border-color: var(--accent);
+   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.login-connect {
+   margin-top: 0.3rem;
+   padding: 0.55rem;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-body);
+   letter-spacing: 0.2em;
+   text-transform: uppercase;
+   color: var(--ground);
+   background: var(--accent);
+   border: none;
+   border-radius: 2px;
+   cursor: pointer;
+   transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.login-connect:hover {
+   background: var(--accent-glow);
+   box-shadow: 0 0 16px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+}
+
+.login-connect:disabled {
+   opacity: 0.5;
+   cursor: default;
+   box-shadow: none;
+}
+
+.login-status {
+   min-height: 1.1em;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+}
+
+.login-status[data-state="error"] {
+   color: var(--alert);
+}
+
+.login-status[data-state="connected"] {
+   color: var(--accent-glow);
+}
+
+.login-status[data-state="authenticating"],
+.login-status[data-state="connecting"] {
+   color: var(--warn);
+}
+
+/* --- linked corner chip -------------------------------------------------- */
+
+#link-chip {
+   position: fixed;
+   bottom: 0.9rem;
+   left: 0.9rem;
+   z-index: 1000;
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   padding: 0.32rem 0.6rem;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--ground-raise) 40%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+   border-radius: 2px;
+   backdrop-filter: blur(4px);
+   -webkit-backdrop-filter: blur(4px);
+   cursor: pointer;
+   opacity: 0.55;
+   transition: opacity 140ms ease;
+}
+
+#link-chip[hidden] {
+   display: none;
+}
+
+#link-chip:hover {
+   opacity: 1;
+}
+
+.link-dot {
+   width: 6px;
+   height: 6px;
+   border-radius: 50%;
+   background: var(--accent);
+   box-shadow: 0 0 8px var(--accent-glow);
+}

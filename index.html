@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>DAWN</title>
+   </head>
+   <body>
+      <!-- The stage holds everything. The anchor canvas is the one real-WebGL
+           element (the center light source, brief S4.4). The field is the
+           CSS-3D depth space the DOM panels hover in. Both are painted only by
+           the render layer; nothing above it knows these nodes exist. -->
+      <div id="stage">
+         <canvas id="anchor"></canvas>
+         <!-- Reticle framing the reactor (populated by hud.ts). -->
+         <div id="reticle"></div>
+         <div id="field"></div>
+
+         <!-- Side rails for pinned panels (music, documents, expanded detail).
+              Flat (no perspective); the render layer docks pinned nodes here. -->
+         <div id="docks">
+            <div class="dock-rail left"></div>
+            <div class="dock-rail right"></div>
+         </div>
+
+         <!-- Bottom console: the single living response (S4.1) and the one
+              morphing input bar (S4.3). Voice and text are co-equal inputs. -->
+         <div id="console">
+            <!-- The conversation surface: a scrollable front window (built by
+                 conversation.ts) that recedes into the 3D crawl in the anchor
+                 scene when idle. -->
+            <div id="convo"></div>
+            <form id="composer" class="composer" autocomplete="off">
+               <span class="panel-corner tl"></span>
+               <span class="panel-corner tr"></span>
+               <span class="panel-corner bl"></span>
+               <span class="panel-corner br"></span>
+               <!-- Voice path is stubbed, so the mic is out of tab order until
+                    wired; the input is the primary control a keyboard lands on. -->
+               <button
+                  type="button"
+                  id="composer-mic"
+                  class="composer-mic"
+                  aria-label="Speak to DAWN"
+                  tabindex="-1"
+               ></button>
+               <input
+                  id="composer-input"
+                  class="composer-input"
+                  type="text"
+                  placeholder="Ask DAWN, or speak"
+                  aria-label="Message DAWN"
+               />
+               <span class="composer-hint">ENTER</span>
+            </form>
+         </div>
+
+         <!-- Fixed HUD chrome: screen frame, clock, telemetry. Static, not
+              state-driven, so it lives outside the render seam. -->
+         <div id="hud">
+            <span class="frame-corner fc-tl"></span>
+            <span class="frame-corner fc-tr"></span>
+            <span class="frame-corner fc-bl"></span>
+            <span class="frame-corner fc-br"></span>
+
+            <div id="hud-clock">
+               <div class="clk-time">--:--:--</div>
+               <div class="clk-date">&nbsp;</div>
+               <div class="clk-mark">D.A.W.N.</div>
+            </div>
+
+            <div id="hud-status">
+               <div class="tel-row tel-model"><span class="tel-key">MODEL</span><span class="tel-val" data-tel="model">--</span></div>
+               <div class="tel-row"><span class="tel-key">EFFORT</span><span class="tel-val" data-tel="effort">--</span></div>
+               <div class="tel-sep"></div>
+               <div class="tel-row"><span class="tel-key">TOKEN RATE</span><span class="tel-val" data-tel="rate">--</span></div>
+               <div class="tel-row"><span class="tel-key">TTFT</span><span class="tel-val" data-tel="ttft">--</span></div>
+               <div class="tel-row"><span class="tel-key">LATENCY</span><span class="tel-val" data-tel="lat">--</span></div>
+               <div class="tel-row"><span class="tel-key">CONTEXT USAGE</span><span class="tel-val" data-tel="ctx">--</span></div>
+               <div class="tel-row"><span class="tel-key">UPTIME</span><span class="tel-val" data-tel="up">--:--:--</span></div>
+            </div>
+         </div>
+      </div>
+      <script type="module" src="/src/main.ts"></script>
+   </body>
+</html>
