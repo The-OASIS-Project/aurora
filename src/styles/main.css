@@ -510,7 +510,9 @@ body.engaged #docks {
    width: 18px;
    height: 18px;
 }
-.composer-tts .tts-slash {
+/* Waveform bars: ON shows the tall spectrum, OFF flatlines to the dotted row.
+   Echoes the reactor's voice bar-ring (the thing that lights up when DAWN speaks). */
+.composer-tts .tts-bars-off {
    display: none;
 }
 .composer-tts.tts-off {
@@ -518,11 +520,11 @@ body.engaged #docks {
    opacity: 0.85;
    filter: none;
 }
-.composer-tts.tts-off .tts-wave {
+.composer-tts.tts-off .tts-bars-on {
    display: none;
 }
-.composer-tts.tts-off .tts-slash {
-   display: block;
+.composer-tts.tts-off .tts-bars-off {
+   display: inline;
 }
 
 .composer-input {

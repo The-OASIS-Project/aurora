@@ -33,8 +33,9 @@
             <!-- The input bar, plus the voice-output (TTS) toggle sitting in the
                  gutter to its left (outside the bar itself). -->
             <div class="composer-row">
-               <!-- TTS toggle. On shows a speaker with waves; off dims and shows the
-                    mute slash. Wired in main.ts to dawn's TTS. -->
+               <!-- TTS toggle. A voice-spectrum waveform (echoing the reactor's bar
+                    ring): ON shows the tall bars, OFF flatlines to a dotted row.
+                    Wired in main.ts to dawn's TTS. -->
                <button
                   type="button"
                   id="composer-tts"
@@ -42,12 +43,21 @@
                   aria-label="Mute DAWN's voice"
                   aria-pressed="true"
                >
-                  <svg class="tts-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                     <path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" stroke="none" />
-                     <path class="tts-wave" d="M15.5 8.5a5 5 0 0 1 0 7" />
-                     <path class="tts-wave" d="M18.5 6a9 9 0 0 1 0 12" />
-                     <line class="tts-slash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" />
+                  <svg class="tts-ico" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+                     <g class="tts-bars-on">
+                        <rect x="3.2" y="9.5" width="2.3" height="5" rx="1" />
+                        <rect x="7.3" y="5.5" width="2.3" height="13" rx="1" />
+                        <rect x="11.4" y="3" width="2.3" height="18" rx="1" />
+                        <rect x="15.5" y="7" width="2.3" height="10" rx="1" />
+                        <rect x="19.6" y="10.5" width="2.3" height="3" rx="1" />
+                     </g>
+                     <g class="tts-bars-off">
+                        <rect x="3.2" y="10.8" width="2.3" height="2.4" rx="1" />
+                        <rect x="7.3" y="10.8" width="2.3" height="2.4" rx="1" />
+                        <rect x="11.4" y="10.8" width="2.3" height="2.4" rx="1" />
+                        <rect x="15.5" y="10.8" width="2.3" height="2.4" rx="1" />
+                        <rect x="19.6" y="10.8" width="2.3" height="2.4" rx="1" />
+                     </g>
                   </svg>
                </button>
                <form id="composer" class="composer" autocomplete="off">
