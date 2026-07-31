@@ -203,7 +203,7 @@ current WebSocket actually support?
 | **Background jobs / tasks** | `job_notification`, `job_update` push | `jobs_request`, `list_jobs` | ✅ **Fully wireable now.** Best-supported observe surface in DAWN. |
 | **Alarms / timers / reminders** | `scheduler_notification` push | `scheduler_events` | ✅ **Fully wireable now.** |
 | **Ambient notices / attention** | `attention_alert`, `silent_observation` push | `watch_list` for config | ✅ **Fully wireable now.** This is the ambient-spike engine. `level` maps to tone. |
-| **Calendar** | *(none)* | *(none — WS exposes only account/calendar management, not an events feed)* | ⚠️ **Not wireable as a live agenda today.** See gap below. |
+| **Calendar** | `calendar_events_changed` push | `calendar_upcoming_events` + `calendar_list_my_calendars` | ✅ **Wireable now — built.** Hero UI's calendar card consumes it (today's window, per-event color, refetch on the push). §9.1g. |
 | **Email** | *(none)* | *(none — WS exposes only account management, not an inbox/message feed)* | ⚠️ **Not wireable as an inbox today.** See gap below. |
 
 ### The two gaps (important for the wiring plan)
@@ -301,7 +301,7 @@ behaviour you must handle** — several of these changed the wire contract.
 | 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
 | 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
 | 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`) |
-| 4 | Calendar / email content feeds | ⏸ **Deferred** — *pull* version is a small standalone request; *push* is SAGE |
+| 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
 
 (Original item write-ups #1–#6 with source cites are preserved below the two new
 subsections for reference.)
@@ -358,6 +358,34 @@ stream. No wire-shape change — same request, same `music_state` response; only
 case behaves. An empty queue still just echoes state. **You can drop the
 `play_index`-from-stopped workaround** (keeping it is harmless — `play_index` still works).
 
+**g. Calendar panel: pull + live refetch.** Two new surfaces for a calendar/agenda board:
+
+- **Pull** — request `calendar_upcoming_events`, response `calendar_upcoming_events_response`:
+  ```json
+  { "type": "calendar_upcoming_events", "payload": { "days": 7, "calendar_name": "Work" } }
+  ```
+  `days` (default 7, clamp 1–90) **or** explicit `start`/`end` epoch (span ≤ 366 days; providing exactly
+  one, or `start>=end`, is a `success:false` error). `calendar_name` optional. Response payload:
+  `{ success, start, end, truncated, events:[…] }`; each event carries
+  `{ id, calendar_id, uid, summary, location, start, end, all_day, start_date, end_date, cancelled,
+  is_override }`. Includes **all-day** events (holidays/PTO), ordered by start, capped at 256 with
+  `truncated:true` when the cap trips (show a "+N more" affordance). Reads the offline cache — no network.
+  - **`calendar_id`** is the per-event grouping/coloring key you asked for. The response intentionally does
+    **not** carry the calendar *name* (that needs an extra join); `calendar_id` is the stable key (names
+    change/collide).
+- **The id→{name,color} map is now one call — `calendar_list_my_calendars`** (no payload), response
+  `{ success, calendars:[{ id, account_id, name, color }] }`. This is your grouping map — no more two-hop
+  `calendar_list_accounts` + per-account `calendar_list_calendars` bootstrap. Returns **active** calendars
+  only, which is exactly the set the pull emits events from (every `calendar_id` you'll see is in the map).
+  Fetch once on connect; re-fetch on `calendar_events_changed` (a newly-synced calendar can appear).
+- **Push** — `calendar_events_changed` (empty payload, browsers-only, owner-scoped): a background CalDAV
+  sync pulled changes; **refetch** via the pull. Signal-only, no event data on the wire. This is a UI-sync
+  nudge, **not** a proactive "your standup moved" notice (that stays SAGE, on `silent_observation`/
+  `attention_alert`).
+- **Empty-vs-error (on record, per your note):** a transient CalDAV read failure returns an empty window,
+  not an error. Rendering "Nothing scheduled" and letting the next `calendar_events_changed` self-heal is
+  the intended contract.
+
 ### 9.2 Behaviour your reasoning controls must handle
 
 DAWN now allows changing Reasoning **mode** and **effort** mid-conversation (only *tool
@@ -403,9 +431,10 @@ is a Tier-A on-connect push, exactly as §3.7 lists it.
    poll + diff. DAWN does not subscribe to HA's own `state_changed` stream; rebroadcasting it
    would give crisp, low-latency ambient spikes. See the alerts scope below.
 
-3. **Calendar / email content feeds.** ⏸ Deferred. The WS exposes only account *management*
-   (no "today's events" / "recent mail" request, no push). A UI can't build a live calendar
-   or inbox panel without a new request (e.g. `calendar_upcoming_events`, `email_recent`). §5.
+3. **Calendar / email content feeds.** ✅ **Calendar done** (§9.1g) — `calendar_upcoming_events`
+   pull + `calendar_events_changed` refetch push; a live calendar/agenda panel is buildable now.
+   **Email pull still deferred** (`email_recent`-style request not yet added); calendar *proactive*
+   notices (vs. the refetch nudge) remain SAGE. §5.
 
 4. **The `error` frame needs a real severity.** ✅ Done via option (b) — added a `severity`
    field (§9.1b). DAWN sent purely informational notices as `error` frames with hardcoded
@@ -431,5 +460,6 @@ channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
 validation tool. Hero UI consumed #1/#2/#5 (verified against `webui_config.c` /
 `webui_send.c` / `webui_message_dispatch.c`) 2026-07-30. Item #6 shipped 2026-07-30
-(commit on `background-jobs-p2-observe`); §9.1f added. All four actionable items now
-committed in DAWN; #3/#4 remain SAGE-tier.*
+(commit on `background-jobs-p2-observe`); §9.1f added. **#4 calendar pull + push shipped
+2026-07-31** (§9.1g; `calendar_upcoming_events` + `calendar_events_changed`, per-event
+`calendar_id` added at the consumer's request); email pull + #3 HA push remain deferred.*

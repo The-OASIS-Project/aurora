@@ -24,6 +24,7 @@ import "./styles/login.css";
 import "./styles/convo.css";
 import "./styles/model.css";
 import "./styles/music.css";
+import "./styles/calendar.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import { Store } from "./state/store.ts";
@@ -38,6 +39,7 @@ import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
 import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
+import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
       stylesheets and the anchor shader share one tunable source. */
@@ -72,10 +74,9 @@ const hud = mountHud(stage);
 
 /* Top-centre settings menu: enable/disable which panels the dashboard shows. */
 /* Store-backed ambient panels the Panels menu can enable/disable. The music player
-   is not here: it is a standalone view (mounted below) toggled through its own
-   controller, appended to the Panels list separately. */
+   and calendar card are not here: they are standalone views (mounted below) toggled
+   through their own controllers, appended to the Panels list separately. */
 const PANEL_LABELS: Record<string, string> = {
-   calendar: "Calendar",
    email: "Email",
    homeassistant: "Home Assistant",
    subsystems: "Subsystems",
@@ -105,19 +106,26 @@ const musicPlayer = mountMusicPlayer(stage, {
    control: (action, params) => ingest.musicControl(action, params)
 });
 
+/* The calendar card: a standalone movable view (like the music player) showing
+   today's agenda from DAWN's calendar cache. Read-only; the ingest feeds it the
+   calendar map + events and refetches on calendar_events_changed. */
+const calendarPanel = mountCalendarPanel(stage);
+
 const menu = mountMenu(stage, {
    onNewChat: () => newChatHook.fire(),
    model: dawn.getModelControl(),
-   /* Store-backed panels, plus the standalone music player appended at the end. */
+   /* Store-backed panels, plus the standalone calendar + music views appended. */
    getPanels: () => [
       ...store
          .snapshot()
          .filter((e) => PANEL_LABELS[e.id])
          .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
+      { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
    ],
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
+      else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else store.toggleEnabled(id);
    },
    displayToggles: [
@@ -206,7 +214,8 @@ ingest.start({
       update: (values) => hud.updateTelemetry(values),
       setTimezone: (tz) => hud.setTimezone(tz)
    },
-   music: musicPlayer
+   music: musicPlayer,
+   calendar: calendarPanel
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -247,6 +256,7 @@ function dispose(): void {
    ingest.stop();
    conversation.destroy();
    musicPlayer.destroy();
+   calendarPanel.destroy();
    hud.destroy();
    menu.destroy();
    login.destroy();

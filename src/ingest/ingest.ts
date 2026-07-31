@@ -94,6 +94,43 @@ export interface MusicSink {
    setError(message: string): void;
 }
 
+/* One of the user's active calendars (calendar_list_my_calendars): the id->{name,
+   color} map a panel needs to group/color events. `color` is a raw CalDAV value
+   (e.g. "#3b82f6"); the view validates it before using it as a color. */
+export interface CalendarInfo {
+   id: number;
+   name: string;
+   color: string;
+}
+
+/* One occurrence from calendar_upcoming_events. `start`/`end` are epoch seconds
+   (timed events); for all-day events read `startDate`/`endDate` (YYYY-MM-DD).
+   `calendarId` maps to a CalendarInfo for the color dot. */
+export interface CalendarEvent {
+   id: number;
+   calendarId: number;
+   summary: string;
+   location: string;
+   start: number;
+   end: number;
+   allDay: boolean;
+   startDate: string;
+   endDate: string;
+   cancelled: boolean;
+   isOverride: boolean;
+}
+
+/* What ingest can push to the calendar panel (a passive view). The calendar map
+   and the event list arrive separately (two requests) and refresh together on the
+   calendar_events_changed push. */
+export interface CalendarSink {
+   setCalendars(calendars: CalendarInfo[]): void;
+   setEvents(events: CalendarEvent[], truncated: boolean): void;
+   /* The user's IANA timezone (from DAWN), so event times render in the user's local
+      time to match the clock, not the browser box's timezone (which may be UTC). */
+   setTimezone(tz: string): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -101,6 +138,7 @@ export interface IngestSinks {
    conversation: ConversationSink;
    telemetry: TelemetrySink;
    music: MusicSink;
+   calendar: CalendarSink;
 }
 
 /*

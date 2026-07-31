@@ -1,0 +1,196 @@
+/*
+ * Calendar card. A calm "today" agenda in the same machined/frosted language as the
+ * music player and panels. Standalone + grab-to-move; always shown when enabled (it
+ * reads "Nothing scheduled" on an empty day rather than disappearing). Everything is
+ * phosphor tokens except the small per-event dot, which carries the owning calendar's
+ * real CalDAV color (validated to a hex literal in the view before it reaches here).
+ */
+
+.calendar {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   cursor: grab; /* the card is grab-to-move */
+}
+.calendar.movable-dragging {
+   cursor: grabbing;
+}
+/* Reveal the full text (the truncated location wraps in place, growing the card
+   TALLER, not wider) on hover OR once the card has been manually resized larger.
+   Hover reveal is suppressed while dragging so the text doesn't reflow mid-move; the
+   resized reveal is persistent (it's the state the user opened the card into). */
+.calendar:not(.movable-dragging):hover .calendar-loc,
+.calendar.calendar-resized .calendar-loc {
+   white-space: normal;
+}
+/* Operator hid the card from the Panels menu: gone entirely, no pointer capture. */
+.calendar.calendar-off {
+   display: none;
+}
+/* Bottom resize grip: a subtle handle; drag to grow the list. */
+.calendar-resize {
+   height: 12px;
+   margin: -0.35rem -1.05rem -0.85rem;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   cursor: ns-resize;
+}
+.calendar-resize::after {
+   content: "";
+   width: 26px;
+   height: 3px;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 38%, transparent);
+   transition: background 140ms ease;
+}
+.calendar-resize:hover::after {
+   background: color-mix(in srgb, var(--accent-glow) 70%, transparent);
+}
+.calendar .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Header: "Today" + the date. */
+.calendar-head {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.6rem;
+}
+.calendar-title {
+   font-size: var(--fs-body);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.calendar-date {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+
+/* Event list. Overflows are shown with a bottom fade cue (see .overflowing) rather
+   than a scrollbar, which is hidden. Hover expands the cap to reveal more. */
+.calendar-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.55rem;
+   /* Resting size: content up to 40vh by default, or the grip-set height. Both come
+      from custom properties (set by the panel) so the :hover rule below can still
+      override them — an inline height would win and block hover-expand. */
+   height: var(--list-h, auto);
+   max-height: var(--list-cap, 40vh);
+   overflow-y: auto;
+   scrollbar-width: none; /* Firefox */
+   transition: max-height 200ms ease;
+}
+.calendar-list::-webkit-scrollbar {
+   display: none; /* WebKit/Blink */
+}
+/* More events below the fold: fade the bottom edge instead of showing a scrollbar. */
+.calendar-list.overflowing {
+   -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent);
+   mask-image: linear-gradient(to bottom, #000 78%, transparent);
+}
+/* Hovering expands to show the extra events (the card grows taller, like the long-text
+   reveal), then drops the fade cue. Works whether or not the card was manually resized
+   (it overrides the resting height/cap from the custom properties above); suppressed
+   only mid-drag. `min-height` pins it to the resting height so hover only ever GROWS
+   the list — never shrinks a card that was sized taller than its content, which would
+   pull the bottom edge off the cursor and cause a hover flicker loop. */
+.calendar:not(.movable-dragging):not(.calendar-resizing):hover .calendar-list {
+   min-height: var(--list-h, 0);
+   height: auto;
+   max-height: 80vh;
+}
+.calendar:not(.movable-dragging):hover .calendar-list.overflowing {
+   -webkit-mask-image: none;
+   mask-image: none;
+}
+/* On-theme separator between events: a phosphor hairline that fades at both ends. */
+.calendar-divider {
+   flex: 0 0 auto;
+   height: 1px;
+   background: linear-gradient(
+      to right,
+      transparent,
+      color-mix(in srgb, var(--accent) 32%, transparent) 15%,
+      color-mix(in srgb, var(--accent) 32%, transparent) 85%,
+      transparent
+   );
+}
+.calendar-empty {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   padding: 0.4rem 0;
+}
+
+.calendar-event {
+   display: grid;
+   grid-template-columns: 9px 4.6em 1fr;
+   align-items: baseline;
+   column-gap: 0.55rem;
+   row-gap: 0.1rem;
+}
+.calendar-dot {
+   align-self: center;
+   width: 8px;
+   height: 8px;
+   border-radius: 50%;
+   background: var(--dot, var(--accent));
+   box-shadow: 0 0 6px color-mix(in srgb, var(--dot, var(--accent-glow)) 60%, transparent);
+}
+.calendar-when {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.04em;
+   color: var(--text-dim);
+   white-space: nowrap;
+}
+.calendar-summary {
+   font-size: var(--fs-body);
+   color: var(--text);
+   overflow: hidden;
+   text-overflow: ellipsis;
+}
+.calendar-loc {
+   grid-column: 2 / -1;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+}
+/* Each comma-delimited address segment stays on one line; breaks happen only at the
+   spaces between segments (i.e. after a comma). */
+.calendar-loc-seg {
+   white-space: nowrap;
+}
+/* A cancelled occurrence: struck through and dimmed, still listed for context. */
+.calendar-event.cancelled .calendar-summary {
+   text-decoration: line-through;
+   color: var(--text-faint);
+}
+.calendar-more {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-micro);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+}

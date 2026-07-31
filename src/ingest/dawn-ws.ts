@@ -23,7 +23,15 @@
  * Consumer map:       docs/DAWN_UI_SIGNAL_MAP.md
  */
 
-import type { ActivityStatus, Ingest, IngestSinks, MusicState, MusicTrack } from "./ingest.ts";
+import type {
+   ActivityStatus,
+   CalendarEvent,
+   CalendarInfo,
+   Ingest,
+   IngestSinks,
+   MusicState,
+   MusicTrack
+} from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { IMPORTANCE } from "../state/types.ts";
 import { TtsPlayback } from "../audio/tts.ts";
@@ -160,6 +168,64 @@ function toMusicState(p: Record<string, unknown>): MusicState {
    };
 }
 
+/* Timezone offset (local - UTC, in seconds) for an IANA zone at a given instant. */
+function tzOffsetSec(tz: string, at: Date): number {
+   const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+   });
+   const p: Record<string, string> = {};
+   for (const part of dtf.formatToParts(at)) p[part.type] = part.value;
+   const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+   return Math.round((asUTC - at.getTime()) / 1000);
+}
+
+/* Today's window as epoch seconds [midnight, next midnight) IN THE USER'S timezone
+   (from DAWN), so it matches the clock rather than the browser box's zone (which may
+   be UTC). An empty tz falls back to the browser's local zone. Recomputed each fetch,
+   so an open panel rolls over at midnight. */
+function todayWindow(tz: string): { start: number; end: number } {
+   if (!tz) {
+      const s = new Date();
+      s.setHours(0, 0, 0, 0);
+      return { start: Math.floor(s.getTime() / 1000), end: Math.floor(s.getTime() / 1000) + 86400 };
+   }
+   const now = new Date();
+   const off = tzOffsetSec(tz, now);
+   /* Shift by the offset so the UTC getters read the wall-clock date in `tz`. */
+   const wall = new Date(now.getTime() + off * 1000);
+   const midnightAsUTC = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), 0, 0, 0);
+   let startMs = midnightAsUTC - off * 1000;
+   /* Re-correct against the offset AT that midnight (covers a DST edge overnight). */
+   const offMidnight = tzOffsetSec(tz, new Date(startMs));
+   if (offMidnight !== off) startMs = midnightAsUTC - offMidnight * 1000;
+   const start = Math.floor(startMs / 1000);
+   return { start, end: start + 86400 };
+}
+
+/* A calendar_upcoming_events event -> our CalendarEvent. */
+function toCalendarEvent(e: Record<string, unknown>): CalendarEvent {
+   return {
+      id: Number(e.id ?? 0),
+      calendarId: Number(e.calendar_id ?? 0),
+      summary: String(e.summary ?? ""),
+      location: String(e.location ?? ""),
+      start: Number(e.start ?? 0),
+      end: Number(e.end ?? 0),
+      allDay: e.all_day === true,
+      startDate: String(e.start_date ?? ""),
+      endDate: String(e.end_date ?? ""),
+      cancelled: e.cancelled === true,
+      isOverride: e.is_override === true
+   };
+}
+
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
@@ -179,6 +245,9 @@ export class DawnIngest implements Ingest {
    private readonly jobs = new Map<number, { title: string; running: boolean }>();
    private schedulerEventId = 0; // the ringing event behind the scheduler notice
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
+   private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
+   private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
+   private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
    private uptimeTimer = 0; // ticks the uptime display every second between polls
    private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
    private uptimeBaseAt = 0; // performance.now() when that uptime was received
@@ -321,6 +390,12 @@ export class DawnIngest implements Ingest {
             track is playing, streams Opus audio as 0x20 binary frames. Subscribe
             alone starts no audio. */
          ws.send(JSON.stringify({ type: "music_subscribe", payload: { quality: "standard" } }));
+         /* Calendar: the id->{name,color} map plus today's occurrences, for the
+            calendar card. A slow refetch keeps it live between calendar_events_changed
+            pushes and rolls the window over at midnight. Both reads, no writes. */
+         this.requestCalendar();
+         window.clearInterval(this.calendarTimer);
+         this.calendarTimer = window.setInterval(() => this.requestCalendar(), 15 * 60 * 1000);
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
@@ -483,7 +558,15 @@ export class DawnIngest implements Ingest {
 
          case "get_my_settings_response": {
             const tz = (p as { timezone?: string }).timezone;
-            if (tz) this.sinks.telemetry.setTimezone(tz);
+            if (tz) {
+               this.sinks.telemetry.setTimezone(tz);
+               /* Same tz drives the calendar: it fixes the displayed times AND which
+                  events count as "today", so store it, tell the panel, and refetch
+                  with the corrected window (the first fetch used browser-local). */
+               this.userTz = tz;
+               this.sinks.calendar.setTimezone(tz);
+               this.requestCalendar();
+            }
             break;
          }
 
@@ -594,6 +677,35 @@ export class DawnIngest implements Ingest {
          case "music_error":
             this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
             console.warn("[dawn] music_error:", p.code, p.message);
+            break;
+
+         case "calendar_list_my_calendars_response": {
+            /* The id->{name,color} map for the calendar card's color dots. */
+            if (p.success === false) break;
+            const cals = (p.calendars ?? []) as Array<Record<string, unknown>>;
+            const map: CalendarInfo[] = cals.map((c) => ({
+               id: Number(c.id ?? 0),
+               name: String(c.name ?? ""),
+               color: String(c.color ?? "")
+            }));
+            this.sinks.calendar.setCalendars(map);
+            break;
+         }
+
+         case "calendar_upcoming_events_response": {
+            /* Today's occurrences. success:true with an empty array covers both an
+               empty day and a transient read error (same contract as the LLM tool);
+               the panel renders "Nothing scheduled" and the next changed-push heals. */
+            if (p.success === false) break;
+            const evs = (p.events ?? []) as Array<Record<string, unknown>>;
+            this.sinks.calendar.setEvents(evs.map(toCalendarEvent), p.truncated === true);
+            break;
+         }
+
+         case "calendar_events_changed":
+            /* A background CalDAV sync changed something. Refetch (debounced, since a
+               multi-calendar sync can fire several in a burst). */
+            this.scheduleCalendarRefetch();
             break;
 
          case "jobs_snapshot": {
@@ -839,6 +951,20 @@ export class DawnIngest implements Ingest {
 
    getMusicAudio(): MusicAudio {
       return this.music;
+   }
+
+   /* Request the calendar map + today's occurrences (both reads). Called on connect,
+      on the slow interval, and after a debounced calendar_events_changed. */
+   private requestCalendar(): void {
+      const { start, end } = todayWindow(this.userTz);
+      this.send({ type: "calendar_list_my_calendars" });
+      this.send({ type: "calendar_upcoming_events", payload: { start, end } });
+   }
+
+   /* Coalesce a burst of calendar_events_changed pushes into one refetch. */
+   private scheduleCalendarRefetch(): void {
+      window.clearTimeout(this.calendarDebounce);
+      this.calendarDebounce = window.setTimeout(() => this.requestCalendar(), 500);
    }
 
    /* Open the dedicated dawn-music stream socket and authenticate it with the
@@ -1132,6 +1258,8 @@ export class DawnIngest implements Ingest {
    private stopMetrics(): void {
       window.clearInterval(this.metricsTimer);
       window.clearInterval(this.uptimeTimer);
+      window.clearInterval(this.calendarTimer);
+      window.clearTimeout(this.calendarDebounce);
    }
 
    /* A transient, dismissable notice that spikes forward then recedes on its own.
