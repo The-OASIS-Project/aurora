@@ -1,0 +1,256 @@
+/*
+ * Home Assistant board. A calm, read-only "state of the house" in the same
+ * machined/frosted language as the calendar and music player. Standalone +
+ * grab-to-move. Everything is phosphor tokens; emphasis is carried by the
+ * active/idle tone (there is no per-entity color from DAWN), so an entity that is
+ * on/open/unlocked reads lit and the resting stuff recedes.
+ */
+
+.ha {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   cursor: default; /* body is interactive; only the header drags */
+}
+.ha.movable-dragging {
+   cursor: grabbing;
+}
+/* Operator hid the card from the Panels menu: gone entirely, no pointer capture. */
+.ha.ha-off {
+   display: none;
+}
+.ha .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Header: "Home Assistant" + a status line + a manual-refresh glyph. */
+/* The header is the drag handle (the body is interactive). */
+.ha-head {
+   display: flex;
+   align-items: baseline;
+   gap: 0.6rem;
+   cursor: grab;
+}
+.ha.movable-dragging .ha-head {
+   cursor: grabbing;
+}
+.ha-title {
+   font-size: var(--fs-body);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.ha-status {
+   flex: 1 1 auto;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+.ha-refresh {
+   flex: 0 0 auto;
+   background: none;
+   border: none;
+   padding: 0 0.1rem;
+   font-size: var(--fs-body);
+   line-height: 1;
+   color: var(--text-faint);
+   cursor: pointer;
+   transition: color 140ms ease;
+}
+.ha-refresh:hover {
+   color: var(--accent-glow);
+}
+.ha-refresh.spin {
+   animation: ha-spin 600ms ease;
+}
+@keyframes ha-spin {
+   from {
+      transform: rotate(0deg);
+   }
+   to {
+      transform: rotate(360deg);
+   }
+}
+
+/* Entity list. Sizing / overflow-fade / hover-expand come from the shared .lcard rules
+   (styles/list-card.css); this just sets the row spacing (tight, to hold more data). */
+.ha-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.12rem;
+}
+
+.ha-empty {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   padding: 0.4rem 0;
+}
+
+/* Room section header: a quiet uppercase label. */
+.ha-room {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+   margin-top: 0.4rem;
+   padding-bottom: 0.12rem;
+   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.ha-room:first-child {
+   margin-top: 0;
+}
+
+.ha-row {
+   display: grid;
+   grid-template-columns: 8px 1fr auto;
+   align-items: baseline;
+   column-gap: 0.5rem;
+   padding: 0.06rem 0;
+   border-radius: 4px;
+}
+.ha-dot {
+   align-self: center;
+   width: 7px;
+   height: 7px;
+   border-radius: 50%;
+   /* Idle: a hollow, faint ring. */
+   background: transparent;
+   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ha-row.active .ha-dot {
+   /* Active: a filled, lit dot. */
+   background: var(--accent);
+   box-shadow: 0 0 6px color-mix(in srgb, var(--accent-glow) 65%, transparent);
+}
+/* Names sit at the mono data size (not the larger body size) so the board holds more
+   rows without scrolling. */
+.ha-name {
+   font-size: var(--fs-data);
+   color: var(--text-faint);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.ha-row.active .ha-name {
+   color: var(--text);
+}
+.ha-state {
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+.ha-row.active .ha-state {
+   color: var(--accent-glow);
+}
+
+/* On/off toggle switch (light/switch/fan/lock/cover/media_player). */
+.ha-toggle {
+   align-self: center;
+   justify-self: end;
+   position: relative;
+   width: 30px;
+   height: 16px;
+   padding: 0;
+   border: none;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 14%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+   cursor: pointer;
+   transition: background 160ms ease, box-shadow 160ms ease;
+}
+.ha-toggle::after {
+   content: "";
+   position: absolute;
+   top: 2px;
+   left: 2px;
+   width: 12px;
+   height: 12px;
+   border-radius: 50%;
+   background: color-mix(in srgb, var(--text-faint) 85%, transparent);
+   transition: transform 160ms ease, background 160ms ease;
+}
+.ha-toggle.on {
+   background: color-mix(in srgb, var(--accent) 42%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+      0 0 8px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+}
+.ha-toggle.on::after {
+   transform: translateX(14px);
+   background: var(--accent-glow);
+}
+
+/* Climate mode dropdown. */
+.ha-select {
+   align-self: center;
+   justify-self: end;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.03em;
+   color: var(--accent-glow);
+   background: color-mix(in srgb, var(--ground-raise) 65%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 4px;
+   padding: 1px 4px;
+   cursor: pointer;
+}
+.ha-select:focus {
+   outline: none;
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Second-line slider (brightness / cover position / fan percentage): rides under the
+   name+control on its own line so it doesn't crowd the tight row width. */
+.ha-slider-row {
+   grid-column: 2 / -1;
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   padding: 0.1rem 0 0.25rem;
+}
+.ha-slider {
+   flex: 1 1 auto;
+   min-width: 0;
+   height: 3px;
+   accent-color: var(--accent);
+   cursor: pointer;
+}
+.ha-slider-val {
+   flex: 0 0 auto;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   color: var(--text-dim);
+   min-width: 2.6em;
+   text-align: right;
+}
+
+/* Diff-to-spike: a row whose state just changed gets a brief on-theme wash that
+   fades on its own - a quiet acknowledgement, not a fanfare (gentle by design while
+   the feed is a 30s poll; it upgrades naturally once DAWN pushes state changes). */
+.ha-row.ha-changed {
+   animation: ha-row-spike 2s ease-out;
+}
+@keyframes ha-row-spike {
+   0% {
+      background: color-mix(in srgb, var(--accent) 32%, transparent);
+   }
+   100% {
+      background: transparent;
+   }
+}

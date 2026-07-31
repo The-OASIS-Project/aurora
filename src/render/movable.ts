@@ -23,6 +23,10 @@
 export interface MovableOptions {
    /* localStorage key for the persisted top-left position. */
    storageKey: string;
+   /* If set, ONLY a pointerdown on a descendant matching this selector starts a drag
+      (e.g. a header bar), leaving the rest of the card interactive. Without it the
+      whole card is a drag surface. `ignore` still applies within the handle. */
+   handle?: string;
    /* Selector for descendants that must NOT initiate a drag (controls). */
    ignore?: string;
    /* Keep this many px clear of the viewport edges when docked. */
@@ -52,6 +56,9 @@ const GLIDE_MS = 180; // how long the view takes to slide into a snapped spot
 const IND_INSET = 14; // preview bar inset from the viewport edge
 const IND_THICK = 5; // preview bar thickness (a rounded rod, so give the shade + caps room)
 const SNAP_GAP = 12; // flush-stack gap between two sibling views
+const MIN_ONSCREEN = 130; // px of a card that must stay on screen (roughly a header + a
+// minimal list body): the vertical clamp keeps at least this much visible so a tall card
+// can sit low without its top being pulled up (the body caps itself to fit via list-card)
 
 /* Every live movable view, so a drag can snap to the others' edges. */
 const movables = new Set<HTMLElement>();
@@ -86,7 +93,13 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
    const place = (left: number, top: number): void => {
       const r = el.getBoundingClientRect();
       const maxLeft = Math.max(edge, window.innerWidth - r.width - edge);
-      const maxTop = Math.max(edge, window.innerHeight - r.height - edge);
+      /* Vertically, a card's TOP is its anchor: it must never be pulled UP just because
+         its body is tall (the body caps itself to the viewport via list-card instead).
+         So clamp the top only enough to keep a header's worth on screen, not the whole
+         height. For short cards (<= MIN_ONSCREEN) this is the full height, i.e. fully on
+         screen as before; tall cards may sit lower without the top jumping. */
+      const keepVisible = Math.min(r.height, MIN_ONSCREEN);
+      const maxTop = Math.max(edge, window.innerHeight - keepVisible - edge);
       const x = Math.min(maxLeft, Math.max(edge, left));
       const y = Math.min(maxTop, Math.max(edge, top));
       el.style.left = `${Math.round(x)}px`;
@@ -219,6 +232,7 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
    const onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
+      if (opts.handle && !target.closest(opts.handle)) return; // only the handle drags
       if (opts.ignore && target.closest(opts.ignore)) return; // let controls handle it
       const r = el.getBoundingClientRect();
       startX = e.clientX;

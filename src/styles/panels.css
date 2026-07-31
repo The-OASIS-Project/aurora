@@ -110,7 +110,7 @@
 }
 .panel-kind {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.24em;
    text-transform: uppercase;
    color: color-mix(in srgb, var(--node-accent, var(--accent)) 70%, var(--text-dim));
@@ -118,7 +118,7 @@
 .panel-meta {
    margin-left: auto;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.18em;
    color: var(--text-faint);
 }
@@ -152,7 +152,7 @@
    /* Data speaks in mono (the instrument-readout feel). Revealed by the renderer
       as the panel comes forward. */
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    line-height: 1.55;
    color: var(--text-dim);
    margin-top: 0.5rem;
@@ -217,7 +217,7 @@
 }
 .dock-sub {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    letter-spacing: 0.04em;
    color: var(--text-dim);
    margin-top: 0.25rem;
@@ -248,7 +248,7 @@
    margin: 0.65rem 0 0;
    padding: 0;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    line-height: 1.9;
    color: var(--text-dim);
 }
@@ -291,7 +291,7 @@
    height: 20px;
    padding: 0;
    line-height: 1;
-   font-size: 1rem;
+   font-size: var(--fs-body);
    color: var(--text-dim);
    background: transparent;
    border: none;

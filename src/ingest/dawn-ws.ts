@@ -27,6 +27,9 @@ import type {
    ActivityStatus,
    CalendarEvent,
    CalendarInfo,
+   HAAttributes,
+   HAEntity,
+   HAServiceCall,
    Ingest,
    IngestSinks,
    MusicState,
@@ -226,6 +229,43 @@ function toCalendarEvent(e: Record<string, unknown>): CalendarEvent {
    };
 }
 
+/* Parse the optional per-entity `attributes` object (signal-map §9.4 #7). Only present
+   once DAWN ships it; absent, the board falls back to on/off toggles. Numbers are read
+   defensively (HA sometimes sends strings). */
+function toHAAttributes(a: Record<string, unknown> | undefined): HAAttributes | undefined {
+   if (!a || typeof a !== "object") return undefined;
+   const num = (v: unknown): number | undefined => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+   };
+   const attrs: HAAttributes = {};
+   if (a.brightness != null) attrs.brightness = num(a.brightness);
+   if (a.percentage != null) attrs.percentage = num(a.percentage);
+   if (a.current_position != null) attrs.position = num(a.current_position);
+   if (typeof a.hvac_mode === "string") attrs.hvacMode = a.hvac_mode;
+   if (Array.isArray(a.hvac_modes)) attrs.hvacModes = a.hvac_modes.map(String);
+   if (a.current_temperature != null) attrs.currentTemp = num(a.current_temperature);
+   if (a.temperature != null) attrs.targetTemp = num(a.temperature);
+   if (typeof a.unit_of_measurement === "string") attrs.unit = a.unit_of_measurement;
+   if (typeof a.device_class === "string") attrs.deviceClass = a.device_class;
+   return Object.keys(attrs).length > 0 ? attrs : undefined;
+}
+
+/* A ha_list_entities entity -> our HAEntity. `domain` and `area` are the two fields
+   the signal-map docs omit but the source actually sends (`area` only when the
+   entity is assigned to a room); friendly_name falls back to the entity_id. */
+function toHAEntity(e: Record<string, unknown>): HAEntity {
+   const entityId = String(e.entity_id ?? "");
+   return {
+      entityId,
+      name: String(e.friendly_name ?? entityId),
+      domain: String(e.domain ?? ""),
+      area: String(e.area ?? ""),
+      state: String(e.state ?? ""),
+      attributes: toHAAttributes(e.attributes as Record<string, unknown> | undefined)
+   };
+}
+
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
@@ -247,6 +287,11 @@ export class DawnIngest implements Ingest {
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
+   private haTimer = 0; // polls ha_refresh_entities to keep the HA board live (no push yet)
+   /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale;
+      a future ha_state_changed push would merge one entity in and re-emit. Keeping the
+      map (vs. re-emitting the raw array) is what makes that push a drop-in later. */
+   private readonly haEntities = new Map<string, HAEntity>();
    private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
    private uptimeTimer = 0; // ticks the uptime display every second between polls
    private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
@@ -396,6 +441,15 @@ export class DawnIngest implements Ingest {
          this.requestCalendar();
          window.clearInterval(this.calendarTimer);
          this.calendarTimer = window.setInterval(() => this.requestCalendar(), 15 * 60 * 1000);
+         /* Home Assistant: a read-only status board. There is no push feed yet (SAGE
+            item #3), so poll. ha_status reports configured/connected for the header;
+            ha_list_entities fills from DAWN's <=5min cache immediately; then a slow
+            ha_refresh_entities interval forces a live refetch (bypassing that cache)
+            so state stays current. All reads, admin-gated server-side. */
+         this.send({ type: "ha_status" });
+         this.send({ type: "ha_list_entities" });
+         window.clearInterval(this.haTimer);
+         this.haTimer = window.setInterval(() => this.send({ type: "ha_refresh_entities" }), 30000);
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
@@ -708,6 +762,39 @@ export class DawnIngest implements Ingest {
             this.scheduleCalendarRefetch();
             break;
 
+         case "ha_status_response":
+            /* Configured/connected for the board header. Absent fields => false. */
+            this.sinks.ha.setStatus({
+               configured: p.configured === true,
+               connected: p.connected === true,
+               error: typeof p.error === "string" ? p.error : undefined
+            });
+            break;
+
+         case "ha_entities_response": {
+            /* Both ha_list_entities and ha_refresh_entities land here. success:false
+               means HA is unreachable (NOT an empty house) - surface offline and keep
+               the last snapshot on screen. On success, rebuild the merged map and emit
+               the whole set; a future single-entity push merges into this same map. */
+            if (p.success === false) {
+               this.sinks.ha.setStatus({
+                  configured: true,
+                  connected: false,
+                  error: typeof p.error === "string" ? p.error : undefined
+               });
+               break;
+            }
+            const ents = (p.entities ?? []) as Array<Record<string, unknown>>;
+            this.haEntities.clear();
+            for (const e of ents) {
+               const ent = toHAEntity(e);
+               if (ent.entityId) this.haEntities.set(ent.entityId, ent);
+            }
+            this.sinks.ha.setStatus({ configured: true, connected: true });
+            this.sinks.ha.setEntities([...this.haEntities.values()]);
+            break;
+         }
+
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
             this.jobs.clear();
@@ -947,6 +1034,29 @@ export class DawnIngest implements Ingest {
    /* Music transport: a music_control write (Tier C, a deliberate user action). */
    musicControl(action: string, params: Record<string, unknown> = {}): void {
       this.send({ type: "music_control", payload: { action, ...params } });
+   }
+
+   /* Force a live HA re-poll now (the board's manual refresh). ha_refresh_entities
+      bypasses DAWN's 5-min cache and returns the fresh list; a read, not a mutation. */
+   refreshHA(): void {
+      this.send({ type: "ha_refresh_entities" });
+   }
+
+   /* HA widget control. STUBBED: DAWN has no ha_call_service handler yet (signal-map
+      §9.4 #8). We build the exact frame and log it so the shape is verifiable, but do
+      NOT send it - the board updates optimistically and the next poll reconciles. To
+      go live once the daemon handler lands, replace the console.debug with:
+         this.send({ type: "ha_call_service", payload: call });
+      and (optionally) handle an `ha_call_service_response`. */
+   haControl(call: HAServiceCall): void {
+      const payload = {
+         entity_id: call.entityId,
+         domain: call.domain,
+         service: call.service,
+         ...(call.data ? { data: call.data } : {})
+      };
+      console.debug("[dawn] ha_call_service (stubbed, not sent):", payload);
+      // this.send({ type: "ha_call_service", payload });
    }
 
    getMusicAudio(): MusicAudio {
@@ -1260,6 +1370,7 @@ export class DawnIngest implements Ingest {
       window.clearInterval(this.uptimeTimer);
       window.clearInterval(this.calendarTimer);
       window.clearTimeout(this.calendarDebounce);
+      window.clearInterval(this.haTimer);
    }
 
    /* A transient, dismissable notice that spikes forward then recedes on its own.

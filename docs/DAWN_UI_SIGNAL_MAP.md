@@ -178,7 +178,7 @@ Convention: every response is `{type: "<request>_response", payload: {success, e
 
 | Concern | Request | Response | What you get |
 |---------|---------|----------|--------------|
-| **Home Assistant** | `ha_list_entities` | `ha_entities_response` | **Live entity states**: `{entity_id, friendly_name, state}[]`. A real HA panel feed. `ha_refresh_entities` forces a re-poll from HA. |
+| **Home Assistant** | `ha_list_entities` | `ha_entities_response` | **Live entity states**. Each entity is `{entity_id, friendly_name, domain, state, area?}` — the `domain` (light/lock/climate/sensor…) and the optional `area` (room; present only when assigned in HA) are real fields the earlier docs omitted; verified in `serialize_entity_list()` (`webui_homeassistant.c`). `state` is a bare string with no units/attributes. `ha_refresh_entities` bypasses DAWN's 5-min cache and forces a live re-poll (returns the same shape). Cap 512, server-filtered to supported domains. **Admin-only** (all `ha_*` verbs call `conn_require_admin`). |
 | **System metrics** | `get_metrics` | `get_metrics_response` | Uptime, sessions, last/avg TTFT, etc. Snapshot to pair with the live `metrics_update` stream. |
 | **Scheduler queue** | `scheduler_events` | `scheduler_events_response` | The pending alarm/timer/reminder list. Refetch on `scheduler_events_changed`. |
 | **Attention watches** | `watch_list` | `watch_list_response` | The user's SAGE watch rules (what DAWN is proactively watching for). |
@@ -199,7 +199,7 @@ current WebSocket actually support?
 |-------|------------------------|-----------------------|---------|
 | **Music (now-playing)** | `music_state` / `music_position` push | `music_library` etc. | ✅ **Fully wireable now.** Rich push, complete state. |
 | **Subsystems / health** | `metrics_update` push | `get_metrics` snapshot | ✅ **Fully wireable now.** |
-| **Home Assistant** | *(none — no push)* | `ha_list_entities` (real states) | ✅ **Wireable via poll.** Refresh on an interval or on `ha_refresh_entities`. No live push, so it will not spike-on-change on its own. |
+| **Home Assistant** | *(none — no push)* | `ha_list_entities` (real states) | ✅ **Wireable now — built.** Hero UI's HA board (`src/homeassistant/`) polls `ha_refresh_entities` on a 30s interval (+ manual refresh), groups by `area`, lights active states and dims idle ones, and diffs poll-to-poll to briefly spike a changed row (poll-granularity today; upgrades to real-time when the §9 #3 push lands, no client rework). Read-only. |
 | **Background jobs / tasks** | `job_notification`, `job_update` push | `jobs_request`, `list_jobs` | ✅ **Fully wireable now.** Best-supported observe surface in DAWN. |
 | **Alarms / timers / reminders** | `scheduler_notification` push | `scheduler_events` | ✅ **Fully wireable now.** |
 | **Ambient notices / attention** | `attention_alert`, `silent_observation` push | `watch_list` for config | ✅ **Fully wireable now.** This is the ambient-spike engine. `level` maps to tone. |
@@ -300,8 +300,10 @@ behaviour you must handle** — several of these changed the wire contract.
 | 2 | `error` frame severity | ✅ **Shipped + consumed** — hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
 | 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
 | 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
-| 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`) |
+| 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`). HA board polls + diffs meanwhile (30s); the push turns that real-time with no client rework |
 | 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
+| 7 | Rich HA entity attributes in `ha_entities_response` | 🆕 **Requested — needed for the interactive widgets** (§9.4). Sliders/dropdowns need current values + option lists: `brightness`, `percentage`, `current_position`, `hvac_mode` + `hvac_modes`, `current_temperature`/`temperature`, and `unit_of_measurement`/`device_class` for readouts. Most are already parsed into `ha_entity_t` (serializer-only); the option list + unit/device_class need parser work. The board renders fine without it (falls back to on/off toggles); it unlocks brightness/position/mode/temperature controls |
+| 8 | HA entity control verb — `ha_call_service` | 🆕 **Requested — the interactive board's write path** (§9.4). One general verb mirroring HA's own service model (`entity_id`/`domain`/`service`/`data`), which DAWN's HA service layer already speaks (the AI tool calls services). Hero UI has the widgets built and the send **stubbed**, ready to flip to a live `send()` the moment the handler lands |
 
 (Original item write-ups #1–#6 with source cites are preserved below the two new
 subsections for reference.)
@@ -415,6 +417,86 @@ Password via `$DAWN_OBSERVER_PASSWORD` or a prompt; `--only`/`--attach`/`--compa
 Note it caught a real gotcha we relied on: the `config` frame is emitted from
 `queue_init_messages` on connect (a former `send_config_impl` was dead code) — so `config`
 is a Tier-A on-connect push, exactly as §3.7 lists it.
+
+### 9.4 Interactive HA board — control verb (#8) + rich attributes (#7)
+
+Spec for turning the read-only HA board into an interactive one. Two additions, meant
+to ship together. The UI (`src/homeassistant/`) already renders the widgets and builds
+the exact request below; today it **stubs the send** (logs + optimistic local flip) and
+reverts on the next poll. Flipping the stub to a live `send()` is a one-line change in
+`DawnIngest.haControl` once the handler exists.
+
+#### #8 — `ha_call_service` (the write path)
+
+One general verb, modelled on Home Assistant's own service call (the same shape DAWN's
+HA tool already uses internally), so any current or future HA service works without new
+verbs. Admin-only, like the other `ha_*` verbs.
+
+**Request**
+```json
+{ "type": "ha_call_service",
+  "payload": {
+     "entity_id": "light.kitchen_table",
+     "domain": "light",          // optional; derivable from entity_id prefix
+     "service": "turn_on",       // required
+     "data": { "brightness": 180 }   // optional per-service data
+  } }
+```
+
+**Response** — `ha_call_service_response`:
+```json
+{ "success": true, "entity_id": "light.kitchen_table", "error": null }
+```
+`success:false` + `error` on an unknown entity, an HA-side failure, or not-connected
+(same `homeassistant_is_connected()` gate as the read verbs).
+
+**State reconciliation (important for the UI):** the board flips the widget optimistically
+on send, then trusts DAWN for truth. So on a successful call, please make the new state
+observable **without waiting for the 30s poll** — either (a) emit the shipped `#3`
+`ha_state_changed` push for that entity, or (b) re-fetch + broadcast a fresh
+`ha_entities_response`, or (c) at minimum let the client's follow-up `ha_refresh_entities`
+see it. Any of the three closes the loop; (a) is best and dovetails with #3.
+
+**The exact service map the UI sends, by domain** (so the handler knows what to expect):
+
+| Domain | Widget | `service` | `data` |
+|--------|--------|-----------|--------|
+| `light` | toggle (+ brightness slider) | `turn_on` / `turn_off` | `{ brightness: 0-255 }` on a slider change |
+| `switch`, `input_boolean` | toggle | `turn_on` / `turn_off` | — |
+| `fan` | toggle (+ % slider) | `turn_on` / `turn_off` / `set_percentage` | `{ percentage: 0-100 }` |
+| `lock` | toggle | `lock` / `unlock` | — |
+| `cover` | open/close (+ position slider) | `open_cover` / `close_cover` / `set_cover_position` | `{ position: 0-100 }` |
+| `climate` | mode dropdown (+ target temp) | `set_hvac_mode` / `set_temperature` | `{ hvac_mode }` / `{ temperature }` |
+| `media_player` | play/pause | `media_play` / `media_pause` | — |
+| `sensor`, `binary_sensor`, `weather` | none (display-only) | — | — |
+
+#### #7 — rich attributes on `ha_entities_response` (to render those widgets with real values)
+
+The widgets above need current values and, for the dropdown, the option list. Add a
+per-entity `attributes` object (emit only the keys relevant to the entity's domain;
+absent keys make the UI fall back to a plain on/off toggle or a display row):
+
+```json
+{ "entity_id": "light.kitchen_table", "friendly_name": "Kitchen Table Light",
+  "domain": "light", "state": "on", "area": "Kitchen",
+  "attributes": {
+     "brightness": 180,              // light, fan(as percentage below), 0-255
+     "percentage": 60,               // fan, 0-100
+     "current_position": 40,         // cover, 0-100
+     "hvac_mode": "heat",            // climate, current
+     "hvac_modes": ["off","heat","cool","auto"],   // climate, the dropdown's options
+     "current_temperature": 71,      // climate, reading
+     "temperature": 72,              // climate, target
+     "unit_of_measurement": "°F",    // sensor, for the readout
+     "device_class": "temperature"   // sensor/binary_sensor, to pick display vs toggle
+  } }
+```
+
+Per the earlier source read, `brightness`/`color_temp`/`rgb`/`temperature`/`hvac_mode`/
+`current_position` are **already parsed into `ha_entity_t`** — those are serializer-only.
+`hvac_modes` (the available-modes list), `unit_of_measurement`, and `device_class` are
+the ones that need capturing in `parse_entity_attributes` first. Keep it additive: an
+older server that omits `attributes` just yields the current on/off board.
 
 ---
 

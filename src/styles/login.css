@@ -42,7 +42,7 @@
 
 .login-brand {
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: var(--fs-h2, 1.1rem);
+   font-size: var(--fs-lead);
    letter-spacing: 0.42em;
    text-indent: 0.42em;
    color: var(--accent-glow);
@@ -52,7 +52,7 @@
 .login-sub {
    margin-top: -0.5rem;
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.24em;
    text-transform: uppercase;
    color: var(--text-faint);
@@ -66,7 +66,7 @@
 
 .login-field > span {
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.18em;
    text-transform: uppercase;
    color: var(--text-dim);
@@ -118,7 +118,7 @@
 .login-status {
    min-height: 1.1em;
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.06em;
    color: var(--text-faint);
 }
@@ -148,7 +148,7 @@
    gap: 0.5rem;
    padding: 0.32rem 0.6rem;
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.16em;
    text-transform: uppercase;
    color: var(--text-dim);

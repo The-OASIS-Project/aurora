@@ -131,6 +131,67 @@ export interface CalendarSink {
    setTimezone(tz: string): void;
 }
 
+/* Per-entity attributes that drive the richer widgets (brightness slider, climate
+   dropdown, etc). All optional: DAWN emits only the keys relevant to the entity's
+   domain, and older servers omit `attributes` entirely, in which case the board falls
+   back to a plain on/off toggle. See signal-map §9.4 (#7). */
+export interface HAAttributes {
+   brightness?: number; // light, 0-255
+   percentage?: number; // fan, 0-100
+   position?: number; // cover, 0-100 (from current_position)
+   hvacMode?: string; // climate, current mode
+   hvacModes?: string[]; // climate, the dropdown's options
+   currentTemp?: number; // climate, reading
+   targetTemp?: number; // climate, target
+   unit?: string; // sensor, unit_of_measurement (for the readout)
+   deviceClass?: string; // sensor/binary_sensor
+}
+
+/* One Home Assistant entity from ha_list_entities. `domain` (light | switch |
+   climate | lock | sensor | ...) drives grouping / the widget kind; `area` is the
+   room name ("" when the entity isn't assigned to an area in HA). `state` is a raw
+   string ("on" / "off" / "locked" / a bare number). `attributes` is present once
+   DAWN ships §9.4 (#7); absent it, the board stays on/off toggles. */
+export interface HAEntity {
+   entityId: string;
+   name: string;
+   domain: string;
+   area: string;
+   state: string;
+   attributes?: HAAttributes;
+}
+
+/* A control intent from an HA widget: mirrors HA's own service model. Sent by the
+   board's toggles/sliders/dropdowns; `data` carries service params (brightness,
+   hvac_mode, position, ...). See signal-map §9.4 (#8). This is a deliberate,
+   user-initiated Tier-C write, like music transport - not ambient control. */
+export interface HAServiceCall {
+   entityId: string;
+   domain: string;
+   service: string;
+   data?: Record<string, unknown>;
+}
+
+/* Connection status for the board's header (ha_status, or inferred from a failed
+   poll). `configured` false => HA isn't set up at all; `connected` false with
+   `configured` true => set up but the daemon can't reach it right now. */
+export interface HAStatus {
+   configured: boolean;
+   connected: boolean;
+   error?: string;
+}
+
+/* What ingest can push to the Home Assistant board (a passive, read-only view).
+   HA has no push feed yet (SAGE item #3), so ingest polls and hands over the whole
+   entity set each update; the panel diffs it to briefly emphasise changed rows. A
+   future ha_state_changed push merges upstream into the same snapshot, so this sink
+   never changes. Status arrives separately so "offline" is distinct from "no
+   entities on". */
+export interface HASink {
+   setEntities(entities: HAEntity[]): void;
+   setStatus(status: HAStatus): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -139,6 +200,7 @@ export interface IngestSinks {
    telemetry: TelemetrySink;
    music: MusicSink;
    calendar: CalendarSink;
+   ha: HASink;
 }
 
 /*
@@ -158,5 +220,12 @@ export interface Ingest {
    /* Music transport (a deliberate Tier-C write, like chat submit): a music_control
       action verb plus its params, e.g. musicControl("seek", { position_sec: 42 }). */
    musicControl(action: string, params?: Record<string, unknown>): void;
+   /* User asked the HA board for fresh state now (force a live re-poll instead of
+      waiting for the interval). A read, like the other calendar/HA polls. */
+   refreshHA(): void;
+   /* A deliberate user action from an HA widget (toggle/slider/dropdown). STUBBED
+      until DAWN ships the ha_call_service handler (signal-map §9.4 #8): logs the frame
+      it would send, does not mutate. See DawnIngest.haControl. */
+   haControl(call: HAServiceCall): void;
    stop(): void;
 }

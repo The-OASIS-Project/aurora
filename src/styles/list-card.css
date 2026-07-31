@@ -1,0 +1,61 @@
+/*
+ * Shared behaviour for the movable ambient cards' list bodies (see
+ * src/render/list-card.ts). Panels keep their own row styling; this owns the sizing,
+ * the hidden-scrollbar overflow fade, the hover-expand, and the resize grip so all
+ * the cards behave identically. Assumes the host card uses 1.05rem horizontal padding
+ * (calendar + HA both do; the grip's negative margins reach the card edges from that).
+ */
+
+.lcard {
+   overflow-y: auto;
+   scrollbar-width: none; /* Firefox */
+   /* Resting size: content up to 40vh by default (the fallback MUST match
+      DEFAULT_CAP_VH in list-card.ts), or the grip-set height via the custom props. */
+   height: var(--list-h, auto);
+   max-height: var(--list-cap, 40vh);
+   transition: max-height 200ms ease;
+}
+.lcard::-webkit-scrollbar {
+   display: none; /* WebKit/Blink */
+}
+/* More below the fold: fade the bottom edge instead of showing a scrollbar. */
+.lcard.overflowing {
+   -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent);
+   mask-image: linear-gradient(to bottom, #000 78%, transparent);
+}
+/* Hover expands to reveal more (the card grows taller). `min-height` pins it to the
+   resting height so hover only ever GROWS the list - never shrinks a card sized
+   taller than its content, which would pull the bottom edge off the cursor and cause a
+   flicker loop. The ceiling is --lcard-hover-cap, which the helper clamps to the
+   viewport bottom so the resize grip can't be pushed off-screen. Suppressed while
+   moving or resizing. */
+.lcard-host:not(.movable-dragging):not(.lcard-resizing):hover .lcard {
+   min-height: var(--list-h, 0);
+   height: auto;
+   max-height: var(--lcard-hover-cap, 80vh);
+}
+.lcard-host:not(.movable-dragging):hover .lcard.overflowing {
+   -webkit-mask-image: none;
+   mask-image: none;
+}
+
+/* Bottom resize grip: a subtle handle; drag to grow the list. */
+.lcard-grip {
+   height: 12px;
+   margin: -0.35rem -1.05rem -0.85rem;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   cursor: ns-resize;
+}
+.lcard-grip::after {
+   content: "";
+   width: 26px;
+   height: 3px;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 38%, transparent);
+   transition: background 140ms ease;
+}
+.lcard-grip:hover::after {
+   background: color-mix(in srgb, var(--accent-glow) 70%, transparent);
+}

@@ -14,6 +14,7 @@
 
 import type { CalendarEvent, CalendarInfo, CalendarSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
+import { makeListCard } from "../render/list-card.ts";
 
 export interface CalendarPanelController extends CalendarSink {
    /* User show/hide (Panels menu), independent of whether the day has events. */
@@ -69,88 +70,19 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
    const list = document.createElement("div");
    list.className = "calendar-list";
 
-   /* Bottom grip: drag it to make the list taller and reveal more events. Excluded
-      from the move-drag (see makeMovable ignore) so it resizes instead of relocating. */
-   const grip = document.createElement("div");
-   grip.className = "calendar-resize";
-   grip.setAttribute("aria-hidden", "true");
-
-   el.append(head, list, grip);
+   el.append(head, list);
    root.appendChild(el);
 
-   /* The user-set resting height of the list (grip drag), or null for the default
-      content-sizing (40vh cap). Stored as a CSS custom property (--list-h / --list-cap
-      that the stylesheet reads), NOT an inline height — an inline height would beat the
-      :hover rule and block hover-expand once the card had ever been resized. */
-   let restingH: number | null = null;
-
-   /* Toggle the "overflowing" cue (bottom fade instead of a scrollbar) when the events
-      don't fit the resting cap. Compared against that cap (resized height, else 40vh),
-      not the live height, so it stays correct even while the card is hover-expanded. */
-   const updateOverflow = (): void => {
-      const capPx = restingH ?? window.innerHeight * 0.4;
-      list.classList.toggle("overflowing", list.scrollHeight > capPx + 1);
-   };
-
-   const applyRestingH = (): void => {
-      if (restingH != null) {
-         list.style.setProperty("--list-h", `${Math.round(restingH)}px`);
-         list.style.setProperty("--list-cap", "none");
-         el.classList.add("calendar-resized"); // persistently reveals full text (locations wrap)
-      } else {
-         list.style.removeProperty("--list-h");
-         list.style.removeProperty("--list-cap");
-         el.classList.remove("calendar-resized");
-      }
-      updateOverflow();
-   };
-   const savedListH = Number(localStorage.getItem(LIST_H_KEY));
-   if (Number.isFinite(savedListH) && savedListH > 0) {
-      restingH = savedListH;
-      applyRestingH();
-   }
-
-   /* Grip resize: set the resting height between a floor and ~80vh, persisted. Hover
-      expansion is suppressed for the duration (calendar-resizing class) so the drag
-      adjusts a stable height instead of fighting the hover rule; otherwise, since the
-      pointer is over the card, hover pins the list to its content height and it can't
-      be dragged smaller than the text. */
-   let rStartY = 0;
-   let rStartH = 0;
-   let resizing = false;
-   const onGripMove = (e: PointerEvent): void => {
-      if (!resizing) return;
-      restingH = Math.max(72, Math.min(window.innerHeight * 0.8, rStartH + (e.clientY - rStartY)));
-      applyRestingH();
-   };
-   const onGripUp = (): void => {
-      resizing = false;
-      el.classList.remove("calendar-resizing");
-      window.removeEventListener("pointermove", onGripMove);
-      window.removeEventListener("pointerup", onGripUp);
-      if (restingH != null) localStorage.setItem(LIST_H_KEY, String(Math.round(restingH)));
-   };
-   const onGripDown = (e: PointerEvent): void => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      rStartY = e.clientY;
-      /* Freeze the current on-screen height as the resting size and hold it there
-         (suppress hover) so the drag starts from exactly what the user sees. */
-      rStartH = list.getBoundingClientRect().height;
-      restingH = rStartH;
-      el.classList.add("calendar-resizing");
-      applyRestingH();
-      resizing = true;
-      window.addEventListener("pointermove", onGripMove);
-      window.addEventListener("pointerup", onGripUp);
-   };
-   grip.addEventListener("pointerdown", onGripDown);
+   /* Sizing / overflow-fade / grip-resize / hover-expand are shared across the movable
+      ambient cards (see list-card.ts): it owns the bottom grip and toggles the
+      `lcard-resized` class the CSS keys the full-text (wrapped location) reveal off. */
+   const card = makeListCard(el, list, { storageKey: LIST_H_KEY });
 
    /* Grab-and-move: user-arrangeable like the music player. The whole card is a drag
       handle EXCEPT the resize grip; position is persisted. */
    const disposeMovable = makeMovable(el, {
       storageKey: "dawn.hero.calendarPos",
-      ignore: ".calendar-resize"
+      ignore: ".lcard-grip"
    });
 
    /* User visibility (Panels menu), persisted. Always shown by default; when shown
@@ -176,7 +108,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
          empty.className = "calendar-empty";
          empty.textContent = "Nothing scheduled";
          list.appendChild(empty);
-         updateOverflow();
+         card.refresh();
          return;
       }
 
@@ -234,13 +166,9 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
          more.textContent = "More events not shown";
          list.appendChild(more);
       }
-      updateOverflow();
+      card.refresh();
    };
    render();
-
-   /* The collapsed cap is 40vh, so a viewport resize can change whether the list
-      overflows; keep the fade cue in sync. */
-   window.addEventListener("resize", updateOverflow);
 
    const controller: CalendarPanelController = {
       setCalendars: (calendars: CalendarInfo[]) => {
@@ -264,10 +192,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
          applyVisible();
       },
       destroy: () => {
-         grip.removeEventListener("pointerdown", onGripDown);
-         window.removeEventListener("pointermove", onGripMove);
-         window.removeEventListener("pointerup", onGripUp);
-         window.removeEventListener("resize", updateOverflow);
+         card.destroy();
          disposeMovable();
          el.remove();
       }

@@ -118,7 +118,7 @@
    gap: 0.5rem;
    margin-bottom: 0.35rem;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.2em;
    text-transform: uppercase;
 }
@@ -142,7 +142,7 @@
 }
 .convo-msg.user .convo-body {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    letter-spacing: 0.03em;
    color: var(--text-faint);
    white-space: pre-wrap;
@@ -253,7 +253,7 @@
    white-space: nowrap;
    pointer-events: none;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.2em;
    text-transform: uppercase;
    color: var(--accent-glow);

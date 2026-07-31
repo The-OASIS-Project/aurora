@@ -79,6 +79,32 @@ export const PALETTE: Palette = {
    textFaint: "#647875"
 };
 
+/*
+ * Type scale: the single source of truth for font size, named by ROLE the way the
+ * palette is named by role. Every font-size in the stylesheets is one of these steps
+ * (mirrored to --fs-* by applyType), so type stays consistent and retunes in one place.
+ * rem-based so they follow the responsive html font-size. `label` is floored above the
+ * desk-distance legibility limit (~0.7rem); `nano` is reserved for the tiniest meter
+ * labels only.
+ */
+export interface TypeScale {
+   nano: string; // tiny meter labels (e.g. the music spectrum readout)
+   label: string; // uppercase labels: kind, meta, telemetry, hint
+   data: string; // mono data rows: detail, dock sub/list, reply query
+   body: string; // panel summary, dock title, input
+   lead: string; // the living response, panel/login titles
+   display: string; // the clock
+}
+
+export const TYPE: TypeScale = {
+   nano: "0.5625rem",
+   label: "0.7rem",
+   data: "0.8rem",
+   body: "1rem",
+   lead: "1.15rem",
+   display: "1.75rem"
+};
+
 /* The anchor canvas occupies this fraction of the smaller viewport dimension.
    Exported so the renderer can derive its panel keep-out from the SAME number
    rather than a duplicated constant that drifts (the reactor's real footprint). */
@@ -125,4 +151,17 @@ export function applyPalette(p: Palette = PALETTE): void {
    root.setProperty("--text", p.text);
    root.setProperty("--text-dim", p.textDim);
    root.setProperty("--text-faint", p.textFaint);
+   applyType();
+}
+
+/* Mirror the type scale into --fs-* custom properties (same pattern as the palette),
+   so the single source of truth for size lives here, not scattered in the CSS. */
+export function applyType(t: TypeScale = TYPE): void {
+   const root = document.documentElement.style;
+   root.setProperty("--fs-nano", t.nano);
+   root.setProperty("--fs-label", t.label);
+   root.setProperty("--fs-data", t.data);
+   root.setProperty("--fs-body", t.body);
+   root.setProperty("--fs-lead", t.lead);
+   root.setProperty("--fs-display", t.display);
 }

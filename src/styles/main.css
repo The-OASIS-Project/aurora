@@ -28,14 +28,17 @@
       at the same inset instead of 4px apart. */
    --movable-edge: 28px;
 
-   /* Type scale: the single source of truth for size. Every font-size below is
-      one of these steps, so type stays consistent and is retuned in one place.
-      Micro is floored above the desk-distance legibility limit (~0.7rem). */
-   --fs-micro: 0.7rem; /* uppercase labels: kind, meta, telemetry, hint */
-   --fs-mono: 0.8rem; /* mono data rows: detail, dock sub/list, reply query */
-   --fs-body: 1rem; /* panel summary, dock title, input */
-   --fs-lead: 1.15rem; /* the living response */
-   --fs-display: 1.75rem; /* the clock */
+   /* Type scale: the single source of truth is src/design/tokens.ts (TYPE), mirrored
+      to these --fs-* by applyType() at boot, exactly like the palette. The values below
+      are FALLBACKS in case tokens.ts has not run yet (same pattern as the colors above);
+      applyType() overrides them. Do not hardcode a font-size in a component; use a token
+      or add a step to TYPE (then mirror it here). */
+   --fs-nano: 0.5625rem;
+   --fs-label: 0.7rem;
+   --fs-data: 0.8rem;
+   --fs-body: 1rem;
+   --fs-lead: 1.15rem;
+   --fs-display: 1.75rem;
 }
 
 * {
@@ -215,13 +218,13 @@ body.engaged #docks {
    text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .clk-date {
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.32em;
    color: var(--text-dim);
    margin-top: 0.2rem;
 }
 .clk-mark {
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.5em;
    color: color-mix(in srgb, var(--accent) 65%, var(--text-faint));
    margin-top: 0.55rem;
@@ -238,7 +241,7 @@ body.engaged #docks {
    display: flex;
    justify-content: space-between;
    gap: 1.2rem;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.14em;
    line-height: 1.9;
 }
@@ -283,7 +286,7 @@ body.engaged #docks {
    background: transparent;
    border: none;
    font: inherit;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.22em;
    text-transform: uppercase;
    color: var(--text-dim);
@@ -352,7 +355,7 @@ body.engaged #docks {
    align-items: center;
    gap: 0.6rem;
    padding: 0.42rem 0.55rem;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    color: var(--text);
    cursor: pointer;
    white-space: nowrap;
@@ -424,7 +427,7 @@ body.engaged #docks {
 }
 .reply-q {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-mono);
+   font-size: var(--fs-data);
    letter-spacing: 0.06em;
    color: var(--text-faint);
    margin-bottom: 0.5rem;
@@ -585,7 +588,7 @@ body.engaged #docks {
 .composer-hint {
    flex-shrink: 0;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.24em;
    color: var(--text-faint);
 }

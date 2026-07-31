@@ -1,0 +1,493 @@
+/*
+ * The Home Assistant board: an interactive "state of the house" in the machined
+ * phosphor language of the calendar and music player. It renders DAWN's HA entity
+ * snapshot grouped by room, active states lit and idle ones dimmed so what's happening
+ * pops and the quiet stuff recedes, and lets the user act on it through inline widgets
+ * (toggles for on/off things, a slider for brightness/position, a dropdown for climate
+ * modes). The header is the drag handle; the body is interactive.
+ *
+ * Control is a deliberate, user-initiated Tier-C write (like music transport), not
+ * ambient control - it fits the read-mostly charter's carve-out for explicit actions.
+ * The write path (ha_call_service, signal-map §9.4 #8) is not in DAWN yet, so control
+ * is STUBBED in the ingest: a widget flips optimistically and the frame is logged, and
+ * the next poll reconciles. Flipping to a live send is one line in DawnIngest.haControl.
+ *
+ * HA has no push feed yet either, so the ingest polls (ha_refresh_entities) and hands
+ * over the whole set each update; this view diffs it to briefly emphasise a changed row
+ * (spike-then-recede at poll granularity, sub-second once the push lands - no rework).
+ *
+ * Everything is phosphor tokens; there is no per-entity color from DAWN (unlike the
+ * calendar's CalDAV colors), so emphasis is carried by the active/idle tone.
+ */
+
+import type { HAAttributes, HAEntity, HAServiceCall, HAStatus, HASink } from "../ingest/ingest.ts";
+import { makeMovable } from "../render/movable.ts";
+import { makeListCard } from "../render/list-card.ts";
+
+export interface HAPanelController extends HASink {
+   /* User show/hide (Panels menu), independent of whether HA has any entities. */
+   isVisible(): boolean;
+   setVisible(on: boolean): void;
+   destroy(): void;
+}
+
+export interface HAPanelOpts {
+   /* Ask the ingest to force a live re-poll now (the manual refresh affordance). */
+   onRefresh(): void;
+   /* A widget control intent (toggle/slider/dropdown). Stubbed in the ingest today. */
+   onControl(call: HAServiceCall): void;
+}
+
+/* Domains rendered as a simple on/off toggle (state is "on"/"off"). */
+const TOGGLE_DOMAINS = new Set(["light", "switch", "fan", "input_boolean"]);
+/* Fallback climate modes when DAWN hasn't sent the entity's `hvac_modes` list yet. */
+const DEFAULT_HVAC_MODES = ["off", "heat", "cool", "auto"];
+
+/* What control a given entity's row shows. `toggle` for on/off things, `select` for
+   enumerated modes, `display` for read-only readouts. An optional `slider` (brightness
+   / position / percentage) rides on a second line when the attribute is present. */
+type Control =
+   | { kind: "toggle"; on: boolean; onSet: (on: boolean) => void }
+   | { kind: "select"; value: string; options: string[]; onSet: (v: string) => void }
+   | { kind: "display"; text: string };
+interface Slider {
+   value: number;
+   min: number;
+   max: number;
+   suffix: string;
+   onSet: (v: number) => void;
+}
+
+const VISIBLE_KEY = "dawn.hero.haShown";
+const LIST_H_KEY = "dawn.hero.haListH"; // persisted list height (grip resize)
+
+/* States that read as "at rest / normal / off" and so should recede (dim, hollow
+   dot). Everything else - "on", "open", "unlocked", "home", "playing", a bare
+   sensor value - is treated as active and lit. Compared case-insensitively. This is
+   a pragmatic heuristic (DAWN sends no device_class), good enough that a light that's
+   on or a door left open stands out; refine per-domain later if it proves too loud. */
+const DIM_STATES = new Set([
+   "off",
+   "closed",
+   "locked",
+   "unavailable",
+   "unknown",
+   "idle",
+   "standby",
+   "none",
+   "not_home",
+   "away",
+   "disarmed",
+   "paused",
+   "0",
+   "false"
+]);
+const isActive = (state: string): boolean => !DIM_STATES.has(state.trim().toLowerCase());
+
+/* Raw HA state string -> something readable: "not_home" -> "Not home". Numeric and
+   already-clean states pass through with just a capitalised first letter. */
+function humanizeState(state: string): string {
+   const s = state.trim();
+   if (!s) return "-";
+   const spaced = s.replace(/_/g, " ");
+   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelController {
+   const el = document.createElement("div");
+   el.id = "homeassistant";
+   el.className = "ha";
+   for (const c of ["tl", "tr", "bl", "br"]) {
+      const corner = document.createElement("span");
+      corner.className = `panel-corner ${c}`;
+      el.appendChild(corner);
+   }
+
+   const head = document.createElement("div");
+   head.className = "ha-head";
+   const titleEl = document.createElement("div");
+   titleEl.className = "ha-title";
+   titleEl.textContent = "Home Assistant";
+   const statusEl = document.createElement("div");
+   statusEl.className = "ha-status";
+   const refreshBtn = document.createElement("button");
+   refreshBtn.type = "button";
+   refreshBtn.className = "ha-refresh";
+   refreshBtn.setAttribute("aria-label", "Refresh Home Assistant now");
+   refreshBtn.textContent = "↻"; // clockwise open circle arrow
+   head.append(titleEl, statusEl, refreshBtn);
+
+   const list = document.createElement("div");
+   list.className = "ha-list";
+
+   el.append(head, list);
+   root.appendChild(el);
+
+   /* Manual refresh: force a live re-poll and spin the glyph briefly for feedback. */
+   const onRefreshClick = (e: MouseEvent): void => {
+      e.stopPropagation(); // don't let the click begin a card drag
+      opts.onRefresh();
+      refreshBtn.classList.remove("spin");
+      void refreshBtn.offsetWidth; // restart the animation
+      refreshBtn.classList.add("spin");
+   };
+   refreshBtn.addEventListener("click", onRefreshClick);
+
+   /* Sizing / overflow-fade / grip-resize / hover-expand are shared across the movable
+      ambient cards (see list-card.ts); it owns the bottom grip. */
+   const card = makeListCard(el, list, { storageKey: LIST_H_KEY });
+
+   /* Grab-and-move: only the HEADER drags (the body is interactive), and the refresh
+      button inside it doesn't. Position persisted like the calendar/music views. */
+   const disposeMovable = makeMovable(el, {
+      storageKey: "dawn.hero.haPos",
+      handle: ".ha-head",
+      ignore: ".ha-refresh"
+   });
+
+   let visible = localStorage.getItem(VISIBLE_KEY) !== "false";
+   const applyVisible = (): void => {
+      el.classList.toggle("ha-off", !visible);
+   };
+   applyVisible();
+
+   /* --- state ------------------------------------------------------------- */
+   let entities: HAEntity[] = [];
+   let status: HAStatus = { configured: false, connected: false };
+   const prevState = new Map<string, string>(); // entity_id -> last seen state (for diff)
+   let loaded = false; // suppress the change-spike on the very first snapshot
+   let changed = new Set<string>(); // entity_ids whose state changed on the latest poll
+
+   /* Group entities by room. Named areas sort alphabetically; entities with no area
+      fall into "Other", which always sorts last. Within a room, cluster by domain
+      then name so like things sit together. */
+   const groupByRoom = (): Array<{ room: string; items: HAEntity[] }> => {
+      const groups = new Map<string, HAEntity[]>();
+      for (const e of entities) {
+         const room = e.area || "Other";
+         const bucket = groups.get(room);
+         if (bucket) bucket.push(e);
+         else groups.set(room, [e]);
+      }
+      const rooms = [...groups.keys()].sort((a, b) => {
+         if (a === "Other") return 1;
+         if (b === "Other") return -1;
+         return a.localeCompare(b);
+      });
+      return rooms.map((room) => ({
+         room,
+         items: (groups.get(room) as HAEntity[]).sort(
+            (a, b) => a.domain.localeCompare(b.domain) || a.name.localeCompare(b.name)
+         )
+      }));
+   };
+
+   /* --- widgets ----------------------------------------------------------- */
+
+   const callService = (ev: HAEntity, service: string, data?: Record<string, unknown>): void => {
+      opts.onControl({ entityId: ev.entityId, domain: ev.domain, service, data });
+   };
+
+   /* Reflect a user action immediately, then let the next poll reconcile. The send is
+      stubbed today, so the poll reverts it until DAWN's handler lands - which is the
+      honest behaviour to show (the widget moves; the world hasn't yet). */
+   const optimistic = (entityId: string, newState: string, attrPatch?: Partial<HAAttributes>): void => {
+      const e = entities.find((x) => x.entityId === entityId);
+      if (!e) return;
+      e.state = newState;
+      if (attrPatch) e.attributes = { ...(e.attributes ?? {}), ...attrPatch };
+      render();
+   };
+
+   /* Pick the control (and optional slider) for an entity from its domain + attributes. */
+   const describe = (ev: HAEntity): { control: Control; slider: Slider | null } => {
+      const d = ev.domain;
+      const a = ev.attributes;
+
+      if (TOGGLE_DOMAINS.has(d)) {
+         const on = ev.state === "on";
+         const control: Control = {
+            kind: "toggle",
+            on,
+            onSet: (v) => {
+               callService(ev, v ? "turn_on" : "turn_off");
+               optimistic(ev.entityId, v ? "on" : "off");
+            }
+         };
+         let slider: Slider | null = null;
+         if (d === "light" && a?.brightness != null) {
+            slider = {
+               value: a.brightness,
+               min: 0,
+               max: 255,
+               suffix: "",
+               onSet: (v) => {
+                  callService(ev, "turn_on", { brightness: v });
+                  optimistic(ev.entityId, v > 0 ? "on" : "off", { brightness: v });
+               }
+            };
+         } else if (d === "fan" && a?.percentage != null) {
+            slider = {
+               value: a.percentage,
+               min: 0,
+               max: 100,
+               suffix: "%",
+               onSet: (v) => {
+                  callService(ev, "set_percentage", { percentage: v });
+                  optimistic(ev.entityId, v > 0 ? "on" : "off", { percentage: v });
+               }
+            };
+         }
+         return { control, slider };
+      }
+
+      if (d === "lock") {
+         const locked = ev.state === "locked";
+         return {
+            control: {
+               kind: "toggle",
+               on: locked,
+               onSet: (v) => {
+                  callService(ev, v ? "lock" : "unlock");
+                  optimistic(ev.entityId, v ? "locked" : "unlocked");
+               }
+            },
+            slider: null
+         };
+      }
+
+      if (d === "cover") {
+         const open = ev.state === "open";
+         let slider: Slider | null = null;
+         if (a?.position != null) {
+            slider = {
+               value: a.position,
+               min: 0,
+               max: 100,
+               suffix: "%",
+               onSet: (v) => {
+                  callService(ev, "set_cover_position", { position: v });
+                  optimistic(ev.entityId, v > 0 ? "open" : "closed", { position: v });
+               }
+            };
+         }
+         return {
+            control: {
+               kind: "toggle",
+               on: open,
+               onSet: (v) => {
+                  callService(ev, v ? "open_cover" : "close_cover");
+                  optimistic(ev.entityId, v ? "open" : "closed");
+               }
+            },
+            slider
+         };
+      }
+
+      if (d === "media_player") {
+         const playing = ev.state === "playing";
+         return {
+            control: {
+               kind: "toggle",
+               on: playing,
+               onSet: (v) => {
+                  callService(ev, v ? "media_play" : "media_pause");
+                  optimistic(ev.entityId, v ? "playing" : "paused");
+               }
+            },
+            slider: null
+         };
+      }
+
+      if (d === "climate") {
+         const options = a?.hvacModes ?? DEFAULT_HVAC_MODES;
+         const value = a?.hvacMode ?? ev.state;
+         return {
+            control: {
+               kind: "select",
+               value,
+               options,
+               onSet: (v) => {
+                  callService(ev, "set_hvac_mode", { hvac_mode: v });
+                  optimistic(ev.entityId, v, { hvacMode: v });
+               }
+            },
+            slider: null
+         };
+      }
+
+      /* Read-only readout (sensors, weather, anything not controllable). */
+      const unit = a?.unit ?? "";
+      return { control: { kind: "display", text: humanizeState(ev.state) + (unit ? ` ${unit}` : "") }, slider: null };
+   };
+
+   const buildControlEl = (c: Control): HTMLElement => {
+      if (c.kind === "toggle") {
+         const btn = document.createElement("button");
+         btn.type = "button";
+         btn.className = c.on ? "ha-toggle on" : "ha-toggle";
+         btn.setAttribute("role", "switch");
+         btn.setAttribute("aria-checked", c.on ? "true" : "false");
+         btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            c.onSet(!c.on);
+         });
+         return btn;
+      }
+      if (c.kind === "select") {
+         const sel = document.createElement("select");
+         sel.className = "ha-select";
+         for (const opt of c.options) {
+            const o = document.createElement("option");
+            o.value = opt;
+            o.textContent = humanizeState(opt);
+            if (opt === c.value) o.selected = true;
+            sel.appendChild(o);
+         }
+         sel.addEventListener("change", (e) => {
+            e.stopPropagation();
+            c.onSet(sel.value);
+         });
+         return sel;
+      }
+      const span = document.createElement("span");
+      span.className = "ha-state";
+      span.textContent = c.text;
+      return span;
+   };
+
+   const buildSliderEl = (s: Slider): HTMLElement => {
+      const wrap = document.createElement("div");
+      wrap.className = "ha-slider-row";
+      const input = document.createElement("input");
+      input.type = "range";
+      input.className = "ha-slider";
+      input.min = String(s.min);
+      input.max = String(s.max);
+      input.value = String(s.value);
+      const val = document.createElement("span");
+      val.className = "ha-slider-val";
+      const label = (v: number): string =>
+         s.suffix ? `${v}${s.suffix}` : `${Math.round(((v - s.min) / (s.max - s.min)) * 100)}%`;
+      val.textContent = label(s.value);
+      input.addEventListener("input", () => {
+         val.textContent = label(Number(input.value));
+      });
+      input.addEventListener("change", (e) => {
+         e.stopPropagation();
+         s.onSet(Number(input.value));
+      });
+      wrap.append(input, val);
+      return wrap;
+   };
+
+   const render = (): void => {
+      list.replaceChildren();
+
+      /* Header status line. */
+      if (!status.configured) {
+         statusEl.textContent = "";
+      } else if (!status.connected) {
+         statusEl.textContent = "offline";
+      } else {
+         const active = entities.filter((e) => isActive(e.state)).length;
+         statusEl.textContent = `${active} active`;
+      }
+
+      /* Body: connection problems and empty houses get a single quiet line. */
+      if (!status.configured) {
+         const msg = document.createElement("div");
+         msg.className = "ha-empty";
+         msg.textContent = "Home Assistant not configured";
+         list.appendChild(msg);
+         card.refresh();
+         changed = new Set();
+         return;
+      }
+      if (!status.connected) {
+         const msg = document.createElement("div");
+         msg.className = "ha-empty";
+         msg.textContent = status.error ? `Home Assistant offline (${status.error})` : "Home Assistant offline";
+         list.appendChild(msg);
+         card.refresh();
+         changed = new Set();
+         return;
+      }
+      if (entities.length === 0) {
+         const msg = document.createElement("div");
+         msg.className = "ha-empty";
+         msg.textContent = "No entities";
+         list.appendChild(msg);
+         card.refresh();
+         changed = new Set();
+         return;
+      }
+
+      for (const { room, items } of groupByRoom()) {
+         const header = document.createElement("div");
+         header.className = "ha-room";
+         header.textContent = room;
+         list.appendChild(header);
+
+         for (const ev of items) {
+            const row = document.createElement("div");
+            row.className = "ha-row";
+            if (isActive(ev.state)) row.classList.add("active");
+            if (changed.has(ev.entityId)) row.classList.add("ha-changed");
+
+            const dot = document.createElement("span");
+            dot.className = "ha-dot";
+
+            const name = document.createElement("span");
+            name.className = "ha-name";
+            name.textContent = ev.name || ev.entityId;
+
+            const { control, slider } = describe(ev);
+            row.append(dot, name, buildControlEl(control));
+            if (slider) row.appendChild(buildSliderEl(slider));
+            list.appendChild(row);
+         }
+      }
+
+      card.refresh();
+      changed = new Set(); // consume: a later non-poll re-render must not re-spike
+   };
+   render();
+
+   const controller: HAPanelController = {
+      setEntities: (evs) => {
+         /* Diff against the last snapshot to find changed rows (skip the first load,
+            so we don't flash the whole house on connect). */
+         const next = new Set<string>();
+         if (loaded) {
+            for (const e of evs) {
+               const prev = prevState.get(e.entityId);
+               if (prev !== undefined && prev !== e.state) next.add(e.entityId);
+            }
+         }
+         prevState.clear();
+         for (const e of evs) prevState.set(e.entityId, e.state);
+         loaded = true;
+         changed = next;
+         entities = evs;
+         render();
+      },
+      setStatus: (s) => {
+         status = s;
+         render();
+      },
+      isVisible: () => visible,
+      setVisible: (on) => {
+         visible = on;
+         localStorage.setItem(VISIBLE_KEY, on ? "true" : "false");
+         applyVisible();
+      },
+      destroy: () => {
+         refreshBtn.removeEventListener("click", onRefreshClick);
+         card.destroy();
+         disposeMovable();
+         el.remove();
+      }
+   };
+   return controller;
+}

@@ -73,7 +73,7 @@
 }
 .music-sub {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.06em;
    color: var(--text-faint);
    white-space: nowrap;
@@ -110,7 +110,7 @@
    display: flex;
    justify-content: space-between;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-   font-size: var(--fs-micro);
+   font-size: var(--fs-label);
    letter-spacing: 0.08em;
    color: var(--text-faint);
    margin-top: -0.3rem;
@@ -178,7 +178,7 @@
    right: 2px;
    bottom: 1px;
    font-family: "IBM Plex Mono", ui-monospace, monospace;
-   font-size: 9px;
+   font-size: var(--fs-nano);
    font-weight: 600;
    line-height: 1;
    color: inherit;

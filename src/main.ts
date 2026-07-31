@@ -23,8 +23,10 @@ import "./styles/panels.css";
 import "./styles/login.css";
 import "./styles/convo.css";
 import "./styles/model.css";
+import "./styles/list-card.css";
 import "./styles/music.css";
 import "./styles/calendar.css";
+import "./styles/homeassistant.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import { Store } from "./state/store.ts";
@@ -40,6 +42,7 @@ import { mountMenu } from "./menu/menu.ts";
 import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
+import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
       stylesheets and the anchor shader share one tunable source. */
@@ -78,7 +81,6 @@ const hud = mountHud(stage);
    through their own controllers, appended to the Panels list separately. */
 const PANEL_LABELS: Record<string, string> = {
    email: "Email",
-   homeassistant: "Home Assistant",
    subsystems: "Subsystems",
    documents: "Documents"
 };
@@ -111,6 +113,16 @@ const musicPlayer = mountMusicPlayer(stage, {
    calendar map + events and refetches on calendar_events_changed. */
 const calendarPanel = mountCalendarPanel(stage);
 
+/* The Home Assistant board: a standalone movable view showing DAWN's HA entity
+   snapshot grouped by room, with interactive widgets. The ingest polls HA and feeds it
+   the entity set + connection status; manual refresh forces a live re-poll; control
+   intents route to ingest.haControl (a deliberate user action, stubbed until DAWN's
+   ha_call_service handler lands - signal-map §9.4). */
+const haPanel = mountHAPanel(stage, {
+   onRefresh: () => ingest.refreshHA(),
+   onControl: (call) => ingest.haControl(call)
+});
+
 const menu = mountMenu(stage, {
    onNewChat: () => newChatHook.fire(),
    model: dawn.getModelControl(),
@@ -121,11 +133,13 @@ const menu = mountMenu(stage, {
          .filter((e) => PANEL_LABELS[e.id])
          .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
       { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
+      { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
    ],
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
+      else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else store.toggleEnabled(id);
    },
    displayToggles: [
@@ -215,7 +229,8 @@ ingest.start({
       setTimezone: (tz) => hud.setTimezone(tz)
    },
    music: musicPlayer,
-   calendar: calendarPanel
+   calendar: calendarPanel,
+   ha: haPanel
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -257,6 +272,7 @@ function dispose(): void {
    conversation.destroy();
    musicPlayer.destroy();
    calendarPanel.destroy();
+   haPanel.destroy();
    hud.destroy();
    menu.destroy();
    login.destroy();

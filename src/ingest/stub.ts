@@ -20,7 +20,6 @@ import { IMPORTANCE } from "../state/types.ts";
 const RESTING: Record<string, string> = {
    calendar: "Standup in 42 min",
    subsystems: "All systems nominal",
-   homeassistant: "3 lights on",
    email: "Inbox quiet"
 };
 
@@ -85,6 +84,10 @@ export class StubIngest implements Ingest {
    /* No music engine behind the stub. */
    musicControl(_action: string, _params?: Record<string, unknown>): void {}
 
+   /* No Home Assistant behind the stub (the HA board stays "not configured"). */
+   refreshHA(): void {}
+   haControl(): void {}
+
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */
    setEngaged(engaged: boolean): void {
       this.engaged = engaged;
@@ -123,18 +126,6 @@ export class StubIngest implements Ingest {
          restImportance: 0.85,
          importance: 0.85,
          position: { x: 0.66, y: -0.5 },
-         tone: "nominal"
-      });
-      /* Home Assistant (mixed): a quiet count at rest, the changed entity
-         surfaces on an event. */
-      store.upsert({
-         id: "homeassistant",
-         kind: "homeassistant",
-         summary: RESTING.homeassistant,
-         detail: "living room · office · porch",
-         restImportance: IMPORTANCE.ambient,
-         importance: IMPORTANCE.ambient,
-         position: { x: -0.66, y: 0.5 },
          tone: "nominal"
       });
       /* Email (event-driven): near-invisible at rest. */
@@ -207,19 +198,12 @@ export class StubIngest implements Ingest {
          "Shipment out for delivery",
          "AURA firmware digest"
       ];
-      const haChanges = [
-         ["Office lamp on", "office · brightness 60%"],
-         ["Front door unlocked", "entry · just now"],
-         ["Thermostat → 71°", "living room · heat"],
-         ["Porch light off", "exterior · sunrise"]
-      ];
       const faults = [
          ["MQTT bridge degraded", "mqtt · reconnecting"],
          ["TTS latency high", "tts · 1.8s"],
          ["Vision model stalled", "mirage · restarting"]
       ];
       let e = 0;
-      let h = 0;
       let f = 0;
 
       this.intervals.push(
@@ -228,15 +212,6 @@ export class StubIngest implements Ingest {
                restoreAfter: 9000
             });
          }, 10000)
-      );
-      this.intervals.push(
-         window.setInterval(() => {
-            const [summary, detail] = haChanges[h++ % haChanges.length];
-            this.announce("homeassistant", summary, detail, {
-               to: IMPORTANCE.notice + 0.6,
-               restoreAfter: 8500
-            });
-         }, 14000)
       );
       this.intervals.push(
          window.setInterval(() => {
