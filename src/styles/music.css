@@ -6,10 +6,10 @@
 
 .music {
    position: absolute;
-   left: 28px;
-   bottom: 30px;
+   left: var(--movable-edge);
+   bottom: var(--movable-edge);
    z-index: 5;
-   width: 300px;
+   width: var(--movable-width);
    display: flex;
    flex-direction: column;
    gap: 0.7rem;

@@ -17,6 +17,17 @@
 
    --field-perspective: 1400px;
 
+   /* Width of a standalone movable instrument (music player, calendar card, future
+      floating views). One value so they share a column and line up when snapped to
+      the same dock stop via makeMovable (the snap anchors are width-dependent, so
+      differing widths would never align). */
+   --movable-width: 300px;
+   /* Gutter a movable view keeps from the viewport edge, used for BOTH its default
+      resting position (the cards' CSS left/bottom) AND makeMovable's snap inset (it
+      reads this property). One value so a resting card and an edge-snapped card sit
+      at the same inset instead of 4px apart. */
+   --movable-edge: 28px;
+
    /* Type scale: the single source of truth for size. Every font-size below is
       one of these steps, so type stays consistent and is retuned in one place.
       Micro is floored above the desk-distance legibility limit (~0.7rem). */
@@ -290,14 +301,31 @@ body.engaged #docks {
 
 /* Snap-preview bars for a movable view: a glowing cyan line on each edge the view
    is about to dock to (src/render/movable.ts). */
+/* Snap guide bar. A lit neon rod, not a flat line: rounded caps, a cross-thickness
+   shade (dim accent at the edges, bright core down the middle) for a cylindrical
+   sense of depth, and a layered bloom. Drawn only while dragging, so the extra
+   richness never touches the calm resting state. */
 .movable-snap-bar {
    position: fixed;
    z-index: 40;
    display: none;
-   border-radius: 2px;
+   border-radius: 999px;
    background: var(--accent-glow);
-   box-shadow: 0 0 12px color-mix(in srgb, var(--accent-glow) 75%, transparent);
+   box-shadow:
+      0 0 2px color-mix(in srgb, var(--accent-glow) 95%, transparent),
+      0 0 6px color-mix(in srgb, var(--accent-glow) 80%, transparent),
+      0 0 14px color-mix(in srgb, var(--accent-glow) 55%, transparent),
+      0 0 28px color-mix(in srgb, var(--accent-glow) 30%, transparent);
    pointer-events: none;
+}
+/* Cylindrical shading across the bar's thickness: a brighter core down the middle
+   with the accent (still lit, not dim) at the rounded edges, so it reads as a glowing
+   rod. Vertical bars shade left-to-right, horizontal top-to-bottom. */
+.movable-snap-bar-v {
+   background: linear-gradient(to right, var(--accent), var(--accent-glow) 50%, var(--accent));
+}
+.movable-snap-bar-h {
+   background: linear-gradient(to bottom, var(--accent), var(--accent-glow) 50%, var(--accent));
 }
 
 .menu-dropdown {
