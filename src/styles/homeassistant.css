@@ -101,8 +101,11 @@
    padding: 0.4rem 0;
 }
 
-/* Room section header: a quiet uppercase label. */
+/* Room section header: a quiet uppercase label that doubles as a collapse toggle. */
 .ha-room {
+   display: flex;
+   align-items: center;
+   gap: 0.4rem;
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
    font-size: var(--fs-label);
    letter-spacing: 0.14em;
@@ -111,9 +114,48 @@
    margin-top: 0.4rem;
    padding-bottom: 0.12rem;
    border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+   cursor: pointer;
+   user-select: none;
+   transition: color 140ms ease;
 }
 .ha-room:first-child {
    margin-top: 0;
+}
+.ha-room:hover {
+   color: var(--text);
+}
+.ha-room:focus-visible {
+   outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+   outline-offset: 2px;
+}
+/* Disclosure triangle: points down when open, rotates to point right when collapsed. */
+.ha-room-chevron {
+   flex: 0 0 auto;
+   width: 0.6em;
+   color: color-mix(in srgb, var(--accent) 55%, var(--text-dim));
+   transition: transform 140ms ease;
+}
+.ha-room-chevron::before {
+   content: "\25BE"; /* ▾ */
+}
+.ha-room.collapsed .ha-room-chevron {
+   transform: rotate(-90deg);
+}
+.ha-room-label {
+   flex: 1 1 auto;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+/* Active-entity count, shown so a folded room still signals activity inside it. */
+.ha-room-count {
+   flex: 0 0 auto;
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--accent-glow);
+   padding: 0 0.3em;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .ha-row {

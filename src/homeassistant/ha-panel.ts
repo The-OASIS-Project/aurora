@@ -62,6 +62,7 @@ interface Slider {
 
 const VISIBLE_KEY = "dawn.hero.haShown";
 const LIST_H_KEY = "dawn.hero.haListH"; // persisted list height (grip resize)
+const COLLAPSED_KEY = "dawn.hero.haCollapsed"; // rooms the user has folded shut (per machine)
 
 /* "At rest" states: on/open/unlocked/home/playing (and a bare sensor value) read as
    ACTIVE and get a filled, lit dot + a place in the header's active count; everything
@@ -170,6 +171,21 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
    const prevState = new Map<string, string>(); // entity_id -> last seen state (for diff)
    let loaded = false; // suppress the change-spike on the very first snapshot
    let changed = new Set<string>(); // entity_ids whose state changed on the latest poll
+
+   /* Rooms the user has folded shut, persisted per machine (keyed by room name so it
+      survives re-polls and reconnects; an unknown room just defaults to expanded). */
+   const loadCollapsed = (): Set<string> => {
+      try {
+         const arr = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+         return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
+      } catch {
+         return new Set();
+      }
+   };
+   const collapsedRooms = loadCollapsed();
+   const persistCollapsed = (): void => {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedRooms]));
+   };
 
    /* Group entities by room. Named areas sort alphabetically; entities with no area
       fall into "Other", which always sorts last. Within a room, cluster by domain
@@ -437,10 +453,49 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       }
 
       for (const { room, items } of groupByRoom()) {
+         const collapsed = collapsedRooms.has(room);
+
+         /* Room header doubles as a collapse toggle. It lives in the interactive body
+            (only .ha-head drags the card), so a click here just folds the room. */
          const header = document.createElement("div");
-         header.className = "ha-room";
-         header.textContent = room;
+         header.className = collapsed ? "ha-room collapsed" : "ha-room";
+         header.setAttribute("role", "button");
+         header.setAttribute("tabindex", "0");
+         header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+
+         const chevron = document.createElement("span");
+         chevron.className = "ha-room-chevron";
+         chevron.setAttribute("aria-hidden", "true");
+         const label = document.createElement("span");
+         label.className = "ha-room-label";
+         label.textContent = room;
+         header.append(chevron, label);
+
+         /* Active count, so a folded room still surfaces that something is on inside it. */
+         const activeCount = items.filter((e) => isActive(e.state)).length;
+         if (activeCount > 0) {
+            const count = document.createElement("span");
+            count.className = "ha-room-count";
+            count.textContent = String(activeCount);
+            header.appendChild(count);
+         }
+
+         const toggleRoom = (): void => {
+            if (collapsedRooms.has(room)) collapsedRooms.delete(room);
+            else collapsedRooms.add(room);
+            persistCollapsed();
+            render();
+         };
+         header.addEventListener("click", toggleRoom);
+         header.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+               e.preventDefault();
+               toggleRoom();
+            }
+         });
          list.appendChild(header);
+
+         if (collapsed) continue; // header only; rows stay folded away
 
          for (const ev of items) {
             const row = document.createElement("div");
