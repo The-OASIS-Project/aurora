@@ -843,6 +843,7 @@ export class DawnIngest implements Ingest {
                to: alert ? IMPORTANCE.alert : IMPORTANCE.notice,
                tone: alert ? "attention" : "nominal",
                hold: alert ? 9 : 6,
+               persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
                x: -0.62,
                y: -0.42
             });
@@ -873,6 +874,7 @@ export class DawnIngest implements Ingest {
                   tone: "attention",
                   hold: 10,
                   detail: String(p.message ?? ""),
+                  persist: true, // a ringing alarm stays put until dismissed or docked
                   x: 0.62,
                   y: 0.42
                });
@@ -1373,23 +1375,34 @@ export class DawnIngest implements Ingest {
       window.clearInterval(this.haTimer);
    }
 
-   /* A transient, dismissable notice that spikes forward then recedes on its own.
-      Fixed id per channel so a newer notice replaces the older. */
+   /* A notification card. It spikes forward, then either settles to a quiet floating
+      presence (`persist`, for the things you may want to act on: an attention alert, a
+      ringing alarm) or auto-fades away (a toast: job/observation/info). Either way it
+      carries an × close control and can be dragged to a rail to dock. Fixed id per
+      channel so a newer notice replaces the older, which also bounds the set. */
    private spikeNotice(
       id: string,
       kind: string,
       summary: string,
-      opts: { to: number; x: number; y: number; tone?: "nominal" | "attention"; hold?: number; detail?: string }
+      opts: {
+         to: number;
+         x: number;
+         y: number;
+         tone?: "nominal" | "attention";
+         hold?: number;
+         detail?: string;
+         persist?: boolean;
+      }
    ): void {
       this.sinks.store.upsert({
          id,
          kind,
          summary,
          detail: opts.detail,
-         restImportance: IMPORTANCE.invisible,
+         restImportance: opts.persist ? IMPORTANCE.ambient : IMPORTANCE.invisible,
          position: { x: opts.x, y: opts.y },
          tone: opts.tone ?? "nominal",
-         dismissable: true
+         closeable: true
       });
       this.sinks.store.spike(id, opts.to, opts.tone ?? "nominal", opts.hold ?? 6);
    }

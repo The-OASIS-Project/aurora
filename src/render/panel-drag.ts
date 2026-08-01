@@ -14,6 +14,9 @@
 
 type TapHandler = (id: string) => void;
 type DropHandler = (id: string, side: "left" | "right", index: number) => void;
+/* Dropped OUTSIDE the dock zones: a floating panel stays floating (no-op), a docked
+   card floats back off the rail. */
+type FloatHandler = (id: string) => void;
 
 const THRESHOLD = 5; // px before a press becomes a drag (so taps still register)
 const ZONE = 0.3; // a drop counts when the pointer is within this fraction of an edge
@@ -21,6 +24,7 @@ const ZONE = 0.3; // a drop counts when the pointer is within this fraction of a
 export class PanelDrag {
    private onTap: TapHandler;
    private onDrop: DropHandler;
+   private onFloat?: FloatHandler;
    private indicator: HTMLElement;
 
    private el: HTMLElement | null = null;
@@ -37,9 +41,10 @@ export class PanelDrag {
    private side: "left" | "right" = "left";
    private index = 0;
 
-   constructor(root: HTMLElement, opts: { onTap: TapHandler; onDrop: DropHandler }) {
+   constructor(root: HTMLElement, opts: { onTap: TapHandler; onDrop: DropHandler; onFloat?: FloatHandler }) {
       this.onTap = opts.onTap;
       this.onDrop = opts.onDrop;
+      this.onFloat = opts.onFloat;
       this.indicator = document.createElement("div");
       this.indicator.className = "dock-drop-indicator";
       root.addEventListener("pointerdown", this.onDown);
@@ -48,7 +53,7 @@ export class PanelDrag {
    private onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
-      if (target.closest(".dock-close")) return; // the unpin control is not a handle
+      if (target.closest(".dock-close, .panel-close")) return; // close controls are not handles
       const el = target.closest<HTMLElement>(".panel, .dock-card");
       if (!el || !el.dataset.id) return;
 
@@ -152,8 +157,9 @@ export class PanelDrag {
          this.indicator.remove();
          if (this.el) this.el.style.visibility = "";
          if (this.validDrop) this.onDrop(this.id, this.side, this.index);
+         else this.onFloat?.(this.id); // dropped off the rails: stay/return to floating
       } else if (this.el && this.floating) {
-         /* A tap on a floating panel pins it. */
+         /* A tap on a floating panel (the store decides what it means). */
          this.onTap(this.id);
       }
       this.el = null;

@@ -75,24 +75,28 @@ export class Css3dRenderer implements Renderer {
    private rightRail: HTMLElement;
    private onSelect?: (id: string) => void;
    private onHover?: (id: string, over: boolean) => void;
+   private onClose?: (id: string) => void;
    private w = 0;
    private h = 0;
 
-   /* `onSelect` reports the unpin control and keyboard activation; `onHover`
-      reports the pointer entering/leaving a floating panel (used to hold a notice
-      forward while read). Pointer taps and drags are handled by PanelDrag (wired in
-      the composition root). The renderer never resolves intent itself. */
+   /* `onSelect` reports keyboard activation; `onHover` reports the pointer
+      entering/leaving a floating panel (used to hold a notice forward while read);
+      `onClose` reports the × close control on a notification card (floating or docked).
+      Pointer taps and drags are handled by PanelDrag (wired in the composition root).
+      The renderer never resolves intent itself. */
    constructor(
       field: HTMLElement,
       docks: HTMLElement,
       onSelect?: (id: string) => void,
-      onHover?: (id: string, over: boolean) => void
+      onHover?: (id: string, over: boolean) => void,
+      onClose?: (id: string) => void
    ) {
       this.field = field;
       this.leftRail = docks.querySelector(".dock-rail.left") as HTMLElement;
       this.rightRail = docks.querySelector(".dock-rail.right") as HTMLElement;
       this.onSelect = onSelect;
       this.onHover = onHover;
+      this.onClose = onClose;
       this.resize(window.innerWidth, window.innerHeight);
    }
 
@@ -252,6 +256,23 @@ export class Css3dRenderer implements Renderer {
          detailEl.className = "panel-detail";
 
          root.append(head, summaryEl, signal, detailEl);
+
+         /* Notification cards carry an × close control (revealed on hover, since the
+            resting card is faded back). Closing removes the notice (and, for a ringing
+            alarm, dismisses it on DAWN via the composition root's handler). */
+         if (n.closeable) {
+            const close = document.createElement("button");
+            close.className = "panel-close";
+            close.type = "button";
+            close.setAttribute("aria-label", `Close ${n.kind}`);
+            close.textContent = "×";
+            close.addEventListener("click", (e) => {
+               e.stopPropagation();
+               this.onClose?.(n.id);
+            });
+            root.appendChild(close);
+         }
+
          this.field.appendChild(root);
          slot = { root, summaryEl, detailEl, metaEl, halfW: 120, halfH: 60 };
          this.slots.set(n.id, slot);
@@ -344,15 +365,16 @@ export class Css3dRenderer implements Renderer {
 
          root.append(head, titleEl, subEl, progress, listEl);
 
-         /* Ambient panels the user pinned get an unpin control; inherent widgets
-            (music/documents, dockOnly) do not. */
-         if (!n.dockOnly) {
+         /* A docked notification keeps its × close control (removes it, same as
+            floating); dockOnly widgets (jobs card) have none. To return a docked
+            notification to floating, drag it off the rails (PanelDrag reports it). */
+         if (n.closeable) {
             const close = document.createElement("button");
             close.className = "dock-close";
             close.type = "button";
-            close.setAttribute("aria-label", `Unpin ${n.kind}`);
+            close.setAttribute("aria-label", `Close ${n.kind}`);
             close.textContent = "×";
-            close.addEventListener("click", () => this.onSelect?.(n.id));
+            close.addEventListener("click", () => this.onClose?.(n.id));
             root.appendChild(close);
          }
 

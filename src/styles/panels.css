@@ -166,7 +166,12 @@
 #docks {
    position: absolute;
    inset: 0;
-   z-index: 3;
+   /* Above the free-floating instruments (music/calendar/HA, z-index 5) so a docked
+      card is never hidden behind an instrument parked over its rail; still below the
+      drag indicator (19) and ghost (40). #docks is pointer-events:none, so only the
+      cards themselves (which opt back in) sit on top - empty rail space passes through
+      to whatever instrument is behind it. */
+   z-index: 6;
    pointer-events: none;
 }
 .dock-rail {
@@ -303,6 +308,39 @@
    color: var(--node-accent, var(--accent));
 }
 .dock-close:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 1px;
+}
+
+/* Close control on a FLOATING notification card. Hidden until the card is hovered
+   (which also brings it forward), so a faded resting notice stays clean; then it fades
+   in at the top-right to close (remove) the notice. */
+.panel-close {
+   position: absolute;
+   top: 2px;
+   right: 4px;
+   width: 18px;
+   height: 18px;
+   padding: 0;
+   line-height: 1;
+   font-size: var(--fs-body);
+   color: var(--text-dim);
+   background: transparent;
+   border: none;
+   border-radius: 2px;
+   cursor: pointer;
+   pointer-events: auto;
+   opacity: 0;
+   transition: opacity 140ms ease, color 140ms ease;
+}
+.panel:hover .panel-close,
+.panel-close:focus-visible {
+   opacity: 1;
+}
+.panel-close:hover {
+   color: var(--node-accent, var(--accent));
+}
+.panel-close:focus-visible {
    outline: 2px solid var(--accent);
    outline-offset: 1px;
 }

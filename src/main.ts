@@ -56,21 +56,33 @@ const field = document.getElementById("field") as HTMLElement;
 const docks = document.getElementById("docks") as HTMLElement;
 const canvas = document.getElementById("anchor") as HTMLCanvasElement;
 const stage = document.getElementById("stage") as HTMLElement;
-/* A tap on a transient notice dismisses it; a tap on an ambient panel pins it.
-   Dismissing also notifies ingest (a ringing alarm needs a real dismiss to DAWN);
-   the hook is assigned once the ingest exists further down. */
+/* Closing a notification removes it and notifies ingest (a ringing alarm needs a real
+   dismiss to DAWN); the hook is assigned once the ingest exists further down. This is
+   the × control's handler now, not a tap. */
 let notifyDismiss: (id: string) => void = () => {};
-const dismissPanel = (id: string): void => {
+const closePanel = (id: string): void => {
    store.remove(id);
    notifyDismiss(id);
 };
+/* A tap (no drag): notifications do nothing on tap now (× closes, drag docks); a
+   non-notification ambient panel still pins on tap. */
 const tapPanel = (id: string): void => {
-   if (store.get(id)?.dismissable) dismissPanel(id);
-   else store.togglePin(id);
+   const el = store.get(id);
+   if (!el || el.closeable) return;
+   store.togglePin(id);
+};
+/* A panel dropped off the rails: if it was docked, float it back; a floating one just
+   stays floating. */
+const floatPanel = (id: string): void => {
+   if (store.get(id)?.pinned) store.togglePin(id);
 };
 
-const renderer = new Css3dRenderer(field, docks, tapPanel, (id, over) =>
-   store.setHovered(id, over)
+const renderer = new Css3dRenderer(
+   field,
+   docks,
+   tapPanel,
+   (id, over) => store.setHovered(id, over),
+   closePanel
 );
 const anchor = new Anchor(canvas);
 const hud = mountHud(stage);
@@ -161,15 +173,13 @@ const menu = mountMenu(stage, {
    ]
 });
 
-/* Pointer taps and drags for panels: a tap on a floating panel pins it; a drag
-   (floating or pinned) drops it onto a rail. Reports intent; the store resolves. */
+/* Pointer taps and drags for panels: drag to a rail docks (foreground), drop off the
+   rails leaves it floating (or floats a docked card back). Reports intent; the store
+   resolves. Notifications dock like any panel now. */
 const panelDrag = new PanelDrag(stage, {
    onTap: tapPanel,
-   onDrop: (id, side, index) => {
-      /* Transient notices don't dock — a drag on one still just dismisses. */
-      if (store.get(id)?.dismissable) dismissPanel(id);
-      else store.dockTo(id, side, index);
-   }
+   onDrop: (id, side, index) => store.dockTo(id, side, index),
+   onFloat: floatPanel
 });
 
 /* Now that ingest exists, route panel dismissals to it (real alarm dismiss, etc)

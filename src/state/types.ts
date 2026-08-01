@@ -76,10 +76,13 @@ export interface ElementState {
       Ambient panels (calendar, email, ...) leave this unset and toggle freely. */
    dockOnly?: boolean;
 
-   /* True for transient notices (attention alerts, a firing alarm, job events):
-      they spike forward then recede on their own, cannot be pinned/docked, and a
-      tap DISMISSES them (removes them) rather than pinning. */
-   dismissable?: boolean;
+   /* True for notification cards (attention alerts, a ringing alarm, job/observation
+      toasts). They spike forward then settle to a quiet floating presence, or auto-fade
+      when `restImportance` is invisible (toasts). Unlike ambient panels they carry an ×
+      close control in BOTH the floating and docked states, can be dragged to a rail to
+      dock (foreground) or left floating (faded back for depth), and are removed on ×. A
+      tap no longer closes them - the × does. */
+   closeable?: boolean;
 
    /* Optional richer content for pinned panels, rendered kind-specifically:
       `progress` (0..1) drives a music now-playing bar; `items` is a row list

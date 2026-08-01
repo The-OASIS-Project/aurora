@@ -56,6 +56,10 @@ export interface RenderNode {
    dockOnly?: boolean;
    progress?: number;
    items?: string[];
+
+   /* Notification card: the renderer draws an × close control (floating AND docked);
+      the composition root removes the element on close. */
+   closeable?: boolean;
 }
 
 /*

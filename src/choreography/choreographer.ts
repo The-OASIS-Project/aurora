@@ -38,6 +38,12 @@ const TIER_DEPTH: Record<Tier, number> = {
    sits back (quiet or invisible); at `front` it wants the front slot. */
 const TIER_THRESHOLD = { mid: 0.8, front: 2.2 };
 
+/* Floating (undocked) panels fade back a touch so docked cards read as the crisp
+   foreground and floating ones sit behind them (user-requested depth). Applied to the
+   resting state only: an actively spiking node (emphasis > 0) is exempted so a fresh
+   "needs you" alert still comes forward at full strength. */
+const FLOAT_DIM = 0.82;
+
 function desiredTier(importance: number): Tier {
    if (importance >= TIER_THRESHOLD.front) return Tier.Front;
    if (importance >= TIER_THRESHOLD.mid) return Tier.Mid;
@@ -120,7 +126,8 @@ export class Choreographer {
                dockOrder: el.dockOrder,
                dockOnly: el.dockOnly,
                progress: el.progress,
-               items: el.items
+               items: el.items,
+               closeable: el.closeable
             });
             continue;
          }
@@ -157,6 +164,9 @@ export class Choreographer {
          /* Ambient field recedes while the user is engaged: dimmer and pushed
             back, so the exchange and reactor hold the attention (S3.3). */
          const dim = 1 - 0.72 * this.engageAmt;
+         /* Floating depth fade, lifted back toward full as the node spikes (emphasis),
+            so resting cards sit behind the docked foreground but an alert still pops. */
+         const floatDim = FLOAT_DIM + (1 - FLOAT_DIM) * clamp01(node.emphasis);
          out.push({
             id: el.id,
             kind: el.kind,
@@ -165,10 +175,11 @@ export class Choreographer {
             x: node.x,
             y: node.y,
             depth: node.depth * (1 - 0.5 * this.engageAmt),
-            presence: node.presence * dim,
+            presence: node.presence * dim * floatDim,
             emphasis: node.emphasis * dim,
             tone: el.tone,
-            pinned: false
+            pinned: false,
+            closeable: el.closeable
          });
       }
 
