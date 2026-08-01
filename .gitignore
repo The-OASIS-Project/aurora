@@ -9,3 +9,7 @@ dist/
 *.local
 .claude/settings.local.json
 .DS_Store
+
+# run.sh background dev-server artifacts
+.run.pid
+.run.log
