@@ -12,9 +12,10 @@
  * optimistically for snap, and the server re-polls HA and broadcasts a fresh entity set
  * that reconciles the board (a failed call re-polls to revert and surfaces the error).
  *
- * HA has no push feed yet either, so the ingest polls (ha_refresh_entities) and hands
- * over the whole set each update; this view diffs it to briefly emphasise a changed row
- * (spike-then-recede at poll granularity, sub-second once the push lands - no rework).
+ * The ingest hands over the whole entity set each update and this view diffs it to briefly
+ * emphasise a changed row (spike-then-recede). Updates arrive in real time from DAWN's
+ * ha_state_changed push (merged by entity_id in the ingest), with a 30s poll retained as a
+ * backstop; the diff makes a single-entity delta light just that row.
  *
  * Everything is phosphor tokens; there is no per-entity color from DAWN (unlike the
  * calendar's CalDAV colors), so emphasis is carried by the active/idle tone.

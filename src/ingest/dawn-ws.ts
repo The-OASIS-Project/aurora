@@ -287,10 +287,11 @@ export class DawnIngest implements Ingest {
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
-   private haTimer = 0; // polls ha_refresh_entities to keep the HA board live (no push yet)
-   /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale;
-      a future ha_state_changed push would merge one entity in and re-emit. Keeping the
-      map (vs. re-emitting the raw array) is what makes that push a drop-in later. */
+   private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
+   /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
+      realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
+      re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
+      drop-in - a single-entity delta updates one row without a full re-poll. */
    private readonly haEntities = new Map<string, HAEntity>();
    private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
    private uptimeTimer = 0; // ticks the uptime display every second between polls
@@ -813,6 +814,29 @@ export class DawnIngest implements Ingest {
                   y: -0.55
                });
             }
+            break;
+         }
+
+         case "ha_state_changed": {
+            /* Realtime delta (§9.4 #3): an unsolicited, coalesced (~200ms) push of the
+               entities that just changed - from ANY source (a control action, a physical
+               switch, an HA automation), so one frame can carry many entities (a scene
+               flip). Batch-merge the whole array into the retained map by entity_id -
+               each element is either a full entity (toHAEntity handles it) or a
+               {entity_id, removed:true} tombstone - then re-emit the full set so the board
+               diff-spikes just the changed rows. The 30s poll stays as the backstop, so a
+               client that misses or ignores this frame still self-heals. HA strings are
+               bound via textContent downstream (they now arrive without an admin gesture). */
+            const ents = (p.entities ?? []) as Array<Record<string, unknown>>;
+            let touched = false;
+            for (const e of ents) {
+               const id = String(e.entity_id ?? "");
+               if (!id) continue;
+               if (e.removed === true) this.haEntities.delete(id);
+               else this.haEntities.set(id, toHAEntity(e));
+               touched = true;
+            }
+            if (touched) this.sinks.ha.setEntities([...this.haEntities.values()]);
             break;
          }
 

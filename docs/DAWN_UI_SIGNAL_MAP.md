@@ -199,7 +199,7 @@ current WebSocket actually support?
 |-------|------------------------|-----------------------|---------|
 | **Music (now-playing)** | `music_state` / `music_position` push | `music_library` etc. | ✅ **Fully wireable now.** Rich push, complete state. |
 | **Subsystems / health** | `metrics_update` push | `get_metrics` snapshot | ✅ **Fully wireable now.** |
-| **Home Assistant** | *(none — no push)* | `ha_list_entities` (real states) | ✅ **Wireable now — built.** Hero UI's HA board (`src/homeassistant/`) polls `ha_refresh_entities` on a 30s interval (+ manual refresh), groups by `area`, lights active states and dims idle ones, and diffs poll-to-poll to briefly spike a changed row (poll-granularity today; upgrades to real-time when the §9 #3 push lands, no client rework). Read-only. |
+| **Home Assistant** | `ha_state_changed` delta push (§9.4 #3) + reconcile broadcast on control | `ha_list_entities` (real states) | ✅ **Built + interactive.** Hero UI's HA board (`src/homeassistant/`) merges the realtime `ha_state_changed` delta by `entity_id` (30s `ha_refresh_entities` poll retained as a backstop), groups by `area`, and diffs each update to briefly spike a changed row. Dims a row only when the entity is **offline** (unavailable/unknown); on/off is carried by the widget + dot. Interactive widgets write via `ha_call_service` (§9.4 #8), a deliberate user action. |
 | **Background jobs / tasks** | `job_notification`, `job_update` push | `jobs_request`, `list_jobs` | ✅ **Fully wireable now.** Best-supported observe surface in DAWN. |
 | **Alarms / timers / reminders** | `scheduler_notification` push | `scheduler_events` | ✅ **Fully wireable now.** |
 | **Ambient notices / attention** | `attention_alert`, `silent_observation` push | `watch_list` for config | ✅ **Fully wireable now.** This is the ambient-spike engine. `level` maps to tone. |
@@ -300,7 +300,7 @@ behaviour you must handle** — several of these changed the wire contract.
 | 2 | `error` frame severity | ✅ **Shipped + consumed** — hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
 | 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
 | 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
-| 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`). HA board polls + diffs meanwhile (30s); the push turns that real-time with no client rework |
+| 3 | Home Assistant `state_changed` push | ✅ **SHIPPED (backend, 2026-08-01)** — DAWN now subscribes to HA's own `/api/websocket` `state_changed` stream and pushes a coalesced **`ha_state_changed` delta** (only changed entities) to admin browsers. Real-time board updates, no poll. **Needs a small client merge-by-`entity_id`** (delta shape in §9.4). The 30s poll stays as a backstop. Realtime defaults ON (requires an admin HA token; falls back to REST poll if the WS can't connect). *(The SAGE proactive-alert side of #3 is still deferred — this is the board-push half.)* |
 | 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
 | 7 | Rich HA entity attributes in `ha_entities_response` | ✅ **SHIPPED (backend)** — per-entity `attributes` object, **domain-switched** (only the keys relevant to the entity's domain, not a flat superset): `brightness` (light), `percentage` (fan), `current_position` (cover), `hvac_mode`/`hvac_modes`/`current_temperature`/`temperature` (climate), `unit_of_measurement`/`device_class` (sensor). Emitted on all three `ha_entities_response` sources (list/refresh/reconcile). Additive; absent ⇒ on/off fallback. Exact per-domain shape in §9.4 |
 | 8 | HA entity control verb — `ha_call_service` | ✅ **SHIPPED (backend)** — admin-only general verb (`entity_id`/`domain`/`service`/`data`). Server enforces a **write allowlist** (only the board's widget services; anything else ⇒ `"Service not permitted"`) and does **server-authoritative reconcile** (re-polls HA on success and broadcasts a fresh `ha_entities_response` — the UI just renders it, no client re-poll). `data` passed verbatim to HA. UI can flip its stubbed `send()` to live. Full contract + error strings + allowlist in §9.4. **NB:** adding a controllable domain to the UI requires extending the server allowlist (`HA_BOARD_SERVICES[]`) in the same change |
@@ -476,15 +476,40 @@ Permitted pairs: `light.turn_on/turn_off`, `switch.turn_on/turn_off`,
 `lock.lock/unlock`, `cover.open_cover/close_cover/set_cover_position`,
 `climate.set_hvac_mode/set_temperature`, `media_player.media_play/media_pause`.
 
-**State reconciliation — DONE server-side (option b); the UI does NOT re-poll.** On a
-successful call the server re-polls HA and **broadcasts a fresh `ha_entities_response`**
-(the same frame shape as a poll, full entity list) to the acting admin's browser sessions.
-So the loop closes on its own: keep the optimistic widget flip for snappiness if you like,
-but the authoritative truth arrives as an unsolicited `ha_entities_response` you already
-handle — **just render it**. No client-orchestrated `ha_refresh_entities` follow-up is
-needed. (The reconcile is entity-only server-side, so it's cheap; the deferred `#3`
-`ha_state_changed` per-entity push would later replace the full-list broadcast with a
-targeted delta, with no UI rework.)
+**State reconciliation — DONE server-side; the UI does NOT re-poll.** The server closes
+the loop on its own. **When realtime (#3) is live (default), a control action produces a
+`ha_state_changed` delta** (below) for the changed entity — the same push that reflects an
+*external* HA change — so nothing extra is sent on the reconcile path. When realtime is
+off/disconnected, the server instead re-polls HA and broadcasts a fresh full
+`ha_entities_response`. Either way: keep the optimistic widget flip for snappiness if you
+like, but the authoritative truth arrives unsolicited — **just render it**; no
+client-orchestrated `ha_refresh_entities` follow-up.
+
+#### Realtime deltas — `ha_state_changed` (#3, SHIPPED backend)
+
+When realtime is on, DAWN pushes an **unsolicited** `ha_state_changed` frame to admin
+browsers whenever HA state changes (from any source — a control action, a physical switch,
+an HA automation), coalesced (~200 ms) so a scene flip of many entities is **one** frame:
+
+```json
+{ "type": "ha_state_changed",
+  "payload": { "entities": [
+     { "entity_id": "light.kitchen_table", "friendly_name": "Kitchen Table Light",
+       "domain": "light", "state": "on", "area": "Kitchen",
+       "attributes": { "brightness": 180 } },          // same per-domain shape as #7
+     { "entity_id": "sensor.old_thing", "removed": true }  // entity dropped from HA
+  ] } }
+```
+
+- **Merge by `entity_id`** into your existing entity model: each element is either a full
+  entity (same fields + domain-switched `attributes` as an `ha_entities_response` element)
+  or `{ entity_id, removed: true }` (drop it).
+- **Admin-only**, browsers only (satellites never receive it). Feature-detect the frame
+  `type`; a client that ignores it still stays correct via the retained poll backstop.
+- **⚠ Bind every string via `textContent` / escaped templating, never `innerHTML`.** These
+  fields (`friendly_name`, `state`, `area`, attribute values) are HA-controlled and now
+  arrive **unsolicited** (auto-push, no admin gesture) — the daemon JSON-escapes the frame,
+  but a hostile HA entity name is still attacker-influenceable text on your DOM.
 
 **Widget map (what the UI sends), by domain:**
 
