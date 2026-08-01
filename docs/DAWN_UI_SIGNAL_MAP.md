@@ -608,7 +608,10 @@ validation tool. Hero UI consumed #1/#2/#5 (verified against `webui_config.c` /
 `calendar_id` added at the consumer's request); email pull + #3 HA push remain deferred.
 **#7 rich HA attributes + #8 `ha_call_service` shipped 2026-08-01** (§9.4; domain-switched
 `attributes`, admin-only write verb with a server-side `(domain,service)` allowlist +
-server-authoritative reconcile broadcast). The interactive HA board is buildable now — flip
-the stubbed `send()`. Still deferred: #3 HA `ha_state_changed` push (SAGE) and the WS
-Origin/CSRF check that would harden the allowlisted `lock`/`cover` writes against a
-cross-origin admin-cookie ride.*
+server-authoritative reconcile broadcast). **#3 HA `ha_state_changed` realtime push shipped
+2026-08-01** (§9.4; live delta, merge-by-`entity_id`, admin-only). **WS Origin/CSRF check
+shipped 2026-08-01** — the WS upgrade is same-origin-checked, closing the cross-origin
+admin-cookie ride into the allowlisted `lock`/`cover` writes (browser-shaped origins matched
+vs Host; `null`/opaque rejected; native no-Origin clients allowed). The HA board is fully
+real-time + hardened. Still deferred: the SAGE *proactive-alert* side of #2/#3 (vs the board
+push, which shipped).*

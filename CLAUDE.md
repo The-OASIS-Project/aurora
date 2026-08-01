@@ -80,6 +80,12 @@ depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the an
 - **The cookie needs a same-origin proxy.** The dev server proxies `/api` and `/ws` to
   DAWN so the HttpOnly `dawn_session` cookie rides the `/ws` handshake. Cross-origin
   does not work; that is why the proxy exists in `vite.config.ts`.
+- **The WS upgrade is Origin-checked, and a mismatch fails silently.** DAWN validates the
+  `Origin` on the WebSocket handshake against `[webui] allowed_origins`. Dev works only
+  because `https://localhost:5273` is already in that list. In production the HUD must be
+  served **same-origin with DAWN** (a reverse proxy in front of `:3000`) or its real
+  origin added to `allowed_origins`; otherwise the WS never connects and the only clue is
+  a `CSRF: Origin mismatch` line in DAWN's log.
 - **`llm_state_update` only fires on a `switch_llm` tool call, never on connect.** Read
   the current model / provider from `get_config`'s `payload.llm_runtime` (provider names
   are capitalized there). Reasoning and effort now come from that same `llm_runtime`
