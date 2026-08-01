@@ -156,7 +156,9 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    vol.value = String(opts.audio.getVolume());
    volRow.append(muteBtn, vol);
 
-   el.append(canvas, head, seek, times, controls, volRow);
+   /* Order: title/artist first, then the spectrum meter below it, then transport.
+      (The EQ reads as a response to the now-playing line rather than a header.) */
+   el.append(head, canvas, seek, times, controls, volRow);
    root.appendChild(el);
 
    /* User visibility (Panels menu), persisted. `music-off` force-hides the player
