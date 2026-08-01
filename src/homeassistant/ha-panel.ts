@@ -8,9 +8,9 @@
  *
  * Control is a deliberate, user-initiated Tier-C write (like music transport), not
  * ambient control - it fits the read-mostly charter's carve-out for explicit actions.
- * The write path (ha_call_service, signal-map §9.4 #8) is not in DAWN yet, so control
- * is STUBBED in the ingest: a widget flips optimistically and the frame is logged, and
- * the next poll reconciles. Flipping to a live send is one line in DawnIngest.haControl.
+ * The write path (ha_call_service, signal-map §9.4 #8) is live: a widget flips
+ * optimistically for snap, and the server re-polls HA and broadcasts a fresh entity set
+ * that reconciles the board (a failed call re-polls to revert and surfaces the error).
  *
  * HA has no push feed yet either, so the ingest polls (ha_refresh_entities) and hands
  * over the whole set each update; this view diffs it to briefly emphasise a changed row
@@ -34,7 +34,8 @@ export interface HAPanelController extends HASink {
 export interface HAPanelOpts {
    /* Ask the ingest to force a live re-poll now (the manual refresh affordance). */
    onRefresh(): void;
-   /* A widget control intent (toggle/slider/dropdown). Stubbed in the ingest today. */
+   /* A widget control intent (toggle/slider/dropdown). Sent live to DAWN's
+      ha_call_service; the board reconciles from the server's follow-up entity broadcast. */
    onControl(call: HAServiceCall): void;
 }
 
@@ -61,12 +62,13 @@ interface Slider {
 const VISIBLE_KEY = "dawn.hero.haShown";
 const LIST_H_KEY = "dawn.hero.haListH"; // persisted list height (grip resize)
 
-/* States that read as "at rest / normal / off" and so should recede (dim, hollow
-   dot). Everything else - "on", "open", "unlocked", "home", "playing", a bare
-   sensor value - is treated as active and lit. Compared case-insensitively. This is
-   a pragmatic heuristic (DAWN sends no device_class), good enough that a light that's
-   on or a door left open stands out; refine per-domain later if it proves too loud. */
-const DIM_STATES = new Set([
+/* "At rest" states: on/open/unlocked/home/playing (and a bare sensor value) read as
+   ACTIVE and get a filled, lit dot + a place in the header's active count; everything
+   listed here is at rest and gets a hollow dot. This drives the dot and the count ONLY,
+   not legibility: an off light is a perfectly known state (the toggle already shows it),
+   so it stays as legible as an on one. Compared case-insensitively; a pragmatic heuristic
+   (DAWN sends no device_class), refine per-domain later if it proves too loud. */
+const RESTING_STATES = new Set([
    "off",
    "closed",
    "locked",
@@ -82,7 +84,17 @@ const DIM_STATES = new Set([
    "0",
    "false"
 ]);
-const isActive = (state: string): boolean => !DIM_STATES.has(state.trim().toLowerCase());
+const isActive = (state: string): boolean => !RESTING_STATES.has(state.trim().toLowerCase());
+
+/* Offline: the entity is unreachable or its state is undetermined, so its real state is
+   genuinely unknown. This - and only this - dims a row (recedes it), because there is no
+   trustworthy state to show. `unavailable` = HA can't reach the device; `unknown`/empty =
+   no state reported yet. An "off" device is online and known, so it does NOT dim. */
+const OFFLINE_STATES = new Set(["unavailable", "unknown"]);
+const isOffline = (state: string): boolean => {
+   const s = state.trim().toLowerCase();
+   return s === "" || OFFLINE_STATES.has(s);
+};
 
 /* Raw HA state string -> something readable: "not_home" -> "Not home". Numeric and
    already-clean states pass through with just a capitalised first letter. */
@@ -188,9 +200,9 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       opts.onControl({ entityId: ev.entityId, domain: ev.domain, service, data });
    };
 
-   /* Reflect a user action immediately, then let the next poll reconcile. The send is
-      stubbed today, so the poll reverts it until DAWN's handler lands - which is the
-      honest behaviour to show (the widget moves; the world hasn't yet). */
+   /* Reflect a user action immediately, then let the server's reconcile broadcast settle
+      the true state (a fresh ha_entities_response after DAWN re-polls HA). On a rejected
+      call the ingest re-polls to revert this flip and surfaces the error. */
    const optimistic = (entityId: string, newState: string, attrPatch?: Partial<HAAttributes>): void => {
       const e = entities.find((x) => x.entityId === entityId);
       if (!e) return;
@@ -432,7 +444,8 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
          for (const ev of items) {
             const row = document.createElement("div");
             row.className = "ha-row";
-            if (isActive(ev.state)) row.classList.add("active");
+            if (isActive(ev.state)) row.classList.add("active"); // filled dot (liveliness)
+            if (isOffline(ev.state)) row.classList.add("offline"); // the only thing that dims
             if (changed.has(ev.entityId)) row.classList.add("ha-changed");
 
             const dot = document.createElement("span");

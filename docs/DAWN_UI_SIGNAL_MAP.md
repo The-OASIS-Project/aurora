@@ -302,8 +302,8 @@ behaviour you must handle** — several of these changed the wire contract.
 | 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
 | 3 | Home Assistant `state_changed` push | ⏸ **Deferred** — SAGE P1/P2 (`PROACTIVE_ALERTS_SCOPE.md`). HA board polls + diffs meanwhile (30s); the push turns that real-time with no client rework |
 | 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
-| 7 | Rich HA entity attributes in `ha_entities_response` | 🆕 **Requested — needed for the interactive widgets** (§9.4). Sliders/dropdowns need current values + option lists: `brightness`, `percentage`, `current_position`, `hvac_mode` + `hvac_modes`, `current_temperature`/`temperature`, and `unit_of_measurement`/`device_class` for readouts. Most are already parsed into `ha_entity_t` (serializer-only); the option list + unit/device_class need parser work. The board renders fine without it (falls back to on/off toggles); it unlocks brightness/position/mode/temperature controls |
-| 8 | HA entity control verb — `ha_call_service` | 🆕 **Requested — the interactive board's write path** (§9.4). One general verb mirroring HA's own service model (`entity_id`/`domain`/`service`/`data`), which DAWN's HA service layer already speaks (the AI tool calls services). Hero UI has the widgets built and the send **stubbed**, ready to flip to a live `send()` the moment the handler lands |
+| 7 | Rich HA entity attributes in `ha_entities_response` | ✅ **SHIPPED (backend)** — per-entity `attributes` object, **domain-switched** (only the keys relevant to the entity's domain, not a flat superset): `brightness` (light), `percentage` (fan), `current_position` (cover), `hvac_mode`/`hvac_modes`/`current_temperature`/`temperature` (climate), `unit_of_measurement`/`device_class` (sensor). Emitted on all three `ha_entities_response` sources (list/refresh/reconcile). Additive; absent ⇒ on/off fallback. Exact per-domain shape in §9.4 |
+| 8 | HA entity control verb — `ha_call_service` | ✅ **SHIPPED (backend)** — admin-only general verb (`entity_id`/`domain`/`service`/`data`). Server enforces a **write allowlist** (only the board's widget services; anything else ⇒ `"Service not permitted"`) and does **server-authoritative reconcile** (re-polls HA on success and broadcasts a fresh `ha_entities_response` — the UI just renders it, no client re-poll). `data` passed verbatim to HA. UI can flip its stubbed `send()` to live. Full contract + error strings + allowlist in §9.4. **NB:** adding a controllable domain to the UI requires extending the server allowlist (`HA_BOARD_SERVICES[]`) in the same change |
 
 (Original item write-ups #1–#6 with source cites are preserved below the two new
 subsections for reference.)
@@ -418,28 +418,24 @@ Note it caught a real gotcha we relied on: the `config` frame is emitted from
 `queue_init_messages` on connect (a former `send_config_impl` was dead code) — so `config`
 is a Tier-A on-connect push, exactly as §3.7 lists it.
 
-### 9.4 Interactive HA board — control verb (#8) + rich attributes (#7)
+### 9.4 Interactive HA board — control verb (#8) + rich attributes (#7) — ✅ SHIPPED (backend)
 
-Spec for turning the read-only HA board into an interactive one. Two additions, meant
-to ship together. The UI (`src/homeassistant/`) already renders the widgets and builds
-the exact request below; today it **stubs the send** (logs + optimistic local flip) and
-reverts on the next poll. Flipping the stub to a live `send()` is a one-line change in
-`DawnIngest.haControl` once the handler exists.
+**Status: both landed on the DAWN backend (`src/webui/webui_homeassistant.c`, `src/tools/homeassistant_service.c`).** The write verb, the rich attributes, and a server-authoritative reconcile are live. The UI can flip its stubbed `send()` to a live one and consume the frames below as specified. Everything is additive/back-compat — an older server just omits `attributes` and rejects the verb.
 
-#### #8 — `ha_call_service` (the write path)
+This section is the **as-built contract**. Where it differs from the original request, the delta is called out inline.
 
-One general verb, modelled on Home Assistant's own service call (the same shape DAWN's
-HA tool already uses internally), so any current or future HA service works without new
-verbs. Admin-only, like the other `ha_*` verbs.
+#### #8 — `ha_call_service` (the write path) ✅
 
-**Request**
+One general verb, Admin-only (`conn_require_admin`), same gate as the read verbs.
+
+**Request** — unchanged from the original spec:
 ```json
 { "type": "ha_call_service",
   "payload": {
      "entity_id": "light.kitchen_table",
-     "domain": "light",          // optional; derivable from entity_id prefix
+     "domain": "light",          // optional; server derives it from the entity_id prefix
      "service": "turn_on",       // required
-     "data": { "brightness": 180 }   // optional per-service data
+     "data": { "brightness": 180 }   // optional; passed VERBATIM to HA (see note)
   } }
 ```
 
@@ -447,17 +443,50 @@ verbs. Admin-only, like the other `ha_*` verbs.
 ```json
 { "success": true, "entity_id": "light.kitchen_table", "error": null }
 ```
-`success:false` + `error` on an unknown entity, an HA-side failure, or not-connected
-(same `homeassistant_is_connected()` gate as the read verbs).
+On failure: `{ "success": false, "entity_id": "...", "error": "<reason>" }` (the
+`entity_id` field is present on every response except the missing-required-fields one).
+`error` is JSON `null` on success, a string on failure. **The exact `error` strings** (so
+the UI can branch or surface them):
 
-**State reconciliation (important for the UI):** the board flips the widget optimistically
-on send, then trusts DAWN for truth. So on a successful call, please make the new state
-observable **without waiting for the 30s poll** — either (a) emit the shipped `#3`
-`ha_state_changed` push for that entity, or (b) re-fetch + broadcast a fresh
-`ha_entities_response`, or (c) at minimum let the client's follow-up `ha_refresh_entities`
-see it. Any of the three closes the loop; (a) is best and dovetails with #3.
+| `error` string | Cause |
+|---|---|
+| `"entity_id and service are required"` | one of the two required fields missing/empty (no `entity_id` echoed) |
+| `"Not connected"` | HA not reachable (`homeassistant_is_connected()` false) |
+| `"Service not permitted"` | the `(domain, service)` pair is not in the server allowlist (see below) |
+| `"Invalid service data"` | the `data` object failed to parse server-side (rare; malformed payload) |
+| an HA error string | HA itself rejected the call (transport/entity/HA-side failure) |
 
-**The exact service map the UI sends, by domain** (so the handler knows what to expect):
+**`data` is passed to HA verbatim — use HA's own data keys.** The server does not remap;
+whatever you put in `data` becomes the HA service body. So send `{ "position": 40 }` for
+`cover.set_cover_position`, `{ "brightness": 180 }` for `light.turn_on`, `{ "percentage":
+60 }` for `fan.set_percentage`, `{ "hvac_mode": "heat" }` / `{ "temperature": 72 }` for
+climate. (`entity_id` is added server-side — don't put it in `data`.)
+
+**⚠️ Server-side write allowlist — the UI can ONLY invoke these `(domain, service)`
+pairs.** Anything else HA exposes (`shell_command.*`, `python_script.*`, arbitrary
+`automation.trigger`, …) is refused with `error: "Service not permitted"` before any call.
+This is a deliberate blast-radius control (a compromised admin session can drive the board
+but not run arbitrary HA services). The permitted set **exactly matches the widget map
+below** — if you add a controllable domain/service to the UI, the server table
+(`HA_BOARD_SERVICES[]` in `webui_homeassistant.c`) **must be extended in the same change**,
+or the new widget's `send()` will come back `"Service not permitted"`. Coordinate that edit.
+
+Permitted pairs: `light.turn_on/turn_off`, `switch.turn_on/turn_off`,
+`input_boolean.turn_on/turn_off`, `fan.turn_on/turn_off/set_percentage`,
+`lock.lock/unlock`, `cover.open_cover/close_cover/set_cover_position`,
+`climate.set_hvac_mode/set_temperature`, `media_player.media_play/media_pause`.
+
+**State reconciliation — DONE server-side (option b); the UI does NOT re-poll.** On a
+successful call the server re-polls HA and **broadcasts a fresh `ha_entities_response`**
+(the same frame shape as a poll, full entity list) to the acting admin's browser sessions.
+So the loop closes on its own: keep the optimistic widget flip for snappiness if you like,
+but the authoritative truth arrives as an unsolicited `ha_entities_response` you already
+handle — **just render it**. No client-orchestrated `ha_refresh_entities` follow-up is
+needed. (The reconcile is entity-only server-side, so it's cheap; the deferred `#3`
+`ha_state_changed` per-entity push would later replace the full-list broadcast with a
+targeted delta, with no UI rework.)
+
+**Widget map (what the UI sends), by domain:**
 
 | Domain | Widget | `service` | `data` |
 |--------|--------|-----------|--------|
@@ -470,33 +499,40 @@ see it. Any of the three closes the loop; (a) is best and dovetails with #3.
 | `media_player` | play/pause | `media_play` / `media_pause` | — |
 | `sensor`, `binary_sensor`, `weather` | none (display-only) | — | — |
 
-#### #7 — rich attributes on `ha_entities_response` (to render those widgets with real values)
+#### #7 — rich `attributes` on `ha_entities_response` ✅
 
-The widgets above need current values and, for the dropdown, the option list. Add a
-per-entity `attributes` object (emit only the keys relevant to the entity's domain;
-absent keys make the UI fall back to a plain on/off toggle or a display row):
+Every `ha_entities_response` entity (from `ha_list_entities`, `ha_refresh_entities`, AND
+the reconcile broadcast) now carries a per-entity `attributes` object — **but only the keys
+relevant to that entity's domain**, not the flat superset the original spec sketched. If
+the whole `attributes` object is absent, render a plain on/off toggle or display row.
 
+**What actually gets emitted, by domain** (this is the real shape — code it against this,
+not the original all-keys-in-one-object example):
+
+| Domain | `attributes` emitted | Notes |
+|--------|----------------------|-------|
+| `light` | `{ "brightness": 0-255 }` | always present for lights. (color_temp/rgb are parsed server-side but **not** emitted yet — brightness only) |
+| `fan` | `{ "percentage": 0-100 }` | always present for fans |
+| `cover` | `{ "current_position": 0-100 }` | always present for covers |
+| `climate` | `{ "hvac_mode"?, "hvac_modes"?: string[], "current_temperature": number, "temperature": number }` | `hvac_mode` omitted if empty; `hvac_modes` (the dropdown options) omitted if none, **capped at 12 entries**; the two temps are always present (doubles) |
+| `sensor`, `binary_sensor` | `{ "unit_of_measurement"?, "device_class"? }` | the whole `attributes` object is present **only if at least one** is set; each key omitted individually if empty |
+| everything else (`switch`, `input_boolean`, `lock`, `media_player`, `weather`, `scene`, …) | *(no `attributes` key)* | plain toggle / display |
+
+Example (a climate entity):
 ```json
-{ "entity_id": "light.kitchen_table", "friendly_name": "Kitchen Table Light",
-  "domain": "light", "state": "on", "area": "Kitchen",
+{ "entity_id": "climate.living_room", "friendly_name": "Living Room",
+  "domain": "climate", "state": "heat", "area": "Living Room",
   "attributes": {
-     "brightness": 180,              // light, fan(as percentage below), 0-255
-     "percentage": 60,               // fan, 0-100
-     "current_position": 40,         // cover, 0-100
-     "hvac_mode": "heat",            // climate, current
-     "hvac_modes": ["off","heat","cool","auto"],   // climate, the dropdown's options
-     "current_temperature": 71,      // climate, reading
-     "temperature": 72,              // climate, target
-     "unit_of_measurement": "°F",    // sensor, for the readout
-     "device_class": "temperature"   // sensor/binary_sensor, to pick display vs toggle
+     "hvac_mode": "heat",
+     "hvac_modes": ["off","heat","cool","auto"],
+     "current_temperature": 71,
+     "temperature": 72
   } }
 ```
 
-Per the earlier source read, `brightness`/`color_temp`/`rgb`/`temperature`/`hvac_mode`/
-`current_position` are **already parsed into `ha_entity_t`** — those are serializer-only.
-`hvac_modes` (the available-modes list), `unit_of_measurement`, and `device_class` are
-the ones that need capturing in `parse_entity_attributes` first. Keep it additive: an
-older server that omits `attributes` just yields the current on/off board.
+Treat every `attributes` key as optional and feature-detect — presence is domain- and
+value-dependent per the table. An older server omits `attributes` entirely (falls back to
+the on/off board).
 
 ---
 
@@ -544,4 +580,10 @@ validation tool. Hero UI consumed #1/#2/#5 (verified against `webui_config.c` /
 `webui_send.c` / `webui_message_dispatch.c`) 2026-07-30. Item #6 shipped 2026-07-30
 (commit on `background-jobs-p2-observe`); §9.1f added. **#4 calendar pull + push shipped
 2026-07-31** (§9.1g; `calendar_upcoming_events` + `calendar_events_changed`, per-event
-`calendar_id` added at the consumer's request); email pull + #3 HA push remain deferred.*
+`calendar_id` added at the consumer's request); email pull + #3 HA push remain deferred.
+**#7 rich HA attributes + #8 `ha_call_service` shipped 2026-08-01** (§9.4; domain-switched
+`attributes`, admin-only write verb with a server-side `(domain,service)` allowlist +
+server-authoritative reconcile broadcast). The interactive HA board is buildable now — flip
+the stubbed `send()`. Still deferred: #3 HA `ha_state_changed` push (SAGE) and the WS
+Origin/CSRF check that would harden the allowlisted `lock`/`cover` writes against a
+cross-origin admin-cookie ride.*

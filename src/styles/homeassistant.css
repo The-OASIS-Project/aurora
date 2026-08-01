@@ -1,9 +1,10 @@
 /*
  * Home Assistant board. A calm, read-only "state of the house" in the same
  * machined/frosted language as the calendar and music player. Standalone +
- * grab-to-move. Everything is phosphor tokens; emphasis is carried by the
- * active/idle tone (there is no per-entity color from DAWN), so an entity that is
- * on/open/unlocked reads lit and the resting stuff recedes.
+ * grab-to-move. Everything is phosphor tokens; there is no per-entity color from DAWN.
+ * Online entities are all equally legible - on vs off is carried by the toggle and a
+ * lit-vs-hollow dot, not by dimming - and only an OFFLINE (unavailable/unknown) row
+ * recedes, because that is the one case where the real state is not trustworthy.
  */
 
 .ha {
@@ -138,16 +139,14 @@
    box-shadow: 0 0 6px color-mix(in srgb, var(--accent-glow) 65%, transparent);
 }
 /* Names sit at the mono data size (not the larger body size) so the board holds more
-   rows without scrolling. */
+   rows without scrolling. All online rows read the same (on/off is the toggle's job);
+   the offline dim below is what recedes a row. */
 .ha-name {
    font-size: var(--fs-data);
-   color: var(--text-faint);
+   color: var(--text);
    overflow: hidden;
    text-overflow: ellipsis;
    white-space: nowrap;
-}
-.ha-row.active .ha-name {
-   color: var(--text);
 }
 .ha-state {
    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -158,6 +157,14 @@
 }
 .ha-row.active .ha-state {
    color: var(--accent-glow);
+}
+
+/* Offline (unavailable/unknown): the whole row recedes - name, dot, readout, and its
+   control together - since we can't trust the state. One lever (opacity) so a dimmed
+   widget also signals "you probably can't drive this right now". This is the ONLY dim;
+   an "off" but online device stays at full legibility above. */
+.ha-row.offline {
+   opacity: 0.4;
 }
 
 /* On/off toggle switch (light/switch/fan/lock/cover/media_player). */

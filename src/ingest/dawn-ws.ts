@@ -795,6 +795,27 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "ha_call_service_response": {
+            /* Ack for a widget control (§9.4 #8). Success is silent: the server has
+               already re-polled HA and will broadcast a fresh ha_entities_response, which
+               reconciles the board (the optimistic flip only bridged the round-trip). A
+               failure gets no broadcast, so revert the optimistic flip with a live re-poll
+               and surface why (allowlist reject, HA offline, HA-side error). */
+            if (p.success === false) {
+               const err = typeof p.error === "string" && p.error ? p.error : "Home Assistant control failed";
+               console.warn("[dawn] ha_call_service failed:", p.entity_id, err);
+               this.refreshHA();
+               this.spikeNotice("ha-notice", "home", err, {
+                  to: IMPORTANCE.notice,
+                  tone: "attention",
+                  hold: 7,
+                  x: 0,
+                  y: -0.55
+               });
+            }
+            break;
+         }
+
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
             this.jobs.clear();
@@ -1044,21 +1065,26 @@ export class DawnIngest implements Ingest {
       this.send({ type: "ha_refresh_entities" });
    }
 
-   /* HA widget control. STUBBED: DAWN has no ha_call_service handler yet (signal-map
-      §9.4 #8). We build the exact frame and log it so the shape is verifiable, but do
-      NOT send it - the board updates optimistically and the next poll reconciles. To
-      go live once the daemon handler lands, replace the console.debug with:
-         this.send({ type: "ha_call_service", payload: call });
-      and (optionally) handle an `ha_call_service_response`. */
+   /* HA widget control (signal-map §9.4 #8): the board's write path, a deliberate
+      user-initiated action (like music transport), not ambient control. `data` is passed
+      VERBATIM to HA - the panel already uses HA's own keys (brightness/percentage/
+      position/hvac_mode/temperature). The server allowlists the (domain, service) pairs
+      the board can invoke; anything else comes back "Service not permitted".
+
+      On SUCCESS the server re-polls HA and broadcasts a fresh ha_entities_response on its
+      own, so the board reconciles without us re-polling; the optimistic flip just bridges
+      the round-trip. On FAILURE nothing is broadcast, so ha_call_service_response drives
+      the revert + surfaces the error (see the handler). */
    haControl(call: HAServiceCall): void {
-      const payload = {
-         entity_id: call.entityId,
-         domain: call.domain,
-         service: call.service,
-         ...(call.data ? { data: call.data } : {})
-      };
-      console.debug("[dawn] ha_call_service (stubbed, not sent):", payload);
-      // this.send({ type: "ha_call_service", payload });
+      this.send({
+         type: "ha_call_service",
+         payload: {
+            entity_id: call.entityId,
+            domain: call.domain,
+            service: call.service,
+            ...(call.data ? { data: call.data } : {})
+         }
+      });
    }
 
    getMusicAudio(): MusicAudio {
