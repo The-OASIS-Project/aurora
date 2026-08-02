@@ -24,13 +24,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
-import { PALETTE, hexToRgb01 } from "../design/tokens.ts";
-
-/* PALETTE.text as "r, g, b" (0-255) for canvas rgba() fills, derived from the token so
-   the crawl text tracks a palette retune instead of drifting from a hardcoded literal. */
-const TEXT_RGB = hexToRgb01(PALETTE.text)
-   .map((c) => Math.round(c * 255))
-   .join(", ");
+import { PALETTE } from "../design/tokens.ts";
 
 /* One gimbal gauge: an arc torus on a fixed tilt that spins about its normal. */
 interface Ring {
@@ -44,17 +38,6 @@ const BAR_COUNT = 96;
 const BAR_INNER_R = 0.86;
 const BAR_BASE_H = 0.05;
 const BAR_AMP_H = 0.42;
-
-/* Conversation crawl geometry. The plane is tall and tilted back so it recedes
-   toward the reactor; the texture is drawn at high res so the near text is crisp.
-   Tunable — placement was set by eye against the fog range and camera distance. */
-const CRAWL_TEX_W = 1024;
-const CRAWL_TEX_H = 1600;
-const CRAWL_W = 7.2; // world width
-const CRAWL_H = 11.25; // world height (keeps the texture aspect)
-const CRAWL_TILT = -1.2; // radians; top tilts away from the camera
-const CRAWL_Y = -1.3; // emerges from below the reactor
-const CRAWL_Z = 0.6; // near edge just in front of the core
 
 /* The reactor's conversation state (matches DAWN's state machine). Drives which
    elements are active, so the reactor always shows what DAWN is doing now. */
@@ -151,21 +134,6 @@ export class Anchor {
    private clouds = new THREE.Group();
    private softTex!: THREE.Texture;
 
-   /* Conversation crawl: the receded conversation rendered as REAL 3D text in
-      this scene, tilted back and rising toward the reactor so the core's glow and
-      the scene fog dissolve it into the distance (a Star Wars crawl that lives in
-      the same space as the atom, not a DOM overlay). The DOM window owns the
-      readable up-close view; this owns the ambient recede. */
-   private crawlPlane!: THREE.Mesh;
-   private crawlCanvas!: HTMLCanvasElement;
-   private crawlCtx!: CanvasRenderingContext2D;
-   private crawlTex!: THREE.CanvasTexture;
-   private crawlMat!: THREE.MeshBasicMaterial;
-   private crawlLines: string[] = [];
-   private crawlPresence = 0; // eased 0 (gone) .. 1 (fully shown)
-   private crawlTarget = 0;
-   private crawlScroll = 0; // slow rise while present, for life
-
    constructor(canvas: HTMLCanvasElement) {
       this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
       /* Clear/fog color come from the ground token so a palette pivot moves them
@@ -188,7 +156,6 @@ export class Anchor {
 
       this.scene.add(this.assembly);
       this.createNebula();
-      this.createCrawl();
 
       /* Core: fresnel-shaded orb. */
       this.coreMat = new THREE.ShaderMaterial({
@@ -383,96 +350,6 @@ export class Anchor {
       this.scene.add(this.clouds);
    }
 
-   /* Build the crawl surface: a tall plane tilted back so its far (upper) edge
-      recedes toward and past the reactor. A CanvasTexture carries the text; the
-      scene fog (fog:true) fades the far edge to black for the "into the distance"
-      dissolve, and the additive core glowing in front washes whatever passes
-      behind it. Normal (non-additive) blending keeps the near text legible. */
-   private createCrawl(): void {
-      this.crawlCanvas = document.createElement("canvas");
-      this.crawlCanvas.width = CRAWL_TEX_W;
-      this.crawlCanvas.height = CRAWL_TEX_H;
-      this.crawlCtx = this.crawlCanvas.getContext("2d")!;
-      this.crawlTex = new THREE.CanvasTexture(this.crawlCanvas);
-      this.crawlTex.colorSpace = THREE.SRGBColorSpace;
-
-      this.crawlMat = new THREE.MeshBasicMaterial({
-         map: this.crawlTex,
-         transparent: true,
-         opacity: 0,
-         depthWrite: false,
-         fog: true
-      });
-      this.crawlPlane = new THREE.Mesh(
-         new THREE.PlaneGeometry(CRAWL_W, CRAWL_H),
-         this.crawlMat
-      );
-      this.crawlPlane.rotation.x = CRAWL_TILT;
-      this.crawlPlane.position.set(0, CRAWL_Y, CRAWL_Z);
-      this.crawlPlane.visible = false;
-      this.crawlPlane.renderOrder = -1; // behind the additive reactor parts
-      this.scene.add(this.crawlPlane);
-   }
-
-   /* Redraw the crawl canvas: wrapped lines stacked from the BOTTOM (latest
-      nearest the camera), older lines climbing toward the fogged distance. */
-   private drawCrawl(): void {
-      const ctx = this.crawlCtx;
-      const W = CRAWL_TEX_W;
-      const H = CRAWL_TEX_H;
-      ctx.clearRect(0, 0, W, H);
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      const pad = 64;
-      const fontPx = 30;
-      const lineH = fontPx * 1.4;
-      ctx.font = `500 ${fontPx}px "IBM Plex Sans", system-ui, sans-serif`;
-
-      /* Wrap every line to the canvas width, newest last, then draw bottom-up. */
-      const wrapped: string[] = [];
-      for (const line of this.crawlLines) {
-         for (const w of this.wrapText(line, W - pad * 2)) wrapped.push(w);
-      }
-      let y = H - pad;
-      for (let i = wrapped.length - 1; i >= 0 && y > pad; i--) {
-         /* Alpha falls off going up (into the distance) as a second cue on top of
-            fog, so the top never looks like a hard cut. */
-         const depth = (H - pad - y) / (H - pad * 2);
-         ctx.fillStyle = `rgba(${TEXT_RGB}, ${(1 - depth * 0.55).toFixed(3)})`;
-         ctx.fillText(wrapped[i], W / 2, y);
-         y -= lineH;
-      }
-      this.crawlTex.needsUpdate = true;
-   }
-
-   private wrapText(text: string, maxW: number): string[] {
-      const words = text.split(/\s+/);
-      const lines: string[] = [];
-      let cur = "";
-      for (const word of words) {
-         const test = cur ? `${cur} ${word}` : word;
-         if (this.crawlCtx.measureText(test).width > maxW && cur) {
-            lines.push(cur);
-            cur = word;
-         } else {
-            cur = test;
-         }
-      }
-      if (cur) lines.push(cur);
-      return lines;
-   }
-
-   /* Set the crawl's content (the receding conversation). */
-   setCrawl(lines: string[]): void {
-      this.crawlLines = lines;
-      this.drawCrawl();
-   }
-
-   /* Target crawl visibility: 1 to raise it into the scene, 0 to dissolve it. */
-   setCrawlPresence(target: number): void {
-      this.crawlTarget = clamp01(target);
-   }
-
    resize(): void {
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -544,21 +421,6 @@ export class Anchor {
       this.clouds.rotation.z = mt * -0.004;
       this.clouds.rotation.y = this.parallax.x * 0.07;
 
-      /* Crawl: ease presence toward its target; while present, drift slowly up
-         so the text rises into the fogged distance. Opacity is shaped so it lingers
-         readable near full presence, then dissolves quickly toward the end. */
-      this.crawlPresence += (this.crawlTarget - this.crawlPresence) * (1 - Math.exp(-2.2 * dt));
-      const shown = this.crawlPresence > 0.004;
-      this.crawlPlane.visible = shown;
-      if (shown) {
-         this.crawlMat.opacity = Math.pow(this.crawlPresence, 0.7) * 0.66;
-         this.crawlScroll += dt * motion * 0.12 * this.crawlTarget;
-         this.crawlPlane.position.y = CRAWL_Y + this.crawlScroll;
-      } else if (this.crawlScroll !== 0) {
-         this.crawlScroll = 0;
-         this.crawlPlane.position.y = CRAWL_Y;
-      }
-
       const energy = this.updateBars(mt);
       this.barRing.rotation.z = mt * 0.05;
 
@@ -592,9 +454,6 @@ export class Anchor {
          (s as THREE.Sprite).material.dispose();
       }
       this.softTex.dispose();
-      this.crawlPlane.geometry.dispose();
-      this.crawlMat.dispose();
-      this.crawlTex.dispose();
       this.bars.geometry.dispose();
       (this.bars.material as THREE.Material).dispose();
       for (const r of this.rings) {
