@@ -670,7 +670,9 @@ export class DawnIngest implements Ingest {
          case "list_llm_models_response": {
             const models = (p.models ?? []) as Array<{ name?: string }>;
             this.localModels = models.map((m) => m.name ?? "").filter(Boolean);
-            this.notifyLlm();
+            /* Reconcile in case we are in local mode with a model that predates this list
+               (Mode switched to local before it arrived) - picks a valid local model now. */
+            this.reconcileModel();
             break;
          }
 
@@ -1374,6 +1376,11 @@ export class DawnIngest implements Ingest {
       const models = this.modelsFor(this.llm.mode, this.llm.provider);
       if (models.length > 0 && !models.includes(this.llm.model)) {
          this.llm.model = models[0];
+         /* Keep effort valid for the new model so the panel's segmented control always has
+            an active value (the server clamps + echoes too, but this avoids a transient
+            no-selection state until the echo lands). */
+         const opts = effortOptionsForModel(this.llm.model);
+         if (!opts.includes(this.llm.effort)) this.llm.effort = opts.includes("medium") ? "medium" : opts[0];
          this.send({ type: "set_session_llm", payload: { model: this.llm.model } });
       }
       this.notifyLlm();

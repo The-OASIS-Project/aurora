@@ -10,6 +10,15 @@ import DOMPurify from "dompurify";
 
 marked.setOptions({ gfm: true, breaks: true });
 
+/* Any link kept with target="_blank" also gets rel="noopener noreferrer" so the opened
+   page cannot reach window.opener (reverse tabnabbing). DOMPurify already strips
+   javascript:/dangerous hrefs; this closes the target hole on older engines too. */
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+   if (node instanceof Element && node.hasAttribute("target")) {
+      node.setAttribute("rel", "noopener noreferrer");
+   }
+});
+
 /* Render markdown to sanitized HTML. Links open in a new tab (ADD_ATTR target),
    same allowance the existing WebUI makes. */
 export function renderMarkdown(text: string): string {
