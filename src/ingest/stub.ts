@@ -102,6 +102,11 @@ export class StubIngest implements Ingest {
       this.timeouts = [];
    }
 
+   /* No audio graph in the stub, so teardown is just stop(). */
+   dispose(): void {
+      this.stop();
+   }
+
    /* --- seed + synthetic activity ------------------------------------------ */
 
    private seed(store: Store): void {

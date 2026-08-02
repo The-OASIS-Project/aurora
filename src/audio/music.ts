@@ -26,6 +26,7 @@ export class MusicAudio {
    private volume = clampVol(Number(localStorage.getItem(VOL_KEY) ?? 0.8));
    private muted = false;
    private onError: (msg: string) => void = () => {};
+   private readonly resumeOnGesture: () => void;
 
    /* Surface a fatal audio-setup problem (e.g. no secure context) to the UI. */
    setErrorHandler(fn: (msg: string) => void): void {
@@ -35,9 +36,38 @@ export class MusicAudio {
    constructor() {
       /* AudioContext can only start after a user gesture. The user has almost
          always clicked/typed before music plays, but resume once on the first
-         gesture as a guarantee. */
-      const resume = (): void => void this.ctx?.resume();
-      window.addEventListener("pointerdown", resume, { once: true, passive: true });
+         gesture as a guarantee. Held as a field so dispose() can drop it if no
+         gesture ever fired (otherwise the {once} listener pins this instance). */
+      this.resumeOnGesture = (): void => void this.ctx?.resume();
+      window.addEventListener("pointerdown", this.resumeOnGesture, { once: true, passive: true });
+   }
+
+   /* Release the whole decode/audio graph. Called on final teardown (HMR dispose),
+      NOT on an in-session disconnect - a reconnect reuses the lazily-built context. */
+   dispose(): void {
+      window.removeEventListener("pointerdown", this.resumeOnGesture);
+      try {
+         if (this.decoder && this.decoder.state !== "closed") this.decoder.close();
+      } catch {
+         /* already closed */
+      }
+      this.decoder = null;
+      if (this.worklet) this.worklet.port.onmessage = null;
+      try {
+         this.worklet?.disconnect();
+         this.gain?.disconnect();
+         this.analyser?.disconnect();
+      } catch {
+         /* nodes already detached */
+      }
+      this.worklet = null;
+      this.gain = null;
+      this.analyser = null;
+      this.freq = null;
+      if (this.ctx && this.ctx.state !== "closed") void this.ctx.close().catch(() => {});
+      this.ctx = null;
+      this.ready = false;
+      this.initing = null;
    }
 
    /* Feed one binary music payload (opcode already stripped): a run of

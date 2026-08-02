@@ -1483,6 +1483,16 @@ export class DawnIngest implements Ingest {
       this.disconnect();
    }
 
+   /* Final teardown (HMR/unmount). disconnect() keeps the lazily-built audio contexts so
+      an in-session reconnect reuses them; dispose() also closes them, so a hot reload does
+      not stack AudioContexts past Chrome's ~6-context cap (after which new audio silently
+      dies). tts may be undefined if start() never ran. */
+   dispose(): void {
+      this.disconnect();
+      this.tts?.dispose();
+      this.music.dispose();
+   }
+
    /* The login panel subscribes to reflect connection state. */
    onStatus(handler: StatusHandler): void {
       this.status = handler;

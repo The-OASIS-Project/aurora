@@ -238,5 +238,9 @@ export interface Ingest {
       ha_call_service to DAWN (signal-map §9.4 #8), a Tier-C write treated like music
       transport. The server reconciles by broadcasting fresh state. See DawnIngest.haControl. */
    haControl(call: HAServiceCall): void;
+   /* Stop the live session (disconnect); in-session, audio contexts are kept for reuse. */
    stop(): void;
+   /* Final teardown (HMR/unmount): stop AND release the audio graphs. Distinct from stop()
+      so an in-session reconnect can reuse the AudioContexts instead of stacking new ones. */
+   dispose(): void;
 }

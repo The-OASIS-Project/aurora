@@ -278,7 +278,7 @@ function dispose(): void {
    running = false;
    window.removeEventListener("resize", onResize);
    ttsBtn.removeEventListener("click", onTtsClick);
-   ingest.stop();
+   ingest.dispose(); // full teardown: also closes the audio graphs so HMR doesn't stack AudioContexts
    conversation.destroy();
    musicPlayer.destroy();
    calendarPanel.destroy();
