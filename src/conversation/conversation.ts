@@ -92,8 +92,12 @@ export function mountConversation(
    let longTimer = 0;
    let raf = 0;
 
-   const scrollToEnd = (): void => {
-      win.scrollTop = win.scrollHeight;
+   /* Instant by default (token streaming pins to the bottom every frame; smooth there
+      would lag). Pass smooth for the discrete settles - raising from receded, a finished
+      reply - where the overflow/scrollbar change would otherwise snap the scroll (the
+      hidden->auto restore re-wraps the text a few px taller, so the bottom jumps). */
+   const scrollToEnd = (smooth = false): void => {
+      win.scrollTo({ top: win.scrollHeight, behavior: smooth ? "smooth" : "auto" });
    };
 
    const appendMsg = (role: "user" | "assistant", text: string): Msg => {
@@ -160,7 +164,7 @@ export function mountConversation(
       if (!active) {
          active = true;
          win.classList.remove("receded");
-         scrollToEnd();
+         scrollToEnd(true); // ease the scrollbar-restore settle as it raises upright
       }
       armIdle();
    };
@@ -211,7 +215,7 @@ export function mountConversation(
       }
       if (streaming) streaming.body.innerHTML = renderMarkdown(streaming.text);
       streaming = null;
-      scrollToEnd();
+      scrollToEnd(true); // final markdown reflow can change height; ease it, don't snap
       setThinking(false);
    };
 
