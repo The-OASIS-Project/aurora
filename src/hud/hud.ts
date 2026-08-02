@@ -11,6 +11,8 @@
  * Runtime clock/telemetry use new Date()/timers, which is fine in the browser.
  */
 
+import { safeTimeZone } from "../util/tz.ts";
+
 const SVGNS = "http://www.w3.org/2000/svg";
 const HUD_CACHE_KEY = "dawn.hero.hud"; // last telemetry values, to survive a refresh
 
@@ -63,16 +65,7 @@ export function mountHud(root: HTMLElement): HudController {
    };
 
    const setTimezone = (zone: string): void => {
-      if (!zone) {
-         tz = undefined;
-         return;
-      }
-      try {
-         new Intl.DateTimeFormat("en-US", { timeZone: zone }); // throws on bad zone
-         tz = zone;
-      } catch {
-         tz = undefined; // keep browser-local
-      }
+      tz = safeTimeZone(zone);
    };
 
    return {

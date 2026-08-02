@@ -15,6 +15,7 @@
 import type { CalendarEvent, CalendarInfo, CalendarSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
+import { safeTimeZone } from "../util/tz.ts";
 
 export interface CalendarPanelController extends CalendarSink {
    /* User show/hide (Panels menu), independent of whether the day has events. */
@@ -182,7 +183,9 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
          render();
       },
       setTimezone: (zone) => {
-         tz = zone || "";
+         /* Validate before use: an invalid IANA zone makes toLocaleString throw, which
+            would break the render. safeTimeZone falls back to browser-local ("" here). */
+         tz = safeTimeZone(zone) ?? "";
          render();
       },
       isVisible: () => visible,
