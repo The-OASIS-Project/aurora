@@ -54,6 +54,7 @@ const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] run)
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
+const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
@@ -279,6 +280,8 @@ export class DawnIngest implements Ingest {
    private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
+   private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
+   private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
    private convId = 0; // active conversation; save_message targets persist to it
    private replyBuf = ""; // final assistant answer, accumulated to persist on idle
@@ -410,6 +413,7 @@ export class DawnIngest implements Ingest {
       this.ws = ws;
 
       ws.onopen = (): void => {
+         this.wsFails = 0; // a clean open resets the reconnect backoff
          /* Resume the stored session if we have one, else start a fresh session.
             Resuming is what keeps us from burning a session slot on every reload.
             We advertise only `pcm`, so DAWN sends raw PCM TTS (no Opus decoder). */
@@ -473,13 +477,38 @@ export class DawnIngest implements Ingest {
          this.stopMetrics();
          this.closeMusicStream();
          this.sinks.reactor.setState("idle");
-         this.emit(this.wantConnected ? "error" : "disconnected", ev.reason || undefined);
+         if (this.wantConnected) {
+            /* An unexpected drop while we still want to be connected: auto-reconnect
+               with backoff. An always-on dashboard has to heal itself after a network
+               blip instead of going dead until a manual refresh (this mirrors the
+               dedicated music socket). A deliberate disconnect()/force_logout clears
+               wantConnected first, so those never land here. */
+            this.scheduleMainReconnect();
+         } else {
+            this.emit("disconnected", ev.reason || undefined);
+         }
       };
 
       ws.onerror = (): void => {
-         /* onclose fires right after with the detail; keep the status honest. */
-         this.emit("error", "WebSocket error");
+         /* onclose fires right after and owns both the status and the reconnect; stay
+            quiet here so a transient error doesn't blip the login card before the
+            reconnect kicks in (same discipline as the music socket). */
       };
+   }
+
+   /* Reconnect the main socket after an unexpected close, exponential backoff capped at
+      MAIN_WS_MAX_DELAY, retrying indefinitely while the user wants to be connected. The
+      "connecting" status keeps the login card hidden during a blip (the connected chip
+      just drops); a real revocation comes through force_logout, which stops the loop. */
+   private scheduleMainReconnect(): void {
+      if (!this.wantConnected) return;
+      this.wsFails++;
+      const delay = Math.min(MAIN_WS_MAX_DELAY, 1000 * 2 ** (this.wsFails - 1));
+      this.emit("connecting", "reconnecting…");
+      window.clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = window.setTimeout(() => {
+         if (this.wantConnected) this.openSocket();
+      }, delay);
    }
 
    private onFrame(raw: string): void {
@@ -523,8 +552,14 @@ export class DawnIngest implements Ingest {
 
          case "force_logout":
             /* Session revoked server-side: the stored token is dead, drop it so we
-               do not keep trying to resume a session that no longer exists. */
+               do not keep trying to resume a session that no longer exists. Stop
+               wanting to be connected so the auto-reconnect does NOT silently mint a
+               fresh session behind the revocation, cancel any pending retry, and
+               surface the login card with the reason. */
             localStorage.removeItem(TOKEN_KEY);
+            this.wantConnected = false;
+            window.clearTimeout(this.wsReconnectTimer);
+            this.emit("error", typeof p.reason === "string" ? p.reason : undefined);
             break;
 
          case "get_config_response": {
@@ -1384,6 +1419,8 @@ export class DawnIngest implements Ingest {
 
    disconnect(): void {
       this.wantConnected = false;
+      window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
+      this.wsFails = 0;
       this.stopMetrics();
       this.closeMusicStream();
       this.tts?.stop();
