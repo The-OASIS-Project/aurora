@@ -1158,9 +1158,15 @@ export class DawnIngest implements Ingest {
       const bytes = new Uint8Array(buf);
       if (bytes.length === 0) return;
       const op = bytes[0];
-      if (op === BIN_AUDIO_OUT) this.tts.queue(bytes.subarray(1));
-      else if (op === BIN_AUDIO_SEGMENT_END) this.tts.play();
-      else if (op === BIN_MUSIC_DATA) void this.music.pushFrame(bytes.subarray(1));
+      /* TTS mute is enforced client-side: if the user muted mid-session, just drop the
+         incoming audio rather than telling DAWN to stop synthesizing (a Tier-C write the
+         read-mostly charter forbids). The connect-time tts_enabled handshake still lets
+         DAWN skip synthesis when we connect already muted. */
+      if (op === BIN_AUDIO_OUT) {
+         if (this.ttsEnabled) this.tts.queue(bytes.subarray(1));
+      } else if (op === BIN_AUDIO_SEGMENT_END) {
+         if (this.ttsEnabled) this.tts.play();
+      } else if (op === BIN_MUSIC_DATA) void this.music.pushFrame(bytes.subarray(1));
    }
 
    /* Music transport: a music_control write (Tier C, a deliberate user action). */
@@ -1417,8 +1423,10 @@ export class DawnIngest implements Ingest {
       };
    }
 
-   /* TTS on/off. Persisted; toggling live tells DAWN (set_tts_enabled) and stops any
-      audio in flight. The value also rides the next init/reconnect handshake. */
+   /* TTS on/off, enforced entirely client-side (read-mostly charter: no set_tts_enabled
+      write to DAWN). Persisted; muting stops audio in flight and onBinary drops further
+      incoming audio while muted. The preference rides the next init/reconnect handshake so
+      DAWN can skip synthesis when we connect already muted. */
    isTtsEnabled(): boolean {
       return this.ttsEnabled;
    }
@@ -1426,7 +1434,6 @@ export class DawnIngest implements Ingest {
    setTtsEnabled(on: boolean): void {
       this.ttsEnabled = on;
       localStorage.setItem(TTS_KEY, on ? "true" : "false");
-      this.send({ type: "set_tts_enabled", payload: { enabled: on } });
       if (!on) this.tts.stop();
    }
 
