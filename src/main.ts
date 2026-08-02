@@ -128,8 +128,8 @@ const calendarPanel = mountCalendarPanel(stage);
 /* The Home Assistant board: a standalone movable view showing DAWN's HA entity
    snapshot grouped by room, with interactive widgets. The ingest polls HA and feeds it
    the entity set + connection status; manual refresh forces a live re-poll; control
-   intents route to ingest.haControl (a deliberate user action, stubbed until DAWN's
-   ha_call_service handler lands - signal-map §9.4). */
+   intents route to ingest.haControl (a deliberate user action -> ha_call_service,
+   signal-map §9.4). */
 const haPanel = mountHAPanel(stage, {
    onRefresh: () => ingest.refreshHA(),
    onControl: (call) => ingest.haControl(call)

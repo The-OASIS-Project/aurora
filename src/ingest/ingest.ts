@@ -234,9 +234,9 @@ export interface Ingest {
    /* User asked the HA board for fresh state now (force a live re-poll instead of
       waiting for the interval). A read, like the other calendar/HA polls. */
    refreshHA(): void;
-   /* A deliberate user action from an HA widget (toggle/slider/dropdown). STUBBED
-      until DAWN ships the ha_call_service handler (signal-map §9.4 #8): logs the frame
-      it would send, does not mutate. See DawnIngest.haControl. */
+   /* A deliberate user action from an HA widget (toggle/slider/dropdown): sends
+      ha_call_service to DAWN (signal-map §9.4 #8), a Tier-C write treated like music
+      transport. The server reconciles by broadcasting fresh state. See DawnIngest.haControl. */
    haControl(call: HAServiceCall): void;
    stop(): void;
 }
