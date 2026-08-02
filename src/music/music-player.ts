@@ -13,6 +13,7 @@ import type { MusicAudio } from "../audio/music.ts";
 import type { MusicState, MusicSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { addCorners } from "../render/corners.ts";
+import { makeVisibility } from "../render/visibility.ts";
 import { PALETTE } from "../design/tokens.ts";
 
 export interface MusicPlayerOptions {
@@ -161,11 +162,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
 
    /* User visibility (Panels menu), persisted. `music-off` force-hides the player
       regardless of the track-presence fade. Defaults to shown. */
-   let visible = localStorage.getItem(VISIBLE_KEY) !== "false";
-   const applyVisible = (): void => {
-      el.classList.toggle("music-off", !visible);
-   };
-   applyVisible();
+   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "music-off" });
 
    /* Grab-and-move: the player is user-arrangeable, not glued to a corner. Drags
       start anywhere except the interactive controls; position is persisted. */
@@ -297,7 +294,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    /* --- per-frame: spectrum + progress ------------------------------------ */
    let lastCur = -1;
    const frame = (): void => {
-      if (!visible || !el.classList.contains("on")) return;
+      if (!vis.isVisible() || !el.classList.contains("on")) return;
 
       /* Progress: interpolate from the last authoritative position while playing. */
       const playing = Boolean(state?.playing && !state.paused);
@@ -320,12 +317,8 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       setPosition,
       setError,
       frame,
-      isVisible: () => visible,
-      setVisible: (on) => {
-         visible = on;
-         localStorage.setItem(VISIBLE_KEY, on ? "true" : "false");
-         applyVisible();
-      },
+      isVisible: vis.isVisible,
+      setVisible: vis.setVisible,
       destroy: () => {
          window.clearTimeout(volTimer);
          window.clearTimeout(errorTimer);

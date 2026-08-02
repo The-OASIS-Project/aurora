@@ -25,6 +25,7 @@ import type { HAAttributes, HAEntity, HAServiceCall, HAStatus, HASink } from "..
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
+import { makeVisibility } from "../render/visibility.ts";
 
 export interface HAPanelController extends HASink {
    /* User show/hide (Panels menu), independent of whether HA has any entities. */
@@ -156,11 +157,7 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       ignore: ".ha-refresh"
    });
 
-   let visible = localStorage.getItem(VISIBLE_KEY) !== "false";
-   const applyVisible = (): void => {
-      el.classList.toggle("ha-off", !visible);
-   };
-   applyVisible();
+   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "ha-off" });
 
    /* --- state ------------------------------------------------------------- */
    let entities: HAEntity[] = [];
@@ -542,12 +539,8 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
          status = s;
          render();
       },
-      isVisible: () => visible,
-      setVisible: (on) => {
-         visible = on;
-         localStorage.setItem(VISIBLE_KEY, on ? "true" : "false");
-         applyVisible();
-      },
+      isVisible: vis.isVisible,
+      setVisible: vis.setVisible,
       destroy: () => {
          refreshBtn.removeEventListener("click", onRefreshClick);
          card.destroy();

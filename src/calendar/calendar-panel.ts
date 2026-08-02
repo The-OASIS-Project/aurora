@@ -16,6 +16,7 @@ import type { CalendarEvent, CalendarInfo, CalendarSink } from "../ingest/ingest
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
+import { makeVisibility } from "../render/visibility.ts";
 import { safeTimeZone } from "../util/tz.ts";
 
 export interface CalendarPanelController extends CalendarSink {
@@ -85,11 +86,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
 
    /* User visibility (Panels menu), persisted. Always shown by default; when shown
       the card stays put even on an empty day ("Nothing scheduled"). */
-   let visible = localStorage.getItem(VISIBLE_KEY) !== "false";
-   const applyVisible = (): void => {
-      el.classList.toggle("calendar-off", !visible);
-   };
-   applyVisible();
+   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "calendar-off" });
 
    /* --- state ------------------------------------------------------------- */
    const colors = new Map<number, string>(); // calendarId -> raw CalDAV color
@@ -185,12 +182,8 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
          tz = safeTimeZone(zone) ?? "";
          render();
       },
-      isVisible: () => visible,
-      setVisible: (on) => {
-         visible = on;
-         localStorage.setItem(VISIBLE_KEY, on ? "true" : "false");
-         applyVisible();
-      },
+      isVisible: vis.isVisible,
+      setVisible: vis.setVisible,
       destroy: () => {
          card.destroy();
          disposeMovable();
