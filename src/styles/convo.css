@@ -152,6 +152,41 @@
    color: var(--text);
 }
 
+/* Tool-use markers: DAWN ran a tool this turn, shown as compact on-theme chips rather
+   than the raw tool_use JSON. A dim phosphor pill row (mono + uppercase like the role
+   labels, a machined cog glyph), indented to sit under the turn it belongs to. */
+.convo-tools {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 0.35rem;
+   padding-left: 0.8rem;
+   margin: 0.1rem 0 0.2rem;
+}
+.convo-tool {
+   display: inline-flex;
+   align-items: center;
+   gap: 0.34rem;
+   padding: 0.06rem 0.5rem 0.06rem 0.42rem;
+   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-size: var(--fs-label);
+   letter-spacing: 0.12em;
+   text-transform: uppercase;
+   color: color-mix(in srgb, var(--accent-glow) 75%, var(--text-dim));
+   background: color-mix(in srgb, var(--accent) 9%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+   border-radius: 999px;
+}
+.convo-tool-icon {
+   display: inline-flex;
+   color: var(--accent);
+   line-height: 1;
+}
+.convo-tool-icon::before {
+   /* monochrome cog, forced to text (not emoji) presentation */
+   content: "\2699\FE0E";
+   font-size: 0.92em;
+}
+
 /* Markdown inside an assistant body. */
 .convo-body p {
    margin: 0 0 0.55em;

@@ -15,7 +15,7 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus } from "../ingest/ingest.ts";
+import type { ActivityStatus, ConversationItem } from "../ingest/ingest.ts";
 import { renderMarkdown } from "./format.ts";
 
 export interface ConversationController {
@@ -24,8 +24,9 @@ export interface ConversationController {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string): void;
+   showToolUse(tools: string[]): void;
    setAssistantName(name: string): void;
-   loadHistory(msgs: { role: "user" | "assistant"; text: string }[]): void;
+   loadHistory(items: ConversationItem[]): void;
    clear(): void;
    setStatus(status: ActivityStatus | null): void;
    destroy(): void;
@@ -120,6 +121,31 @@ export function mountConversation(
       return msg;
    };
 
+   /* A tool-call marker: DAWN ran a tool this turn. Rendered as compact on-theme chips
+      (a cog glyph + the tool name) rather than the raw tool_use JSON. Tool names are
+      DAWN-supplied data, so bind via textContent. Not a conversational turn, so it
+      stays out of `messages` (the recede/hover logic keys on real turns). */
+   const appendToolChip = (tools: string[]): void => {
+      if (!tools.length) return;
+      win.classList.remove("empty");
+      const row = document.createElement("div");
+      row.className = "convo-tools";
+      for (const name of tools) {
+         const chip = document.createElement("span");
+         chip.className = "convo-tool";
+         const icon = document.createElement("span");
+         icon.className = "convo-tool-icon";
+         icon.setAttribute("aria-hidden", "true");
+         const label = document.createElement("span");
+         label.className = "convo-tool-label";
+         label.textContent = name;
+         chip.append(icon, label);
+         row.appendChild(chip);
+      }
+      scroll.appendChild(row);
+      scrollToEnd();
+   };
+
    /* Streaming markdown: re-render the growing reply at most once per frame so a
       fast token stream does not re-parse per token. */
    const scheduleRender = (): void => {
@@ -199,6 +225,11 @@ export function mountConversation(
       summon();
    };
 
+   const showToolUse = (tools: string[]): void => {
+      appendToolChip(tools);
+      summon();
+   };
+
    const setAssistantName = (name: string): void => {
       if (!name) return;
       assistantName = name;
@@ -240,7 +271,7 @@ export function mountConversation(
 
    /* Replace the transcript with a loaded conversation, then show it briefly so
       there is somewhere to start; it recedes on its own after the idle interval. */
-   const loadHistory = (msgs: { role: "user" | "assistant"; text: string }[]): void => {
+   const loadHistory = (items: ConversationItem[]): void => {
       if (raf) {
          cancelAnimationFrame(raf);
          raf = 0;
@@ -248,7 +279,12 @@ export function mountConversation(
       streaming = null;
       scroll.replaceChildren();
       messages.length = 0;
-      for (const m of msgs) if (m.text) appendMsg(m.role, m.text);
+      /* A turn can carry text, a tool chip, or both (spoke then called a tool) — render
+         the text first, then its tool chips, preserving transcript order. */
+      for (const it of items) {
+         if (it.text) appendMsg(it.role, it.text);
+         if (it.tools?.length) appendToolChip(it.tools);
+      }
       if (messages.length > 0) summon();
    };
 
@@ -307,6 +343,7 @@ export function mountConversation(
       appendDelta,
       endReply,
       showReply,
+      showToolUse,
       setAssistantName,
       loadHistory,
       clear,

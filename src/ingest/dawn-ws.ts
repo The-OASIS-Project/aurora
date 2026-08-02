@@ -267,6 +267,44 @@ function toHAEntity(e: Record<string, unknown>): HAEntity {
    };
 }
 
+/* DAWN's conversation history and transcripts carry raw Anthropic content blocks: a tool
+   call is an assistant turn whose `content` is a `[{type:"tool_use",...}]` array (as a JSON
+   string), and a tool result is a `user` turn holding `[{type:"tool_result",...}]`. Those
+   are protocol plumbing, not prose (DAWN started persisting them for reload-faithful history,
+   commit f0b0f23), so the reply surface must not print them verbatim. Interpret one message
+   into what the console should show: its human text and/or the tool names it invoked (as
+   chips). tool_result blocks are the data returning to the model - nothing to display. Mixed
+   turns (a text block beside a tool_use) return both. Returns null when there is nothing to
+   show (a pure tool_result, empty); a message that isn't a content-block array is plain text. */
+function interpretMessage(raw: string): { text?: string; tools?: string[] } | null {
+   const text = (raw ?? "").trim();
+   if (!text) return null;
+   /* Only structured content starts with [ or { ; a normal answer is plain text. */
+   if (text[0] !== "[" && text[0] !== "{") return { text: raw };
+   let parsed: unknown;
+   try {
+      parsed = JSON.parse(text);
+   } catch {
+      return { text: raw }; // not JSON, just text that happens to start with a bracket
+   }
+   const blocks = Array.isArray(parsed) ? parsed : [parsed];
+   /* If the elements don't look like content blocks (e.g. the user literally typed a JSON
+      array), it isn't tool plumbing - show it verbatim. */
+   const looksLikeBlocks = blocks.every(
+      (b) => b !== null && typeof b === "object" && typeof (b as { type?: unknown }).type === "string"
+   );
+   if (!looksLikeBlocks) return { text: raw };
+   const textParts: string[] = [];
+   const tools: string[] = [];
+   for (const b of blocks as Array<{ type?: string; text?: unknown; name?: unknown }>) {
+      if (b.type === "text" && typeof b.text === "string") textParts.push(b.text);
+      else if (b.type === "tool_use") tools.push(typeof b.name === "string" && b.name ? b.name : "tool");
+   }
+   const joined = textParts.join("").trim();
+   if (!joined && !tools.length) return null; // pure tool_result / unknown blocks -> skip
+   return { text: joined || undefined, tools: tools.length ? tools : undefined };
+}
+
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
@@ -694,7 +732,10 @@ export class DawnIngest implements Ingest {
             this.sinks.conversation.loadHistory(
                msgs
                   .filter((m) => m.role === "user" || m.role === "assistant")
-                  .map((m) => ({ role: m.role as "user" | "assistant", text: m.content }))
+                  .flatMap((m) => {
+                     const info = interpretMessage(m.content);
+                     return info ? [{ role: m.role as "user" | "assistant", ...info }] : [];
+                  })
             );
             break;
          }
@@ -1037,8 +1078,12 @@ export class DawnIngest implements Ingest {
             /* A complete (non-streamed or replayed) message. Show assistant text;
                persist a live (non-replay) one, since it never went through a stream. */
             if (p.role === "assistant" && typeof p.text === "string") {
-               this.sinks.conversation.showReply(p.text);
-               if (p.replay !== true) this.saveMessage("assistant", p.text);
+               const info = interpretMessage(p.text);
+               if (info?.text) {
+                  this.sinks.conversation.showReply(info.text);
+                  if (p.replay !== true) this.saveMessage("assistant", info.text);
+               }
+               if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
             }
             break;
 
@@ -1050,7 +1095,9 @@ export class DawnIngest implements Ingest {
                stream path, and echoing them here would double them. */
             const mp = p as { conversation_id?: number; role?: string; text?: string };
             if (mp.conversation_id !== this.convId && mp.role === "assistant" && mp.text) {
-               this.sinks.conversation.showReply(mp.text);
+               const info = interpretMessage(mp.text);
+               if (info?.text) this.sinks.conversation.showReply(info.text);
+               if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
             }
             break;
          }

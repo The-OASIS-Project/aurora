@@ -33,6 +33,15 @@ export interface ActivityStatus {
    tone?: "alert";
 }
 
+/* One entry in a loaded transcript: a text turn, a tool-use chip, or both (a turn
+   that spoke and then called a tool). `tools` is the tool names invoked, rendered as
+   compact chips instead of the raw tool_use JSON DAWN persists in history. */
+export interface ConversationItem {
+   role: "user" | "assistant";
+   text?: string;
+   tools?: string[];
+}
+
 /* What ingest can push to the conversation console (a passive view). Streaming
    replies arrive as startReply -> appendDelta* -> endReply; a complete message
    (non-streamed or replayed history) arrives as showReply. */
@@ -42,10 +51,12 @@ export interface ConversationSink {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string): void;
+   /* A tool call surfaced as a compact chip (the tool names), not raw tool_use JSON. */
+   showToolUse(tools: string[]): void;
    /* The configured assistant display name (ai_name), for the reply header. */
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */
-   loadHistory(msgs: { role: "user" | "assistant"; text: string }[]): void;
+   loadHistory(items: ConversationItem[]): void;
    /* A tool reset the conversation — empty the surface. */
    clear(): void;
    /* Current activity (thinking / using tools / ...) or null to clear it. */
