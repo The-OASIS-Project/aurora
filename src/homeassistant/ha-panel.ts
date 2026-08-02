@@ -24,6 +24,7 @@
 import type { HAAttributes, HAEntity, HAServiceCall, HAStatus, HASink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
+import { addCorners } from "../render/corners.ts";
 
 export interface HAPanelController extends HASink {
    /* User show/hide (Panels menu), independent of whether HA has any entities. */
@@ -111,11 +112,7 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
    const el = document.createElement("div");
    el.id = "homeassistant";
    el.className = "ha";
-   for (const c of ["tl", "tr", "bl", "br"]) {
-      const corner = document.createElement("span");
-      corner.className = `panel-corner ${c}`;
-      el.appendChild(corner);
-   }
+   addCorners(el);
 
    const head = document.createElement("div");
    head.className = "ha-head";

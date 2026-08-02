@@ -16,6 +16,7 @@
  */
 
 import type { ActivityStatus, ConversationItem } from "../ingest/ingest.ts";
+import { addCorners } from "../render/corners.ts";
 import { renderMarkdown } from "./format.ts";
 
 export interface ConversationController {
@@ -74,11 +75,7 @@ export function mountConversation(
 
    const win = document.createElement("div");
    win.className = "convo-window empty";
-   for (const c of ["tl", "tr", "bl", "br"]) {
-      const corner = document.createElement("span");
-      corner.className = `panel-corner ${c}`;
-      win.appendChild(corner);
-   }
+   addCorners(win);
    const scroll = document.createElement("div");
    scroll.className = "convo-scroll";
    win.appendChild(scroll);

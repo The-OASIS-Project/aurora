@@ -12,6 +12,7 @@
 import type { MusicAudio } from "../audio/music.ts";
 import type { MusicState, MusicSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
+import { addCorners } from "../render/corners.ts";
 import { PALETTE } from "../design/tokens.ts";
 
 export interface MusicPlayerOptions {
@@ -87,11 +88,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    const el = document.createElement("div");
    el.id = "music";
    el.className = "music";
-   for (const c of ["tl", "tr", "bl", "br"]) {
-      const corner = document.createElement("span");
-      corner.className = `panel-corner ${c}`;
-      el.appendChild(corner);
-   }
+   addCorners(el);
 
    const canvas = document.createElement("canvas");
    canvas.className = "music-viz";

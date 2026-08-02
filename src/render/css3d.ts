@@ -18,6 +18,7 @@
  */
 
 import { ANCHOR_SIZE_FRAC } from "../design/tokens.ts";
+import { addCorners } from "./corners.ts";
 import type { Renderer, RenderNode } from "./renderer.ts";
 
 /* Depth -> translateZ pixels. Back sits deep behind the screen plane; front
@@ -223,11 +224,7 @@ export class Css3dRenderer implements Renderer {
          root.addEventListener("pointerleave", () => this.onHover?.(n.id, false));
 
          /* Corner brackets: the HUD frame. */
-         for (const c of ["tl", "tr", "bl", "br"]) {
-            const corner = document.createElement("span");
-            corner.className = `panel-corner ${c}`;
-            root.appendChild(corner);
-         }
+         addCorners(root);
          /* Left indicator bar (glows on spike, colored by tone). */
          const ind = document.createElement("span");
          ind.className = "panel-ind";
@@ -333,11 +330,7 @@ export class Css3dRenderer implements Renderer {
          root.className = "dock-card";
          root.dataset.kind = n.kind;
          root.dataset.id = n.id; // read by the drag controller
-         for (const c of ["tl", "tr", "bl", "br"]) {
-            const corner = document.createElement("span");
-            corner.className = `panel-corner ${c}`;
-            root.appendChild(corner);
-         }
+         addCorners(root);
          const head = document.createElement("div");
          head.className = "panel-head";
          const dot = document.createElement("span");

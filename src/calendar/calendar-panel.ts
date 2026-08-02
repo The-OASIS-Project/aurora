@@ -15,6 +15,7 @@
 import type { CalendarEvent, CalendarInfo, CalendarSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
+import { addCorners } from "../render/corners.ts";
 import { safeTimeZone } from "../util/tz.ts";
 
 export interface CalendarPanelController extends CalendarSink {
@@ -53,11 +54,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
    const el = document.createElement("div");
    el.id = "calendar";
    el.className = "calendar";
-   for (const c of ["tl", "tr", "bl", "br"]) {
-      const corner = document.createElement("span");
-      corner.className = `panel-corner ${c}`;
-      el.appendChild(corner);
-   }
+   addCorners(el);
 
    const head = document.createElement("div");
    head.className = "calendar-head";
