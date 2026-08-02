@@ -53,7 +53,7 @@
 }
 .ha-status {
    flex: 1 1 auto;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.06em;
    color: var(--text-faint);
@@ -94,7 +94,7 @@
 }
 
 .ha-empty {
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.06em;
    color: var(--text-faint);
@@ -106,7 +106,7 @@
    display: flex;
    align-items: center;
    gap: 0.4rem;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.14em;
    text-transform: uppercase;
@@ -191,7 +191,7 @@
    white-space: nowrap;
 }
 .ha-state {
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.04em;
    color: var(--text-faint);
@@ -249,7 +249,7 @@
 .ha-select {
    align-self: center;
    justify-self: end;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.03em;
    color: var(--accent-glow);
@@ -282,7 +282,7 @@
 }
 .ha-slider-val {
    flex: 0 0 auto;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    color: var(--text-dim);
    min-width: 2.6em;

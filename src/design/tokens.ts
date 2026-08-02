@@ -105,6 +105,11 @@ export const TYPE: TypeScale = {
    display: "1.75rem"
 };
 
+/* The monospace family for instrument-readout text (data rows, labels, code). One
+   source of truth, mirrored to --font-mono like the palette/type, so a font swap is a
+   one-line change instead of a grep across every stylesheet. */
+export const FONT_MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
+
 /* The anchor canvas occupies this fraction of the smaller viewport dimension.
    Exported so the renderer can derive its panel keep-out from the SAME number
    rather than a duplicated constant that drifts (the reactor's real footprint). */
@@ -164,4 +169,5 @@ export function applyType(t: TypeScale = TYPE): void {
    root.setProperty("--fs-body", t.body);
    root.setProperty("--fs-lead", t.lead);
    root.setProperty("--fs-display", t.display);
+   root.setProperty("--font-mono", FONT_MONO);
 }

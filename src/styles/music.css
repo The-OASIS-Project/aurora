@@ -72,7 +72,7 @@
    text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .music-sub {
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.06em;
    color: var(--text-faint);
@@ -109,7 +109,7 @@
 .music-times {
    display: flex;
    justify-content: space-between;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.08em;
    color: var(--text-faint);

@@ -39,6 +39,10 @@
    --fs-body: 1rem;
    --fs-lead: 1.15rem;
    --fs-display: 1.75rem;
+
+   /* Monospace family: single source is FONT_MONO in tokens.ts, mirrored to --font-mono
+      by applyType() at boot. This is the pre-JS fallback (same pattern as above). */
+   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 * {
@@ -170,7 +174,7 @@ body.engaged #docks {
    inset: 0;
    z-index: 4;
    pointer-events: none;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
 }
 
 /* Screen-corner brackets: the outer frame of the whole instrument. */
@@ -277,7 +281,7 @@ body.engaged #docks {
    z-index: 6;
    display: flex;
    gap: 0.3rem;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
 }
 .menu-group {
    position: relative;
@@ -426,7 +430,7 @@ body.engaged #docks {
    opacity: 0.16; /* recede to calm; a new exchange restores it */
 }
 .reply-q {
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-data);
    letter-spacing: 0.06em;
    color: var(--text-faint);
@@ -587,7 +591,7 @@ body.engaged #docks {
 
 .composer-hint {
    flex-shrink: 0;
-   font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+   font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.24em;
    color: var(--text-faint);
