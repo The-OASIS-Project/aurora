@@ -506,8 +506,14 @@ export class DawnIngest implements Ingest {
       };
 
       ws.onmessage = (ev: MessageEvent): void => {
-         if (ev.data instanceof ArrayBuffer) this.onBinary(ev.data);
-         else if (typeof ev.data === "string") this.onFrame(ev.data);
+         /* One malformed frame must not take down the message pump: if a handler throws
+            on an unexpected payload, drop that frame and keep processing the stream. */
+         try {
+            if (ev.data instanceof ArrayBuffer) this.onBinary(ev.data);
+            else if (typeof ev.data === "string") this.onFrame(ev.data);
+         } catch (err) {
+            console.error("[dawn] frame handler threw (frame dropped):", err);
+         }
       };
 
       ws.onclose = (ev: CloseEvent): void => {
