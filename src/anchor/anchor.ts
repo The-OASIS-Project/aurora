@@ -24,7 +24,13 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
-import { PALETTE } from "../design/tokens.ts";
+import { PALETTE, hexToRgb01 } from "../design/tokens.ts";
+
+/* PALETTE.text as "r, g, b" (0-255) for canvas rgba() fills, derived from the token so
+   the crawl text tracks a palette retune instead of drifting from a hardcoded literal. */
+const TEXT_RGB = hexToRgb01(PALETTE.text)
+   .map((c) => Math.round(c * 255))
+   .join(", ");
 
 /* One gimbal gauge: an arc torus on a fixed tilt that spins about its normal. */
 interface Ring {
@@ -432,7 +438,7 @@ export class Anchor {
          /* Alpha falls off going up (into the distance) as a second cue on top of
             fog, so the top never looks like a hard cut. */
          const depth = (H - pad - y) / (H - pad * 2);
-         ctx.fillStyle = `rgba(202, 215, 213, ${(1 - depth * 0.55).toFixed(3)})`;
+         ctx.fillStyle = `rgba(${TEXT_RGB}, ${(1 - depth * 0.55).toFixed(3)})`;
          ctx.fillText(wrapped[i], W / 2, y);
          y -= lineH;
       }

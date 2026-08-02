@@ -12,6 +12,7 @@
 import type { MusicAudio } from "../audio/music.ts";
 import type { MusicState, MusicSink } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
+import { PALETTE } from "../design/tokens.ts";
 
 export interface MusicPlayerOptions {
    audio: MusicAudio;
@@ -181,7 +182,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    let posBase = 0; // last authoritative position (sec)
    let posAt = performance.now(); // when we learned it
    let dur = 0;
-   let vizColor = "#62F0E1";
+   let vizColor = PALETTE.accentGlow; // seed from the token; readAccent() then tracks the live var
    let errorTimer = 0;
 
    const readAccent = (): void => {
