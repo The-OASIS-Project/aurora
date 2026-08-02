@@ -985,7 +985,10 @@ export class DawnIngest implements Ingest {
             /* Alarms/timers/reminders. Surface an actively firing one; a ringing
                alarm keeps its event id so a dismiss can silence it on DAWN. Any
                other status (dismissed/snoozed/cancelled, incl. from another client)
-               clears our notice. */
+               clears our notice - but ONLY when it is about the event we are currently
+               showing. These frames are broadcast to all the user's clients, so a
+               status change for a DIFFERENT event (an unrelated timer that just
+               cancelled) must not wipe a still-ringing alarm's card. */
             const status = String(p.status ?? "");
             if (status === "ringing" || status === "fired") {
                /* Only `ringing` needs a real dismiss; `fired` already auto-dismissed. */
@@ -999,7 +1002,7 @@ export class DawnIngest implements Ingest {
                   x: 0.62,
                   y: 0.42
                });
-            } else {
+            } else if (this.schedulerEventId > 0 && Number(p.event_id ?? 0) === this.schedulerEventId) {
                this.schedulerEventId = 0;
                this.sinks.store.remove("scheduler");
             }
