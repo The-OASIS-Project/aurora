@@ -22,6 +22,7 @@ const THRESHOLD = 5; // px before a press becomes a drag (so taps still register
 const ZONE = 0.3; // a drop counts when the pointer is within this fraction of an edge
 
 export class PanelDrag {
+   private root: HTMLElement;
    private onTap: TapHandler;
    private onDrop: DropHandler;
    private onFloat?: FloatHandler;
@@ -47,6 +48,7 @@ export class PanelDrag {
       this.onFloat = opts.onFloat;
       this.indicator = document.createElement("div");
       this.indicator.className = "dock-drop-indicator";
+      this.root = root;
       root.addEventListener("pointerdown", this.onDown);
    }
 
@@ -168,6 +170,11 @@ export class PanelDrag {
    };
 
    dispose(): void {
+      this.root.removeEventListener("pointerdown", this.onDown);
+      /* Defensive: if disposed mid-drag, the window-level move/up listeners are still
+         attached (onUp removes them normally). */
+      window.removeEventListener("pointermove", this.onMove);
+      window.removeEventListener("pointerup", this.onUp);
       this.indicator.remove();
    }
 }
