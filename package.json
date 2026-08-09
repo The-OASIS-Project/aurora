@@ -1,9 +1,9 @@
 {
-   "name": "dawn-hero-ui",
+   "name": "aurora",
    "private": true,
    "version": "0.1.0",
    "type": "module",
-   "description": "DAWN Hero UI: a calm, dark, sci-fi ambient dashboard. Read-mostly client of DAWN's WebSocket streams.",
+   "description": "Aurora: a calm, dark, sci-fi ambient dashboard. Read-mostly client of DAWN's WebSocket streams.",
    "scripts": {
       "dev": "vite",
       "build": "tsc && vite build",

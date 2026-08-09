@@ -1,4 +1,4 @@
-# DAWN Hero UI
+# Aurora
 
 A calm, dark, JARVIS-style ambient dashboard for D.A.W.N. (the voice-AI assistant of
 The OASIS Project). Panels hover in depth, rest at a quiet summary, spike forward when
@@ -76,5 +76,5 @@ a refresh reconnects without asking again.
 
 ## Part of The OASIS Project
 
-DAWN Hero UI is a companion front-end for D.A.W.N. See the DAWN repository for the
+Aurora is a companion front-end for D.A.W.N. See the DAWN repository for the
 daemon, the WebSocket protocol, and the rest of the project.

@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-Guidance for AI assistants working in the DAWN Hero UI repository. Personality and
+Guidance for AI assistants working in the Aurora repository. Personality and
 global working style come from the user's own configuration; this file is the
 project-specific technical direction.
 
 ## Project overview
 
-DAWN Hero UI is a calm, read-mostly, JARVIS-style ambient dashboard for D.A.W.N. (part
+Aurora is a calm, read-mostly, JARVIS-style ambient dashboard for D.A.W.N. (part
 of The OASIS Project). Vanilla TypeScript + Vite, no web framework. It consumes DAWN's
 WebSocket broadcast streams and reflects state; it is not DAWN's admin panel. It runs on
 a PC or laptop, not the Jetson.

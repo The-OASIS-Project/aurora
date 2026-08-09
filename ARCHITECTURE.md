@@ -1,8 +1,8 @@
-# DAWN Hero UI - Architecture
+# Aurora - Architecture
 
 ## Overview
 
-DAWN Hero UI is a single-page, vanilla-TypeScript + Vite application. It renders a calm
+Aurora is a single-page, vanilla-TypeScript + Vite application. It renders a calm
 ambient dashboard from the data DAWN broadcasts over its WebSocket. There is no web
 framework by design: the architecture owns a thin, swappable render layer, and a
 framework would want to own rendering itself.
