@@ -23,8 +23,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 - **Read-mostly.** Do not add control paths that could depower DAWN. Writes are limited
   to deliberate user actions (chat submit, `set_session_llm`, `set_private`,
   `scheduler_action` dismiss, `new_conversation` plus the UI's own message
-  persistence, and music transport via `music_subscribe` / `music_control`). If a new
-  feature needs to write to DAWN, flag it and confirm first.
+  persistence, and music transport via `music_subscribe` / `music_control` plus the
+  `music_buffer` flow-control report, which is solicited telemetry the server clamps,
+  not a control verb). If a new feature needs to write to DAWN, flag it and confirm first.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
   (e.g. the music player) should be grab-to-move with a persisted position via
@@ -110,14 +111,28 @@ depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the an
   ring buffer). WebCodecs and AudioWorklet are **secure-context only**: `localhost` is
   fine over http, but a network origin (`http://<ip>:5273`) is not, so music silently
   will not decode there. The dev server therefore runs HTTPS (basicSsl). TTS is
-  unaffected (it uses plain `AudioContext`, which is not secure-context-gated). Frames arrive on the MAIN socket as `0x20` = `[uint16-LE len][opus]` when
-  no dedicated socket is attached (dropped under backpressure). For glitch-free audio,
-  `DawnIngest` also opens the **dedicated `dawn-music` socket** (port main+1, subprotocol
-  `dawn-music`, `{type:auth,token}` handshake with the session token); once DAWN sees it
-  it routes audio there, and on close it falls back to the main socket. In dev it is
-  proxied at **`/music-ws`** — NOT `/ws-music`, which the broader `/ws` proxy prefix
-  would capture and misroute to the main server (which has no `dawn-music` protocol and
-  no HTTP fallback, so the upgrade just hangs up).
+  unaffected (it uses plain `AudioContext`, which is not secure-context-gated). The
+  **dedicated `dawn-music` socket is the SOLE music transport** (port main+1, subprotocol
+  `dawn-music`, `{type:auth,token}` handshake with the session token): DAWN removed the
+  legacy main-socket music path, so if this socket never attaches there is no audio at
+  all (not a silent degrade) - `DawnIngest` surfaces "Music stream unavailable" after it
+  exhausts retries, and a later `music_control` re-arms them. Each frame still carries the
+  `0x20` opcode there: the daemon prepends `WS_BIN_MUSIC_DATA`, so the payload is
+  `[0x20][uint16-LE len][opus]` and `DawnIngest` MUST strip the leading opcode byte before
+  handing `[len][opus]` to the decoder (feeding the opcode into the length parser
+  misframes every packet -> WebCodecs "Decoding error", silent playback). In dev it is
+  proxied at **`/music-ws`** — NOT `/ws-music`, which the broader `/ws` proxy prefix would
+  capture and misroute to the main server (which has no `dawn-music` protocol and no HTTP
+  fallback, so the upgrade just hangs up).
+- **Music uses closed-loop buffer flow control.** DAWN paces music to hold a ~2s cushion
+  on the client (so a TTS CPU burst can't drain it to a stutter), but only if the client
+  reports its buffered depth back up the music socket as `{type:"music_buffer",
+  buffered_ms}` (~32ms cadence). Report worklet-ring depth PLUS the WebCodecs
+  `decodeQueueSize * 20ms` backlog, else the server reads "empty" and floods the decoder.
+  Stop reporting and the server falls back to real-time pacing (the old stutter). A natural
+  end-of-track advance is tagged `advance:"auto"` on `music_state` and is gapless (do NOT
+  flush; user skips/seeks are untagged and DO flush). The server's reported position runs
+  ~2s ahead of audible, so subtract the buffered depth for the progress bar.
 - **Music `volume` is server-stored only.** `music_control volume` sets a value DAWN
   echoes in `music_state` but never applies to the audio, so real gain/mute is a
   client-side Web Audio `GainNode` (the player owns it). `repeat_mode` is an int (0/1/2);

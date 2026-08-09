@@ -48,12 +48,16 @@ import {
    type Reasoning
 } from "../model/model.ts";
 
-/* Server -> client binary opcodes (webui_server.h). Audio is a 1-byte type prefix
-   then raw payload. We consume the TTS output frames and the music stream. */
+/* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
+   type prefix then payload. TTS rides the MAIN socket; music rides ONLY the dedicated
+   dawn-music socket (the legacy main-socket music path was removed server-side), but
+   it still carries the 0x20 opcode there - the daemon prepends WS_BIN_MUSIC_DATA to
+   every dedicated-socket frame, so the payload is [0x20][uint16-LE len][opus]. */
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
-const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] run)
+const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after the opcode)
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
+const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
@@ -308,14 +312,20 @@ function interpretMessage(raw: string): { text?: string; tools?: string[] } | nu
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
-   /* Dedicated dawn-music stream socket (main port + 1, proxied at /music-ws).
-      DAWN routes audio here once it authenticates, keeping it off the control
-      channel; if it never attaches, audio just keeps arriving on the main socket. */
+   /* Dedicated dawn-music stream socket (main port + 1, proxied at /music-ws). This is
+      the SOLE music transport: DAWN removed the legacy main-socket 0x20 fallback, so if
+      this socket never attaches there is no audio at all (not a silent degrade). */
    private musicWs: WebSocket | null = null;
    private musicWsTimer = 0;
    private musicWsFails = 0;
+   private musicWsAuthed = false; // auth_ok seen -> the socket may carry buffer reports
+   private musicUnavailable = false; // surfaced "stream unavailable" after exhausting retries
    private musicWsToken = ""; // token the current music socket is (re)connecting with
    private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
+   private prevMusicIndex: number | null = null; // last queue index seen (track-change detect)
+   private prevMusicPos = 0; // last raw server position seen (from state OR position ticks)
+   private prevMusicPosAt = 0; // performance.now() when prevMusicPos was captured
+   private prevMusicPlaying = false; // was playback advancing at prevMusicPos (for the projection)
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
@@ -382,6 +392,9 @@ export class DawnIngest implements Ingest {
       this.tts = new TtsPlayback({ onLevels: (bins) => this.sinks.reactor.setLevels(bins) });
       /* Surface a fatal music-audio problem (e.g. no secure context) in the player. */
       this.music.setErrorHandler((msg) => this.sinks.music.setError(msg));
+      /* Closed-loop flow control: report our buffered depth up the music socket so the
+         server can hold its ~2 s cushion (see MusicAudio). No-op until the socket auths. */
+      this.music.setBufferReporter((ms) => this.musicReport(ms));
       /* Surface the persisted token-rate EMA immediately (survives refresh). */
       if (this.rateEma > 0) {
          this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
@@ -520,6 +533,9 @@ export class DawnIngest implements Ingest {
          this.ws = null;
          this.stopMetrics();
          this.closeMusicStream();
+         /* Drop the seek-detection baseline: a resume may land at a different track/
+            position, and a stale baseline would misread that first music_state as a seek. */
+         this.prevMusicIndex = null;
          this.sinks.reactor.setState("idle");
          if (this.wantConnected) {
             /* An unexpected drop while we still want to be connected: auto-reconnect
@@ -574,6 +590,7 @@ export class DawnIngest implements Ingest {
             if (typeof p.token === "string") {
                localStorage.setItem(TOKEN_KEY, p.token);
                this.musicWsFails = 0;
+               this.musicUnavailable = false; // fresh connection re-arms the give-up notice
             }
             break;
 
@@ -805,13 +822,55 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "music_state":
-            this.sinks.music.setState(toMusicState(p));
-            break;
+         case "music_state": {
+            const st = toMusicState(p);
+            /* Flush the decode buffer on a USER-initiated track change or seek so the new
+               audio starts at once instead of after the old lead drains. A natural end-of-
+               track advance is tagged advance:"auto" by the server (gapless: the next
+               track is already in our buffered lead) - do NOT flush that, or we truncate
+               ~2 s of good audio.
 
-         case "music_position":
-            this.sinks.music.setPosition(Number(p.position_sec ?? 0), Number(p.duration_sec ?? 0));
+               DAWN re-emits an untagged music_state on EVERY control (volume, pause,
+               shuffle, repeat, ...) carrying the current position, and sends no music_state
+               during steady playback (only music_position ticks). So a real seek can't be
+               told from a routine control echo by a raw position delta - that would flush
+               good audio on a plain volume nudge. Instead compare the reported position to
+               where playback should be by now (last known position projected forward by
+               wall-clock while playing); only a genuine jump past a small tolerance is a
+               seek. The baseline is refreshed by both state and position frames below. */
+            const now = performance.now();
+            const elapsedSec = this.prevMusicPlaying ? Math.max(0, (now - this.prevMusicPosAt) / 1000) : 0;
+            const projected = this.prevMusicPos + elapsedSec;
+            const seen = this.prevMusicIndex !== null;
+            const nowPlaying = st.playing && !st.paused;
+            const autoAdvance = p.advance === "auto";
+            const trackChanged = seen && st.queueIndex !== this.prevMusicIndex;
+            const seeked = seen && Math.abs(st.positionSec - projected) > MUSIC_SEEK_TOLERANCE_SEC;
+            /* Stop (not pause) resets the server position to 0, so its buffered lead is
+               stale - flush it. Pause keeps position, so it is NOT a flush (see below). */
+            const stopped = seen && this.prevMusicPlaying && !nowPlaying && !st.paused;
+            /* Pause freezes output while KEEPING the buffered lead (seamless resume, no
+               ~2 s tail after the press and no ~2 s skip on resume); play resumes it. */
+            this.music.setPaused(st.paused === true);
+            if (stopped || ((trackChanged || seeked) && !autoAdvance)) this.music.flush();
+            this.prevMusicIndex = st.queueIndex;
+            this.prevMusicPos = st.positionSec;
+            this.prevMusicPosAt = now;
+            this.prevMusicPlaying = nowPlaying;
+            this.sinks.music.setState({ ...st, positionSec: this.music.audiblePosition(st.positionSec) });
             break;
+         }
+
+         case "music_position": {
+            const posSec = Number(p.position_sec ?? 0);
+            /* Keep the seek-detection baseline fresh: position ticks (~1/s) are the only
+               frames during steady playback, so without this the projection above would
+               drift a whole track's length between control echoes. */
+            this.prevMusicPos = posSec;
+            this.prevMusicPosAt = performance.now();
+            this.sinks.music.setPosition(this.music.audiblePosition(posSec), Number(p.duration_sec ?? 0));
+            break;
+         }
 
          case "music_error":
             this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
@@ -1160,8 +1219,9 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.clear();
    }
 
-   /* Binary frame: a 1-byte opcode then payload. TTS chunks accumulate and the
-      segment-end plays them; music frames stream straight into the Opus decoder. */
+   /* Binary frame on the MAIN socket: a 1-byte opcode then payload. Only TTS arrives
+      here now - chunks accumulate and the segment-end plays them. Music has its own
+      dedicated socket (see openMusicStream) and never rides the main socket. */
    private onBinary(buf: ArrayBuffer): void {
       const bytes = new Uint8Array(buf);
       if (bytes.length === 0) return;
@@ -1174,12 +1234,36 @@ export class DawnIngest implements Ingest {
          if (this.ttsEnabled) this.tts.queue(bytes.subarray(1));
       } else if (op === BIN_AUDIO_SEGMENT_END) {
          if (this.ttsEnabled) this.tts.play();
-      } else if (op === BIN_MUSIC_DATA) void this.music.pushFrame(bytes.subarray(1));
+      }
    }
 
    /* Music transport: a music_control write (Tier C, a deliberate user action). */
    musicControl(action: string, params: Record<string, unknown> = {}): void {
       this.send({ type: "music_control", payload: { action, ...params } });
+      /* The dedicated socket is the only audio path now, so a control the user issued
+         while it's down (retries exhausted) would play silently. Treat the action as
+         fresh intent: re-arm the retry counter and reconnect so "press play again"
+         recovers. Cheap - openMusicStream is idempotent when a live socket exists. */
+      if (this.musicEnabled && !this.musicWs) {
+         const token = localStorage.getItem(TOKEN_KEY);
+         if (token) {
+            this.musicWsFails = 0;
+            this.musicUnavailable = false;
+            this.openMusicStream(token);
+         }
+      }
+   }
+
+   /* Closed-loop flow-control report up the music socket (from MusicAudio, ~32 ms).
+      Only meaningful once auth_ok; the server ignores anything else post-auth. */
+   private musicReport(bufferedMs: number): void {
+      const ws = this.musicWs;
+      if (!ws || !this.musicWsAuthed || ws.readyState !== WebSocket.OPEN) return;
+      try {
+         ws.send(JSON.stringify({ type: "music_buffer", buffered_ms: Math.round(bufferedMs) }));
+      } catch {
+         /* socket tearing down; reports are periodic, so dropping one is fine */
+      }
    }
 
    /* Force a live HA re-poll now (the board's manual refresh). ha_refresh_entities
@@ -1228,14 +1312,15 @@ export class DawnIngest implements Ingest {
       this.calendarDebounce = window.setTimeout(() => this.requestCalendar(), 500);
    }
 
-   /* Open the dedicated dawn-music stream socket and authenticate it with the
-      session token. Once DAWN sees it (set_stream_wsi), it sends music audio here
-      instead of on the main socket, keeping high-bandwidth audio off the control
-      channel (the main socket drops music frames under backpressure). Frames use the
-      same [0x20][uint16-LE len][opus] framing. Purely an enhancement: if this never
-      attaches, audio keeps flowing on the main socket. */
+   /* Open the dedicated dawn-music stream socket and authenticate it with the session
+      token. Once DAWN sees it (set_stream_wsi) it streams music audio here, each frame
+      as [0x20][uint16-LE len][opus] (the daemon prepends the WS_BIN_MUSIC_DATA opcode).
+      This is the SOLE music transport: DAWN removed the legacy main-socket path, so a
+      failure to attach means no audio, not a degrade - hence the give-up in
+      scheduleMusicReconnect surfaces an error. */
    private openMusicStream(token: string): void {
       if (!this.wantConnected || !token) return;
+      this.musicWsAuthed = false;
       /* Idempotent: DAWN can send the `session` frame more than once per connect, and
          we must not tear down a live socket each time (rapid reopen can race the
          server's stream registration). Only (re)open if there is no live socket for
@@ -1263,7 +1348,10 @@ export class DawnIngest implements Ingest {
          if (ev.data instanceof ArrayBuffer) {
             const bytes = new Uint8Array(ev.data);
             if (bytes.length === 0) return;
-            /* Same framing as the main socket, opcode-prefixed. */
+            /* Frame is [0x20][uint16-LE len][opus]: the daemon prepends the
+               WS_BIN_MUSIC_DATA opcode to every dedicated-socket frame. Strip it so the
+               decoder gets [len][opus]. (bytes[0] is always the opcode, never opus data,
+               so this is unconditional in practice; guard defensively.) */
             void this.music.pushFrame(bytes[0] === BIN_MUSIC_DATA ? bytes.subarray(1) : bytes);
             return;
          }
@@ -1271,13 +1359,18 @@ export class DawnIngest implements Ingest {
             const m = JSON.parse(String(ev.data)) as { type?: string; reason?: string };
             if (m.type === "auth_ok") {
                this.musicWsFails = 0; // attached; audio now streams here
+               this.musicWsAuthed = true;
+               this.musicUnavailable = false;
                /* Debug, not info: an idle socket idle-times-out and reconnects to
                   stay ready, so at info level this would spam every ~30s when nothing
                   is playing. Playback keeps the socket alive (verified: stable). */
                console.debug("[dawn] music stream attached (dedicated socket)");
             } else if (m.type === "auth_failed") {
+               /* No main-socket fallback exists anymore; a reconnect is the only recovery. */
                console.warn("[dawn] music stream auth failed:", m.reason);
-               this.closeMusicStream(); // fall back to the main socket
+               this.musicWsAuthed = false;
+               this.closeMusicStream();
+               this.scheduleMusicReconnect();
             }
          } catch {
             /* ignore non-JSON text */
@@ -1294,7 +1387,18 @@ export class DawnIngest implements Ingest {
    }
 
    private scheduleMusicReconnect(): void {
-      if (!this.wantConnected || !this.musicEnabled || this.musicWsFails >= MUSIC_WS_MAX_FAILS) return;
+      if (!this.wantConnected || !this.musicEnabled) return;
+      if (this.musicWsFails >= MUSIC_WS_MAX_FAILS) {
+         /* This socket is the only music transport, so exhausting retries means there
+            is no audio path at all - surface it once (not silent silence). A later
+            music_control re-arms the retries (see musicControl). auth_ok clears it. */
+         if (!this.musicUnavailable) {
+            this.musicUnavailable = true;
+            this.sinks.music.setError("Music stream unavailable");
+            console.warn("[dawn] music stream: giving up after", MUSIC_WS_MAX_FAILS, "attempts");
+         }
+         return;
+      }
       const token = localStorage.getItem(TOKEN_KEY);
       if (!token) return;
       this.musicWsFails++;
@@ -1305,6 +1409,7 @@ export class DawnIngest implements Ingest {
 
    private closeMusicStream(): void {
       window.clearTimeout(this.musicWsTimer);
+      this.musicWsAuthed = false;
       const ws = this.musicWs;
       if (!ws) return;
       this.musicWs = null;

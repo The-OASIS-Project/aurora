@@ -14,7 +14,10 @@ class MusicProcessor extends AudioWorkletProcessor {
       this.writePos = 0;
       this.readPos = 0;
       this.available = 0;
-      this.reportInterval = 12; // ~256 ms between fill reports
+      // process() runs per 128-sample render quantum (~2.67 ms at 48 kHz), so 12
+      // calls is ~32 ms - the cadence the server's flow-control pacer wants for a
+      // ~2 s buffer target (percent alone quantizes too coarsely for that).
+      this.reportInterval = 12;
       this.reportCounter = 0;
 
       this.port.onmessage = (e) => {
@@ -24,7 +27,8 @@ class MusicProcessor extends AudioWorkletProcessor {
             this.writePos = 0;
             this.readPos = 0;
             this.available = 0;
-            this.port.postMessage({ type: "buffer", percent: 0 });
+            // Report the drain immediately (bufferedMs 0 lets the server refill fast).
+            this.port.postMessage({ type: "buffer", percent: 0, bufferedMs: 0 });
          }
       };
    }
@@ -65,9 +69,12 @@ class MusicProcessor extends AudioWorkletProcessor {
 
       if (++this.reportCounter >= this.reportInterval) {
          this.reportCounter = 0;
+         // percent (of the 10 s ring) drives the UI; bufferedMs is the absolute
+         // depth the server's closed-loop pacer needs to hold its ~2 s cushion.
          this.port.postMessage({
             type: "buffer",
-            percent: Math.round((this.available / this.bufferSize) * 100)
+            percent: Math.round((this.available / this.bufferSize) * 100),
+            bufferedMs: Math.round((this.available / sampleRate) * 1000)
          });
       }
       return true;
