@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+
+// App version, read from package.json at config time and injected as a global
+// (__APP_VERSION__) so the About dialog can show it without a runtime JSON import.
+const APP_VERSION = JSON.parse(
+   readFileSync(new URL("./package.json", import.meta.url), "utf-8")
+).version as string;
 
 // Minimal by design. Vite is the "make" of this project: one command to compile
 // TypeScript and serve with live-reload. The render layer is hand-rolled, so
@@ -41,6 +48,7 @@ function stripCookieSecurity(setCookie: string[]): string[] {
 }
 
 export default defineConfig({
+   define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
    plugins: [basicSsl()],
    server: {
       host: true,

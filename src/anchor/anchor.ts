@@ -14,8 +14,9 @@
  *     ARCS with an orbiting head, not decorative full circles.
  *
  * Signal vocabulary is kept: bar ring = voice FFT, arc rings = throughput /
- * hesitation. Hooks (setLevels/setStrain/setHesitation) are stubbed for wiring
- * to DAWN later. Colors come from tokens.ts. Three.js lives ONLY here.
+ * hesitation. Hooks (setLevels/setStrain/setHesitation) are driven live by DAWN
+ * (TTS spectrum, token rate, time-to-first-token). Colors come from tokens.ts.
+ * Three.js lives ONLY here.
  */
 
 import * as THREE from "three";
@@ -126,6 +127,10 @@ export class Anchor {
    private coreColor = new THREE.Color(PALETTE.accent);
    private coreGlow = new THREE.Color(PALETTE.accentGlow);
    private lastTime = 0;
+   /* Hesitation (0..1) from DAWN's time-to-first-token, eased toward its target. It
+      scales the outer ring's jitter amplitude in frame() (gated by gauge activity). */
+   private hesitation = 0;
+   private hesitationTarget = 0;
 
    /* Ambient background: a dim drifting particle field plus a few large, very
       faint haze clouds behind the reactor, in the same scene so the full-screen
@@ -399,11 +404,14 @@ export class Anchor {
       this.p.pulseRate += (tp.pulseRate - this.p.pulseRate) * k;
       this.p.gaugeGain += (tp.gaugeGain - this.p.gaugeGain) * k;
       this.p.hue += (tp.hue - this.p.hue) * k;
+      this.hesitation += (this.hesitationTarget - this.hesitation) * k;
 
-      /* Gauge arcs: speed and brightness rise with gauge activity (thinking);
-         the outer ring gets a hesitation jitter. Incremental so speed can vary
-         without the angle jumping. */
-      const jitter = Math.sin(mt * 17) * 0.05 * Math.max(0, this.p.gaugeGain - 0.4);
+      /* Gauge arcs: speed and brightness rise with gauge activity (thinking); the outer
+         ring gets a hesitation jitter whose amplitude rises with DAWN's real hesitation
+         (time-to-first-token), still gated by gauge activity so an idle ring never
+         wobbles. Incremental so speed can vary without the angle jumping. */
+      const jitter =
+         Math.sin(mt * 17) * 0.05 * Math.max(0, this.p.gaugeGain - 0.4) * (1 + 2 * this.hesitation);
       this.rings.forEach((r, i) => {
          r.angle += dt * motion * r.spin * (0.7 + this.p.gaugeGain * 0.95);
          r.mesh.rotation.z = r.angle + (i === 1 ? jitter : 0);
@@ -502,7 +510,7 @@ export class Anchor {
       return sum / BAR_COUNT;
    }
 
-   /* --- Signal hooks (stubbed in v1, wired to DAWN later) -------------------- */
+   /* --- Signal hooks (driven live by DAWN via the reactor sink) -------------- */
 
    setLevels(bins: Float32Array | null): void {
       this.levels = bins;
@@ -513,8 +521,10 @@ export class Anchor {
       if (c) c.copy(this.cAccent).lerp(this.cAlert, clamp01(load));
    }
 
-   setHesitation(_load: number): void {
-      /* TODO(dawn-wire): apply jitter amplitude to the outer ring. */
+   setHesitation(load: number): void {
+      /* Drives the outer ring's jitter amplitude in frame(), gated by gauge activity so
+         a stale reading can't wobble an idle ring. */
+      this.hesitationTarget = clamp01(load);
    }
 }
 

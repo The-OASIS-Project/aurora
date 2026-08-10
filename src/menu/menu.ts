@@ -27,6 +27,10 @@ export interface MenuOptions {
    displayToggles: MenuToggle[];
    /* Start a fresh conversation (clears context + transcript). Optional. */
    onNewChat?: () => void;
+   /* System menu actions: open the Connection and About dialogs. Optional; a missing
+      one renders its row as an inert stub. */
+   onConnection?: () => void;
+   onAbout?: () => void;
    /* LLM selection surface (MODEL menu). Optional. */
    model?: ModelControl;
 }
@@ -64,13 +68,13 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
          onChange: () => t.toggle()
       }))
    );
-   /* System: a real "New Chat" action (when wired) plus not-yet-built stubs. */
+   /* System: New Chat plus the Connection and About dialogs (each active when wired). */
    const system = actionMenu(
       "System",
       () => [
          ...(opts.onNewChat ? [{ label: "New Chat", onClick: opts.onNewChat }] : []),
-         { label: "Connection" },
-         { label: "About D.A.W.N." }
+         { label: "Connection", onClick: opts.onConnection },
+         { label: "About D.A.W.N.", onClick: opts.onAbout }
       ],
       closeAll
    );

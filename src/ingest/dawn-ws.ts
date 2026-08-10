@@ -322,6 +322,9 @@ export class DawnIngest implements Ingest {
    private musicUnavailable = false; // surfaced "stream unavailable" after exhausting retries
    private musicWsToken = ""; // token the current music socket is (re)connecting with
    private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
+   private dawnVersion = ""; // daemon version if a frame advertises it (feature-detected; else "")
+   private lastStatus: LinkStatus = "disconnected"; // last emitted status, for the Connection dialog
+   private lastDetail = "";
    private prevMusicIndex: number | null = null; // last queue index seen (track-change detect)
    private prevMusicPos = 0; // last raw server position seen (from state OR position ticks)
    private prevMusicPosAt = 0; // performance.now() when prevMusicPos was captured
@@ -601,6 +604,7 @@ export class DawnIngest implements Ingest {
                non-proxied client; we always reach it through the /music-ws dev proxy.)
                Older servers omit music_enabled -> the field stays true and we open. */
             this.musicEnabled = p.music_enabled !== false;
+            if (typeof p.version === "string") this.dawnVersion = p.version;
             const token = localStorage.getItem(TOKEN_KEY);
             if (this.musicEnabled && token) this.openMusicStream(token);
             else if (!this.musicEnabled) this.closeMusicStream();
@@ -608,7 +612,9 @@ export class DawnIngest implements Ingest {
          }
 
          case "server_features":
-            /* Handshake acknowledgement; nothing to render. */
+            /* Handshake acknowledgement. Nothing to render, but pick up the daemon
+               version if this server advertises it (feature-detected; older ones omit). */
+            if (typeof p.version === "string") this.dawnVersion = p.version;
             break;
 
          case "force_logout":
@@ -1082,6 +1088,10 @@ export class DawnIngest implements Ingest {
                instantaneous rate). Strain normalized against a brisk ~50 tok/s. */
             const rate = Number(p.token_rate ?? 0);
             this.sinks.reactor.setStrain(Math.min(rate / 50, 1));
+            /* ttft_ms -> hesitation (the pause before the first token), full at ~2s. Only
+               when reported (>0); metrics_update sometimes omits it mid-generation. */
+            const ttft = Number(p.ttft_ms ?? 0);
+            if (ttft > 0) this.sinks.reactor.setHesitation(Math.min(ttft / 2000, 1));
             if (rate > 0) {
                this.rateEma =
                   this.rateEma > 0 ? this.rateEma + RATE_EMA_ALPHA * (rate - this.rateEma) : rate;
@@ -1624,7 +1634,21 @@ export class DawnIngest implements Ingest {
    }
 
    private emit(status: LinkStatus, detail?: string): void {
+      this.lastStatus = status;
+      this.lastDetail = detail ?? "";
       this.status(status, detail);
+   }
+
+   /* Snapshot for the System > Connection dialog: current link state, the origin the
+      browser talks to (DAWN rides the same-origin proxy), and the daemon version if it
+      advertised one (else ""). */
+   getConnectionInfo(): { status: LinkStatus; detail: string; server: string; dawnVersion: string } {
+      return {
+         status: this.lastStatus,
+         detail: this.lastDetail,
+         server: window.location.origin,
+         dawnVersion: this.dawnVersion
+      };
    }
 
    private send(msg: object): void {

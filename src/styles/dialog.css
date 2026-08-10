@@ -1,0 +1,153 @@
+/*
+ * Modal dialog: a frosted phosphor card over a dimmed backdrop, same observatory
+ * language as the login overlay. Used by the System menu (Connection, About). All
+ * color comes from the design tokens (mirrored to CSS custom properties).
+ */
+
+.dialog-overlay {
+   position: fixed;
+   inset: 0;
+   z-index: 1100;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   background: color-mix(in srgb, var(--ground) 68%, transparent);
+   backdrop-filter: blur(6px);
+   -webkit-backdrop-filter: blur(6px);
+}
+
+.dialog-card {
+   position: relative;
+   display: flex;
+   flex-direction: column;
+   gap: 0.85rem;
+   width: min(22rem, 84vw);
+   padding: 1.7rem 1.6rem 1.5rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 46%, transparent) 88%
+   );
+   backdrop-filter: blur(8px);
+   -webkit-backdrop-filter: blur(8px);
+   box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+      0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+   font-family: var(--font-mono);
+}
+
+.dialog-title {
+   font-size: var(--fs-lead);
+   letter-spacing: 0.38em;
+   text-indent: 0.38em;
+   color: var(--accent-glow);
+   text-shadow: 0 0 12px color-mix(in srgb, var(--accent-glow) 40%, transparent);
+}
+
+.dialog-sub {
+   margin-top: -0.4rem;
+   font-size: var(--fs-label);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+
+.dialog-close {
+   position: absolute;
+   top: 0.45rem;
+   right: 0.6rem;
+   width: 1.7rem;
+   height: 1.7rem;
+   padding: 0;
+   border: none;
+   background: none;
+   color: var(--text-dim);
+   font-size: 1.35rem;
+   line-height: 1;
+   cursor: pointer;
+}
+.dialog-close:hover {
+   color: var(--accent);
+}
+
+.dialog-rows {
+   display: grid;
+   grid-template-columns: auto 1fr;
+   gap: 0.4rem 1.1rem;
+   margin: 0;
+   font-size: var(--fs-data);
+}
+.dialog-rows dt {
+   align-self: center;
+   color: var(--text-faint);
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+}
+.dialog-rows dd {
+   display: flex;
+   align-items: center;
+   gap: 0.45rem;
+   margin: 0;
+   color: var(--text);
+   overflow-wrap: anywhere;
+}
+
+.dialog-dot {
+   flex: none;
+   width: 0.55rem;
+   height: 0.55rem;
+   border-radius: 50%;
+   background: var(--text-dim);
+}
+.dialog-dot-ok {
+   background: var(--accent);
+   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.dialog-dot-alert {
+   background: var(--alert);
+   box-shadow: 0 0 8px color-mix(in srgb, var(--alert) 60%, transparent);
+}
+
+.dialog-link {
+   color: var(--accent);
+   font-size: var(--fs-label);
+   letter-spacing: 0.1em;
+   text-decoration: none;
+}
+.dialog-link:hover {
+   text-decoration: underline;
+}
+
+.dialog-actions {
+   display: flex;
+   justify-content: flex-end;
+   gap: 0.5rem;
+   margin-top: 0.3rem;
+}
+.dialog-btn {
+   padding: 0.45rem 0.9rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--text) 6%, transparent);
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+}
+.dialog-btn:hover {
+   color: var(--text);
+   border-color: color-mix(in srgb, var(--text) 32%, transparent);
+}
+.dialog-btn-danger {
+   color: var(--alert);
+   background: color-mix(in srgb, var(--alert) 10%, transparent);
+   border-color: color-mix(in srgb, var(--alert) 45%, transparent);
+}
+.dialog-btn-danger:hover {
+   border-color: color-mix(in srgb, var(--alert) 70%, transparent);
+}

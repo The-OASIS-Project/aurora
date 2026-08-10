@@ -27,6 +27,7 @@ import "./styles/list-card.css";
 import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
+import "./styles/dialog.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import { Store } from "./state/store.ts";
@@ -39,6 +40,7 @@ import type { Ingest } from "./ingest/ingest.ts";
 import { mountHud } from "./hud/hud.ts";
 import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
+import { openDialog } from "./menu/dialog.ts";
 import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
@@ -135,8 +137,48 @@ const haPanel = mountHAPanel(stage, {
    onControl: (call) => ingest.haControl(call)
 });
 
+/* System > About: what this is, the daemon + interface versions, and the project link.
+   DAWN's version is feature-detected (shows "—" until the daemon advertises one). */
+const openAbout = (): void => {
+   const dawnVer = dawn.getConnectionInfo().dawnVersion;
+   openDialog({
+      title: "D.A.W.N.",
+      sub: "The OASIS Project",
+      rows: [
+         { label: "DAWN", value: dawnVer ? `v${dawnVer}` : "—" },
+         { label: "Interface", value: `Aurora v${__APP_VERSION__}` }
+      ],
+      link: { label: "oasisproject.net", href: "https://oasisproject.net/" }
+   });
+};
+
+/* System > Connection: live link state, the server the browser talks to, and a
+   Disconnect action (drops back to the login overlay via the status stream). */
+const openConnection = (): void => {
+   const info = dawn.getConnectionInfo();
+   const linked = info.status === "connected";
+   const statusLabel = linked
+      ? "Linked"
+      : info.status.charAt(0).toUpperCase() + info.status.slice(1);
+   openDialog({
+      title: "Connection",
+      rows: [
+         {
+            label: "Status",
+            value: statusLabel,
+            tone: linked ? "ok" : info.status === "error" ? "alert" : undefined
+         },
+         { label: "Server", value: info.server },
+         ...(info.detail ? [{ label: "Detail", value: info.detail }] : [])
+      ],
+      actions: linked ? [{ label: "Disconnect", onClick: () => dawn.disconnect(), danger: true }] : []
+   });
+};
+
 const menu = mountMenu(stage, {
    onNewChat: () => newChatHook.fire(),
+   onConnection: openConnection,
+   onAbout: openAbout,
    model: dawn.getModelControl(),
    /* Store-backed panels, plus the standalone calendar + music views appended. */
    getPanels: () => [
