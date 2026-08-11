@@ -852,6 +852,10 @@ export class DawnIngest implements Ingest {
                      return info ? [{ role: m.role as "user" | "assistant", ...info }] : [];
                   })
             );
+            /* Reflect the conversation's server-side privacy so the toggle survives a
+               reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
+            this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+            this.notifyLlm();
             break;
          }
 
@@ -867,6 +871,14 @@ export class DawnIngest implements Ingest {
          case "new_conversation_response":
             /* The fresh conversation the daemon just created — persist to it now. */
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
+            /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
+               without an id): the new conversation inherits the pending intent. */
+            if (this.convId > 0 && this.isPrivate) {
+               this.send({
+                  type: "set_private",
+                  payload: { conversation_id: this.convId, is_private: true }
+               });
+            }
             break;
 
          case "state": {
