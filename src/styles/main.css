@@ -528,6 +528,41 @@ body.engaged #docks {
    outline-offset: 3px;
 }
 
+/* Voice-input states. Recording (push-to-talk held): a live accent pulse. Listening
+   (continuous): a steady brighter ring. Off/unavailable: dimmed and inert. Warm amber
+   stays reserved for "needs you", so both active states use the accent phosphor. */
+@keyframes mic-pulse {
+   0%,
+   100% {
+      box-shadow: 0 0 8px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+   }
+   50% {
+      box-shadow: 0 0 17px color-mix(in srgb, var(--accent-glow) 90%, transparent);
+   }
+}
+.composer-mic.recording {
+   border-color: var(--accent);
+   animation: mic-pulse 1.1s ease-in-out infinite;
+}
+.composer-mic.listening {
+   border-color: var(--accent-glow);
+   box-shadow: 0 0 13px color-mix(in srgb, var(--accent-glow) 72%, transparent);
+}
+.composer-mic.mic-off {
+   opacity: 0.4;
+   border-color: color-mix(in srgb, var(--text) 25%, transparent);
+   background:
+      radial-gradient(circle, var(--text-faint) 0%, transparent 62%) no-repeat center / 15px 15px;
+   box-shadow: none;
+   cursor: default;
+}
+@media (prefers-reduced-motion: reduce) {
+   .composer-mic.recording {
+      animation: none;
+      box-shadow: 0 0 16px color-mix(in srgb, var(--accent-glow) 85%, transparent);
+   }
+}
+
 /* Voice-output (TTS) toggle. Speaker glyph tinted with the accent; ON glows and
    shows its waves, OFF dims to a faint muted speaker with a slash. Sized to sit
    quietly beside the mic. */

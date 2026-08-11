@@ -25,6 +25,7 @@ export interface ConversationController {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string): void;
+   showUser(text: string): void;
    showToolUse(tools: string[]): void;
    setAssistantName(name: string): void;
    loadHistory(items: ConversationItem[]): void;
@@ -226,6 +227,14 @@ export function mountConversation(
       summon();
    };
 
+   /* A user turn that did NOT originate from the composer here - i.e. a voice
+      transcript DAWN sent back. Typed turns are appended locally on submit and deduped
+      upstream, so this only carries spoken input. */
+   const showUser = (text: string): void => {
+      appendMsg("user", text);
+      summon();
+   };
+
    const showToolUse = (tools: string[]): void => {
       appendToolChip(tools);
       summon();
@@ -344,6 +353,7 @@ export function mountConversation(
       appendDelta,
       endReply,
       showReply,
+      showUser,
       showToolUse,
       setAssistantName,
       loadHistory,

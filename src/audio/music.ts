@@ -17,6 +17,8 @@
  * DAWN's own WebUI player; the decode/worklet chain is lifted from it.
  */
 
+import { audioDataToChannels, decodeOpusFrames } from "./webcodecs.ts";
+
 const OPUS_RATE = 48000; // Opus (and thus our AudioContext) is always 48 kHz stereo
 const MUSIC_FRAME_MS = 20; // one Opus frame = 960 samples @ 48 kHz; converts decode backlog to ms
 const VOL_KEY = "dawn.hero.musicVol";
@@ -116,22 +118,9 @@ export class MusicAudio {
       if (this.ctx?.state === "suspended" && !this.paused) await this.ctx.resume();
       const dec = this.decoder;
       if (!dec || dec.state === "closed") return;
-
-      const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-      let offset = 0;
-      while (offset + 2 <= payload.byteLength) {
-         const len = view.getUint16(offset, true); // little-endian
-         offset += 2;
-         if (len === 0 || len > 1500 || offset + len > payload.byteLength) break;
-         const frame = payload.subarray(offset, offset + len);
-         offset += len;
-         try {
-            dec.decode(new EncodedAudioChunk({ type: "key", timestamp: this.ts, data: frame }));
-            this.ts += 20000; // 20 ms per Opus frame
-         } catch {
-            /* a bad packet drops a frame; the ring buffer rides it out */
-         }
-      }
+      /* Walk the [uint16-LE len][opus] run; cap frame length at 1500 (a music packet is
+         well under that) so a corrupt length can't run the parser off the buffer. */
+      this.ts = decodeOpusFrames(dec, payload, this.ts, MUSIC_FRAME_MS * 1000, 1500);
    }
 
    private init(): Promise<void> {
@@ -266,52 +255,16 @@ export class MusicAudio {
       this.buildDecoder();
    }
 
-   /* WebCodecs hands back decoded PCM in one of several layouts; normalize to two
-      Float32 channels and ship them to the worklet as transferables. */
+   /* WebCodecs hands back decoded PCM in one of several layouts; normalize to channels
+      (upmixing mono to stereo) and ship them to the worklet as transferables. */
    private onDecoded(data: AudioData): void {
       try {
-         const frames = data.numberOfFrames;
-         const channels = data.numberOfChannels;
-         const format = data.format ?? "";
-         const left = new Float32Array(frames);
-         const right = new Float32Array(frames);
-
-         if (format === "f32-planar") {
-            data.copyTo(left, { planeIndex: 0 });
-            if (channels > 1) data.copyTo(right, { planeIndex: 1 });
-            else right.set(left);
-         } else if (format === "f32") {
-            const inter = new Float32Array(frames * channels);
-            data.copyTo(inter, { planeIndex: 0 });
-            for (let i = 0; i < frames; i++) {
-               left[i] = inter[i * channels];
-               right[i] = channels >= 2 ? inter[i * channels + 1] : inter[i * channels];
-            }
-         } else if (format === "s16" || format === "s16-planar") {
-            const bytes = new ArrayBuffer(frames * channels * 2);
-            data.copyTo(bytes, { planeIndex: 0 });
-            const i16 = new Int16Array(bytes);
-            if (format === "s16") {
-               for (let i = 0; i < frames; i++) {
-                  left[i] = i16[i * channels] / 32768;
-                  right[i] = channels >= 2 ? i16[i * channels + 1] / 32768 : left[i];
-               }
-            } else {
-               for (let i = 0; i < frames; i++) left[i] = i16[i] / 32768;
-               if (channels > 1) {
-                  const rb = new ArrayBuffer(frames * 2);
-                  data.copyTo(rb, { planeIndex: 1 });
-                  const r16 = new Int16Array(rb);
-                  for (let i = 0; i < frames; i++) right[i] = r16[i] / 32768;
-               } else {
-                  right.set(left);
-               }
-            }
-         } else {
-            data.close();
-            return;
-         }
-
+         const chans = audioDataToChannels(data);
+         const left = chans[0];
+         if (!left) return; // unknown layout
+         /* Mono -> a DISTINCT copy for the right channel: left/right are transferred as
+            separate buffers, and transferring one buffer twice would throw. */
+         const right = chans[1] ?? left.slice();
          this.worklet?.port.postMessage({ type: "audio", left, right }, [left.buffer, right.buffer]);
       } catch (e) {
          console.warn("[music] decoded-audio handling failed:", e);

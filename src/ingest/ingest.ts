@@ -16,6 +16,10 @@
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 
+/* Voice-input control surface, re-exported through the ingest boundary so consumers bind
+   to one seam (getMicControl returns a MicControl) rather than reaching into src/audio. */
+export type { MicControl, MicCaptureState } from "../audio/mic.ts";
+
 /* What ingest can drive on the center reactor (the Anchor satisfies this). */
 export interface ReactorSink {
    setState(state: ReactorState): void;
@@ -51,6 +55,9 @@ export interface ConversationSink {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string): void;
+   /* A user turn from DAWN (a voice transcript). Typed turns are appended locally on
+      submit, so this is only for spoken input echoed back by the daemon. */
+   showUser(text: string): void;
    /* A tool call surfaced as a compact chip (the tool names), not raw tool_use JSON. */
    showToolUse(tools: string[]): void;
    /* The configured assistant display name (ai_name), for the reply header. */

@@ -79,9 +79,12 @@ DAWN signals map to what is documented in `docs/DAWN_UI_SIGNAL_MAP.md`.
 The deliberate writes, i.e. the read-mostly exceptions: submitting a chat message,
 `set_session_llm` (the model panel), `set_private`, dismissing an alarm
 (`scheduler_action`), `new_conversation` plus final-answer persistence for the UI's
-own conversation, and music transport (`music_subscribe` plus `music_control` from the
-player). Music control is Tier C (it mutates DAWN) but benign, user-initiated playback,
-so it is treated like chat submit, not ambient control. Everything else is read.
+own conversation, music transport (`music_subscribe` plus `music_control` from the
+player), and voice input (the mic streams `AUDIO_IN` / `AUDIO_IN_END` binary frames for
+push-to-talk; continuous listening, a later phase, will toggle `always_on_enable` /
+`always_on_disable`). Music control and voice input are Tier C (they mutate DAWN) but
+benign and user-initiated, so they are treated like chat submit, not ambient control.
+Everything else is read.
 
 ## Directory structure
 

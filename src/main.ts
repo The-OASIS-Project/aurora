@@ -36,7 +36,7 @@ import { Css3dRenderer } from "./render/css3d.ts";
 import { PanelDrag } from "./render/panel-drag.ts";
 import { Anchor } from "./anchor/anchor.ts";
 import { DawnIngest } from "./ingest/dawn-ws.ts";
-import type { Ingest } from "./ingest/ingest.ts";
+import type { Ingest, MicCaptureState } from "./ingest/ingest.ts";
 import { mountHud } from "./hud/hud.ts";
 import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
@@ -248,6 +248,105 @@ const onTtsClick = (): void => {
 ttsBtn.addEventListener("click", onTtsClick);
 paintTts();
 
+/* Voice input: the mic dot on the composer. Hold to speak (push-to-talk); the reactor's
+   bar ring lights with your voice while held, and the utterance is sent to DAWN on
+   release. Pointer capture keeps the release/cancel on the button even if the pointer
+   drifts off; Space/Enter mirror hold-to-talk for the keyboard. (Tap-to-latch continuous
+   listening lands in a later phase.) */
+const micCtl = dawn.getMicControl();
+const micBtn = document.getElementById("composer-mic") as HTMLButtonElement;
+let micState: MicCaptureState = "idle";
+let micHolding = false;
+const paintMic = (): void => {
+   const rec = micState === "recording";
+   const listen = micState === "listening";
+   const unavailable = !micCtl.available() || micState === "unavailable";
+   micBtn.classList.toggle("recording", rec);
+   micBtn.classList.toggle("listening", listen);
+   micBtn.classList.toggle("mic-off", unavailable);
+   micBtn.disabled = unavailable;
+   micBtn.setAttribute("aria-pressed", rec || listen ? "true" : "false");
+   micBtn.setAttribute(
+      "aria-label",
+      unavailable
+         ? "Microphone unavailable"
+         : rec
+           ? "Release to send"
+           : listen
+             ? "Stop listening"
+             : "Hold to speak to DAWN"
+   );
+};
+micCtl.onState((s) => {
+   micState = s;
+   paintMic();
+});
+/* One button, two gestures. Capture starts immediately on press (so the first word is
+   never clipped) but buffers locally; if the press crosses the hold threshold it is a
+   push-to-talk utterance (commit + send on release), and if it is released sooner it was
+   a tap (discard the buffer, toggle continuous listening). Continuous transport lands in
+   a later phase, so a tap is currently inert. */
+const MIC_HOLD_MS = 200;
+let micHoldTimer = 0;
+let micHeld = false; // this gesture crossed the hold threshold (a real utterance)
+const micHoldStart = (): void => {
+   /* Ignore a press while the mic is still busy/tearing-down (state not yet idle): the
+      prior utterance's release runs an async flush before it settles, and starting here
+      would arm a "holding" UI over a pttStart the mic silently drops. */
+   if (micBtn.disabled || micHolding || micState === "recording" || micState === "listening") return;
+   micHolding = true;
+   micHeld = false;
+   micCtl.pttStart();
+   micHoldTimer = window.setTimeout(() => {
+      micHeld = true;
+      micCtl.pttCommit();
+   }, MIC_HOLD_MS);
+};
+const micHoldEnd = (): void => {
+   if (!micHolding) return;
+   micHolding = false;
+   window.clearTimeout(micHoldTimer);
+   if (micHeld) {
+      micCtl.pttEnd(); // a hold -> send the utterance
+   } else {
+      micCtl.pttCancel(); // a tap -> discard the brief buffer, send nothing
+      micCtl.toggleContinuous();
+   }
+};
+const micHoldCancel = (): void => {
+   if (!micHolding) return;
+   micHolding = false;
+   window.clearTimeout(micHoldTimer);
+   /* A committed hold that lost the pointer/focus still has valid audio -> send it;
+      an uncommitted press is discarded. */
+   if (micHeld) micCtl.pttEnd();
+   else micCtl.pttCancel();
+};
+const onMicPointerDown = (e: PointerEvent): void => {
+   if (micBtn.disabled) return;
+   e.preventDefault();
+   micBtn.setPointerCapture(e.pointerId); // so pointerup/cancel land here even off-target
+   micHoldStart();
+};
+const onMicPointerUp = (): void => micHoldEnd();
+const onMicPointerCancel = (): void => micHoldCancel();
+const onMicKeyDown = (e: KeyboardEvent): void => {
+   if (e.repeat || (e.key !== " " && e.key !== "Enter")) return;
+   e.preventDefault(); // Space would otherwise scroll
+   micHoldStart();
+};
+const onMicKeyUp = (e: KeyboardEvent): void => {
+   if (e.key !== " " && e.key !== "Enter") return;
+   micHoldEnd();
+};
+micBtn.addEventListener("pointerdown", onMicPointerDown);
+micBtn.addEventListener("pointerup", onMicPointerUp);
+micBtn.addEventListener("pointercancel", onMicPointerCancel);
+micBtn.addEventListener("keydown", onMicKeyDown);
+micBtn.addEventListener("keyup", onMicKeyUp);
+micBtn.addEventListener("blur", onMicPointerCancel); // focus lost mid-hold -> cancel
+paintMic();
+
 /* Login overlay: collects credentials, hands them to the ingest, and reflects the
    connection status the ingest reports back. Connect is user-driven, so nothing
    talks to DAWN until the operator logs in. */
@@ -320,6 +419,13 @@ function dispose(): void {
    running = false;
    window.removeEventListener("resize", onResize);
    ttsBtn.removeEventListener("click", onTtsClick);
+   micBtn.removeEventListener("pointerdown", onMicPointerDown);
+   micBtn.removeEventListener("pointerup", onMicPointerUp);
+   micBtn.removeEventListener("pointercancel", onMicPointerCancel);
+   micBtn.removeEventListener("keydown", onMicKeyDown);
+   micBtn.removeEventListener("keyup", onMicKeyUp);
+   micBtn.removeEventListener("blur", onMicPointerCancel);
+   window.clearTimeout(micHoldTimer); // a hold in progress at teardown leaves a pending one-shot
    ingest.dispose(); // full teardown: also closes the audio graphs so HMR doesn't stack AudioContexts
    conversation.destroy();
    musicPlayer.destroy();

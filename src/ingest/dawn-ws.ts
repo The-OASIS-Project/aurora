@@ -39,6 +39,7 @@ import type { ReactorState } from "../anchor/anchor.ts";
 import { IMPORTANCE } from "../state/types.ts";
 import { TtsPlayback } from "../audio/tts.ts";
 import { MusicAudio } from "../audio/music.ts";
+import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
 import {
    effortOptionsForModel,
    type LlmMode,
@@ -53,6 +54,9 @@ import {
    dawn-music socket (the legacy main-socket music path was removed server-side), but
    it still carries the 0x20 opcode there - the daemon prepends WS_BIN_MUSIC_DATA to
    every dedicated-socket frame, so the payload is [0x20][uint16-LE len][opus]. */
+const BIN_AUDIO_IN = 0x01; // mic audio to DAWN ([0x01][raw Int16 PCM] or [0x01][len-prefixed opus])
+const BIN_AUDIO_IN_END = 0x02; // end of a push-to-talk utterance (no payload); triggers ASR
+const TYPED_ECHO_TTL_MS = 15000; // window to match a typed turn's echo before it's stale
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after the opcode)
@@ -336,6 +340,12 @@ export class DawnIngest implements Ingest {
    private loadedInitial = false; // guard: load the starting conversation only once
    private convId = 0; // active conversation; save_message targets persist to it
    private replyBuf = ""; // final assistant answer, accumulated to persist on idle
+   /* Texts submitted from the composer, awaiting DAWN's user-transcript echo. DAWN echoes
+      every user turn (typed AND voice); we append typed turns locally on submit, so these
+      let us dedupe the echo of our own typing. What is left unmatched is spoken input. Each
+      carries a timestamp so a stale entry (echo that never arrived) can't later swallow an
+      identical spoken turn. */
+   private readonly typedEchoes: Array<{ text: string; at: number }> = [];
    private readonly jobs = new Map<number, { title: string; running: boolean }>();
    private schedulerEventId = 0; // the ringing event behind the scheduler notice
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
@@ -351,10 +361,37 @@ export class DawnIngest implements Ingest {
    private uptimeTimer = 0; // ticks the uptime display every second between polls
    private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
    private uptimeBaseAt = 0; // performance.now() when that uptime was received
-   private tts!: TtsPlayback;
+   /* Created at construction (not in start) so its Opus-decode support is probed before
+      the handshake advertises a codec, and so the reactor tap is wired once. onLevels
+      references sinks, which start() sets before any audio can arrive. */
+   private readonly tts = new TtsPlayback({
+      onLevels: (bins) => this.sinks.reactor.setLevels(bins)
+   });
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
    private readonly music = new MusicAudio();
+   /* Microphone capture (voice input). Constructed here so the composer's mic button can
+      bind to it before ingest.start() runs; its AudioContext stays lazy until first use.
+      onLevels feeds the reactor bar ring with the user's voice while speaking (the same
+      hook TTS uses), onState drives the button chrome, onFrame/onEnd carry the AUDIO_IN
+      payload and the utterance-end marker to DAWN (both gated on the session handshake). */
+   private readonly mic = new MicCapture({
+      onLevels: (bins) => this.sinks.reactor.setLevels(bins),
+      onFrame: (payload) => this.sendAudioIn(payload),
+      /* Gate the end marker on the same capsSynced check as the frames, so a reconnect
+         mid-utterance can't ship a bare AUDIO_IN_END whose audio was all dropped. */
+      onEnd: () => {
+         if (this.capsSynced) this.sendBinary(new Uint8Array([BIN_AUDIO_IN_END]));
+      },
+      onState: (s) => this.emitMicState(s),
+      onError: (msg) => console.warn("[mic]", msg)
+   });
+   private micStateListener: (s: MicCaptureState) => void = () => {};
+   private lastMicState: MicCaptureState = "idle";
+   /* True once DAWN has processed our init/reconnect (the `session` frame confirms it), so
+      use_opus is set and it is safe to ship Opus. Reset on close: after a drop, Opus sent
+      before the new session frame would be decoded as PCM (garbage). */
+   private capsSynced = false;
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
@@ -391,8 +428,6 @@ export class DawnIngest implements Ingest {
       panel via connect(), so credentials never live in the composition root. */
    start(sinks: IngestSinks): void {
       this.sinks = sinks;
-      /* TTS playback drives the reactor's bar ring with DAWN's real voice. */
-      this.tts = new TtsPlayback({ onLevels: (bins) => this.sinks.reactor.setLevels(bins) });
       /* Surface a fatal music-audio problem (e.g. no secure context) in the player. */
       this.music.setErrorHandler((msg) => this.sinks.music.setError(msg));
       /* Closed-loop flow control: report our buffered depth up the music socket so the
@@ -470,8 +505,17 @@ export class DawnIngest implements Ingest {
          this.wsFails = 0; // a clean open resets the reconnect backoff
          /* Resume the stored session if we have one, else start a fresh session.
             Resuming is what keeps us from burning a session slot on every reload.
-            We advertise only `pcm`, so DAWN sends raw PCM TTS (no Opus decoder). */
-         const caps = { capabilities: { audio_codecs: ["pcm"] }, tts_enabled: this.ttsEnabled };
+            The `audio_codecs` capability is BIDIRECTIONAL on DAWN (one use_opus flag drives
+            both TTS out and mic in), so advertise `opus` only if we can BOTH encode the mic
+            AND decode TTS - otherwise DAWN would send Opus TTS we can't play (static). Lock
+            both audio paths to the same codec so nothing is misframed. */
+         const useOpus = this.mic.opusSupported && this.tts.opusSupported;
+         this.mic.setEncoding(useOpus);
+         this.tts.setOpus(useOpus);
+         const caps = {
+            capabilities: { audio_codecs: useOpus ? ["opus", "pcm"] : ["pcm"] },
+            tts_enabled: this.ttsEnabled
+         };
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
          else this.send({ type: "init", payload: caps });
@@ -534,6 +578,7 @@ export class DawnIngest implements Ingest {
 
       ws.onclose = (ev: CloseEvent): void => {
          this.ws = null;
+         this.capsSynced = false; // a new session must re-confirm before Opus is safe again
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -595,6 +640,9 @@ export class DawnIngest implements Ingest {
                this.musicWsFails = 0;
                this.musicUnavailable = false; // fresh connection re-arms the give-up notice
             }
+            /* DAWN has processed our handshake (and its audio_codecs): use_opus is set, so
+               shipping Opus is now safe. */
+            this.capsSynced = true;
             break;
 
          case "config": {
@@ -605,6 +653,9 @@ export class DawnIngest implements Ingest {
                Older servers omit music_enabled -> the field stays true and we open. */
             this.musicEnabled = p.music_enabled !== false;
             if (typeof p.version === "string") this.dawnVersion = p.version;
+            /* Mic capture chunks at the server's configured cadence (falls back to a
+               default until this arrives). Matches the TTS-out audio_chunk_ms. */
+            if (typeof p.audio_chunk_ms === "number") this.mic.setChunkMs(p.audio_chunk_ms);
             const token = localStorage.getItem(TOKEN_KEY);
             if (this.musicEnabled && token) this.openMusicStream(token);
             else if (!this.musicEnabled) this.closeMusicStream();
@@ -1155,6 +1206,21 @@ export class DawnIngest implements Ingest {
                this.applyLlmState(p.text);
                break;
             }
+            /* A user turn echoed by DAWN. It fires for typed AND voice input; we already
+               appended the typed bubble locally (recorded in typedEchoes), so dedupe that
+               and display only what has no local counterpart - i.e. spoken input. */
+            if (p.role === "user" && typeof p.text === "string") {
+               const text = p.text.trim();
+               /* Match a recently-typed turn (within the TTL) to skip re-showing its echo;
+                  a stale entry is ignored, so an identical later spoken turn still shows. */
+               const now = performance.now();
+               const echoIdx = this.typedEchoes.findIndex(
+                  (e) => e.text === text && now - e.at < TYPED_ECHO_TTL_MS
+               );
+               if (echoIdx >= 0) this.typedEchoes.splice(echoIdx, 1);
+               else if (text && p.replay !== true) this.sinks.conversation.showUser(text);
+               break;
+            }
             /* A complete (non-streamed or replayed) message. Show assistant text;
                persist a live (non-replay) one, since it never went through a stream. */
             if (p.role === "assistant" && typeof p.text === "string") {
@@ -1306,6 +1372,31 @@ export class DawnIngest implements Ingest {
 
    getMusicAudio(): MusicAudio {
       return this.music;
+   }
+
+   /* The control surface the composer's mic button binds to. Push-to-talk is a
+      deliberate, user-initiated write (voice input, in the same sanctioned class as
+      chat submit); continuous listening arrives in a later phase. */
+   getMicControl(): MicControl {
+      return {
+         available: () => this.mic.available,
+         pttStart: () => this.mic.pttStart(),
+         pttCommit: () => this.mic.pttCommit(),
+         pttEnd: () => this.mic.pttEnd(),
+         pttCancel: () => this.mic.pttCancel(),
+         toggleContinuous: () => {
+            /* Continuous listening (always_on_enable/disable) lands in a later phase. */
+         },
+         onState: (cb) => {
+            this.micStateListener = cb;
+            cb(this.lastMicState);
+         }
+      };
+   }
+
+   private emitMicState(s: MicCaptureState): void {
+      this.lastMicState = s;
+      this.micStateListener(s);
    }
 
    /* Request the calendar map + today's occurrences (both reads). Called on connect,
@@ -1583,6 +1674,12 @@ export class DawnIngest implements Ingest {
          conversation_id > 0); saving it again produced double user rows. We only own
          the FINAL ANSWER, saved on the idle transition. */
       this.send({ type: "text", payload: { text } });
+      /* DAWN will echo this as a user `transcript` (it drives its own WebUI's typed
+         bubble). We already showed it locally, so remember it to dedupe that echo; a
+         voice transcript has no local counterpart and displays. Bounded so a dropped
+         echo cannot grow the list without limit. */
+      this.typedEchoes.push({ text: text.trim(), at: performance.now() });
+      if (this.typedEchoes.length > 8) this.typedEchoes.shift();
       this.sinks.conversation.setThinking(true);
    }
 
@@ -1609,6 +1706,10 @@ export class DawnIngest implements Ingest {
       this.stopMetrics();
       this.closeMusicStream();
       this.tts?.stop();
+      /* Drop any in-flight utterance: the server's accumulated audio dies with the
+         connection, so there is nothing to salvage. Reset the button to idle. */
+      this.mic.stop();
+      this.emitMicState("idle");
       this.ws?.close();
       this.ws = null;
       this.emit("disconnected");
@@ -1626,6 +1727,7 @@ export class DawnIngest implements Ingest {
       this.disconnect();
       this.tts?.dispose();
       this.music.dispose();
+      this.mic.dispose();
    }
 
    /* The login panel subscribes to reflect connection state. */
@@ -1653,6 +1755,25 @@ export class DawnIngest implements Ingest {
 
    private send(msg: object): void {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+   }
+
+   /* Raw binary to the main socket (mic audio). The opcode is prepended by the caller;
+      guarded so a frame that arrives after a drop is dropped, not thrown. */
+   private sendBinary(bytes: Uint8Array): void {
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(bytes);
+   }
+
+   /* One mic capture chunk -> an AUDIO_IN frame ([0x01][payload]). Voice input is a
+      deliberate, user-initiated write, in the same sanctioned class as chat submit. */
+   private sendAudioIn(payload: Uint8Array): void {
+      /* Hold audio until the session is confirmed: Opus shipped before use_opus is set on
+         the (re)connection would be decoded as PCM. In practice a hold is always long
+         after `session`, so this only guards the reconnect-mid-utterance edge. */
+      if (!this.capsSynced) return;
+      const frame = new Uint8Array(1 + payload.byteLength);
+      frame[0] = BIN_AUDIO_IN;
+      frame.set(payload, 1);
+      this.sendBinary(frame);
    }
 
    /* Advance the displayed uptime from the last synced base, so it counts up every

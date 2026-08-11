@@ -1,17 +1,22 @@
 /*
- * TTS playback — ported from DAWN's WebUI (www/js/audio/playback.js). DAWN streams
- * the spoken response as raw 16-bit PCM (48kHz mono) over the WebSocket binary
- * channel (AUDIO_OUT chunks, then an AUDIO_SEGMENT_END to play). Because this client
- * advertises only the `pcm` codec, the daemon sends PCM (not Opus), so there is no
- * decoder to port — just Web Audio playback.
+ * TTS playback - ported from DAWN's WebUI (www/js/audio/playback.js). DAWN streams the
+ * spoken response over the WebSocket binary channel (AUDIO_OUT chunks, then an
+ * AUDIO_SEGMENT_END to play). The wire codec is whichever the client advertised in its
+ * `audio_codecs` handshake: raw 16-bit PCM (48kHz mono) by default, or Opus (48kHz mono,
+ * length-prefixed `[uint16-LE len][opus]...` frames, the same framing as music) when the
+ * client advertised `opus`. That one flag is bidirectional on DAWN's side, so if the mic
+ * sends Opus, TTS arrives as Opus too; setOpus() keeps this side in step.
  *
  * It also taps the playing audio through an AnalyserNode and pushes the FFT to the
- * reactor (onLevels), so the atom's bar ring is driven by DAWN's actual voice while
- * it speaks, then falls back to the idle shimmer (onLevels(null)) when it stops.
+ * reactor (onLevels), so the atom's bar ring is driven by DAWN's actual voice while it
+ * speaks, then falls back to the idle shimmer (onLevels(null)) when it stops.
  */
+
+import { audioDataToChannels, decodeOpusFrames } from "./webcodecs.ts";
 
 const TTS_SAMPLE_RATE = 48000; // DAWN resamples TTS to 48k (webui_audio.c s_tts_resampler)
 const FFT_SIZE = 256;
+const OPUS_DECODE_CONFIG = { codec: "opus", sampleRate: TTS_SAMPLE_RATE, numberOfChannels: 1 };
 
 export interface TtsCallbacks {
    /* Normalized (0..1) frequency bins while speaking; null when playback stops. */
@@ -28,27 +33,53 @@ export class TtsPlayback {
    private playing = false;
    private current: AudioBufferSourceNode | null = null;
    private raf = 0;
+   private opus = false; // decode incoming segments as Opus (vs raw PCM)
+   private decoder: AudioDecoder | null = null;
+   private decodeTs = 0; // running Opus timestamp (monotonic across segments)
+   private decoded: Float32Array[] = []; // mono PCM collected for the segment being decoded
+   private playGen = 0; // bumped by stop()/dispose() so an in-flight decode can bail on resume
+   opusSupported = false; // AudioDecoder can do the Opus config (async-probed at construction)
    private readonly onLevels: (bins: Float32Array | null) => void;
 
    constructor(cb: TtsCallbacks) {
       this.onLevels = cb.onLevels;
+      void this.probeOpus();
    }
 
-   /* An AUDIO_OUT chunk (raw PCM bytes). */
+   private async probeOpus(): Promise<void> {
+      try {
+         if (typeof AudioDecoder === "undefined") return;
+         const s = await AudioDecoder.isConfigSupported(
+            OPUS_DECODE_CONFIG as unknown as AudioDecoderConfig
+         );
+         this.opusSupported = s.supported === true;
+      } catch {
+         this.opusSupported = false;
+      }
+   }
+
+   /* Match the wire codec DAWN uses for TTS out (set from the same handshake decision as
+      the mic). Opus only if we actually support decoding it. */
+   setOpus(on: boolean): void {
+      this.opus = on && this.opusSupported;
+   }
+
+   /* An AUDIO_OUT chunk (raw bytes: PCM samples, or part of the Opus frame stream). */
    queue(pcm: Uint8Array): void {
       this.chunks.push(pcm);
    }
 
-   /* AUDIO_SEGMENT_END: concatenate the accumulated chunks and play (or enqueue
-      behind the segment currently playing). */
+   /* AUDIO_SEGMENT_END: concatenate the accumulated chunks and play (or enqueue behind
+      the segment currently playing). */
    play(): void {
       if (this.chunks.length === 0) return;
       const total = this.chunks.reduce((s, c) => s + c.length, 0);
-      const aligned = total - (total % 2); // whole Int16 samples
-      const buf = new Uint8Array(aligned);
+      /* PCM must land on whole Int16 samples; Opus framing is byte-exact, so keep it all. */
+      const usable = this.opus ? total : total - (total % 2);
+      const buf = new Uint8Array(usable);
       let off = 0;
       for (const c of this.chunks) {
-         const n = Math.min(c.length, aligned - off);
+         const n = Math.min(c.length, usable - off);
          if (n > 0) {
             buf.set(c.subarray(0, n), off);
             off += n;
@@ -73,22 +104,27 @@ export class TtsPlayback {
 
    private async playBuffer(bytes: Uint8Array): Promise<void> {
       this.playing = true;
+      const gen = this.playGen; // capture: a stop()/dispose() during an await invalidates us
       try {
          this.ensureContext();
          const ctx = this.ctx!;
          const analyser = this.analyser!;
          if (ctx.state === "suspended") await ctx.resume(); // autoplay: needs a gesture first
 
-         const numSamples = bytes.length / 2;
-         const audioBuffer = ctx.createBuffer(1, numSamples, TTS_SAMPLE_RATE);
-         const channel = audioBuffer.getChannelData(0);
-         /* Little-endian 16-bit signed PCM -> float, read by hand to stay clear of
-            the strict typed-array/DataView buffer-type generics. */
-         for (let i = 0; i < numSamples; i++) {
-            let s = (bytes[i * 2 + 1]! << 8) | bytes[i * 2]!;
-            if (s >= 0x8000) s -= 0x10000;
-            channel[i] = s / 32768;
+         /* Turn the segment into one mono Float32 channel: decode Opus, or read PCM by
+            hand (little-endian 16-bit signed -> float). */
+         const channel = this.opus ? await this.decodeOpus(bytes) : pcmToFloat(bytes);
+         /* Opus decode (and the resume above) awaited: if a stop/dispose landed meanwhile,
+            do NOT start a source - it would play after the stop and desync `playing`. */
+         if (gen !== this.playGen) return;
+         if (channel.length === 0) {
+            /* Nothing to play (empty or a failed decode): don't stall the queue. */
+            this.afterSegment();
+            return;
          }
+
+         const audioBuffer = ctx.createBuffer(1, channel.length, TTS_SAMPLE_RATE);
+         audioBuffer.getChannelData(0).set(channel);
 
          const src = ctx.createBufferSource();
          src.buffer = audioBuffer;
@@ -97,20 +133,78 @@ export class TtsPlayback {
          this.current = src;
          this.startSampling();
 
-         src.onended = (): void => {
-            if (this.segments.length > 0) {
-               void this.playBuffer(this.segments.shift()!);
-            } else {
-               this.playing = false;
-               this.current = null;
-               this.stopSampling();
-            }
-         };
+         src.onended = (): void => this.afterSegment();
          src.start(0);
       } catch {
          this.playing = false;
          this.stopSampling();
          if (this.segments.length > 0) void this.playBuffer(this.segments.shift()!);
+      }
+   }
+
+   /* Advance to the next queued segment, or settle to idle when the queue drains. */
+   private afterSegment(): void {
+      this.current = null;
+      if (this.segments.length > 0) {
+         void this.playBuffer(this.segments.shift()!);
+      } else {
+         this.playing = false;
+         this.stopSampling();
+      }
+   }
+
+   /* Decode one segment's worth of length-prefixed Opus frames to a mono Float32 buffer.
+      A WebCodecs decoder is single-use, so a fatal error rebuilds it for the next call. */
+   private async decodeOpus(buf: Uint8Array): Promise<Float32Array> {
+      if (!this.ensureDecoder() || !this.decoder) return new Float32Array(0);
+      this.decoded = [];
+      this.decodeTs = decodeOpusFrames(this.decoder, buf, this.decodeTs);
+      try {
+         await this.decoder.flush(); // drain all outputs for this segment
+      } catch {
+         /* a decode error already surfaced; play whatever decoded */
+      }
+      const total = this.decoded.reduce((s, c) => s + c.length, 0);
+      const out = new Float32Array(total);
+      let p = 0;
+      for (const c of this.decoded) {
+         out.set(c, p);
+         p += c.length;
+      }
+      this.decoded = [];
+      return out;
+   }
+
+   private ensureDecoder(): boolean {
+      if (this.decoder && this.decoder.state !== "closed") return true;
+      if (typeof AudioDecoder === "undefined") return false;
+      try {
+         const dec = new AudioDecoder({
+            output: (d) => this.onDecoded(d),
+            error: (e) => {
+               console.warn("[tts] Opus decode error, will rebuild:", e);
+               this.decoder = null;
+            }
+         });
+         dec.configure(OPUS_DECODE_CONFIG as unknown as AudioDecoderConfig);
+         this.decoder = dec;
+         return true;
+      } catch (e) {
+         console.error("[tts] failed to build Opus decoder:", e);
+         this.decoder = null;
+         return false;
+      }
+   }
+
+   /* Collect one decoded frame's mono samples (channel 0 of whatever layout came back). */
+   private onDecoded(data: AudioData): void {
+      try {
+         const ch = audioDataToChannels(data)[0];
+         if (ch) this.decoded.push(ch);
+      } catch (e) {
+         console.warn("[tts] decoded-audio handling failed:", e);
+      } finally {
+         data.close();
       }
    }
 
@@ -137,6 +231,7 @@ export class TtsPlayback {
 
    /* Stop immediately and clear everything (e.g. TTS toggled off, or disconnect). */
    stop(): void {
+      this.playGen++; // invalidate any in-flight decode so it won't start a source
       this.chunks = [];
       this.segments = [];
       if (this.current) {
@@ -153,7 +248,28 @@ export class TtsPlayback {
 
    dispose(): void {
       this.stop();
+      if (this.decoder && this.decoder.state !== "closed") {
+         try {
+            this.decoder.close();
+         } catch {
+            /* already closed */
+         }
+      }
+      this.decoder = null;
       if (this.ctx && this.ctx.state !== "closed") void this.ctx.close();
       this.ctx = null;
    }
+}
+
+/* Little-endian 16-bit signed PCM -> mono float, read by hand to stay clear of the strict
+   typed-array/DataView buffer-type generics. */
+function pcmToFloat(bytes: Uint8Array): Float32Array {
+   const numSamples = Math.floor(bytes.length / 2);
+   const out = new Float32Array(numSamples);
+   for (let i = 0; i < numSamples; i++) {
+      let s = (bytes[i * 2 + 1]! << 8) | bytes[i * 2]!;
+      if (s >= 0x8000) s -= 0x10000;
+      out[i] = s / 32768;
+   }
+   return out;
 }

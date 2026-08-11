@@ -23,9 +23,12 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 - **Read-mostly.** Do not add control paths that could depower DAWN. Writes are limited
   to deliberate user actions (chat submit, `set_session_llm`, `set_private`,
   `scheduler_action` dismiss, `new_conversation` plus the UI's own message
-  persistence, and music transport via `music_subscribe` / `music_control` plus the
+  persistence, music transport via `music_subscribe` / `music_control` plus the
   `music_buffer` flow-control report, which is solicited telemetry the server clamps,
-  not a control verb). If a new feature needs to write to DAWN, flag it and confirm first.
+  not a control verb, and voice input: the mic sends `AUDIO_IN` / `AUDIO_IN_END` binary
+  frames for push-to-talk - user-initiated conversation input, the same sanctioned class
+  as chat submit; continuous listening, a later phase, will add `always_on_enable` /
+  `always_on_disable`). If a new feature needs to write to DAWN, flag it and confirm first.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
   (e.g. the music player) should be grab-to-move with a persisted position via

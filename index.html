@@ -65,14 +65,14 @@
                   <span class="panel-corner tr"></span>
                   <span class="panel-corner bl"></span>
                   <span class="panel-corner br"></span>
-                  <!-- Voice path is stubbed, so the mic is out of tab order until
-                       wired; the input is the primary control a keyboard lands on. -->
+                  <!-- Hold to speak (push-to-talk); Space/Enter mirror it for the
+                       keyboard. The input stays the primary control a keyboard lands on. -->
                   <button
                      type="button"
                      id="composer-mic"
                      class="composer-mic"
-                     aria-label="Speak to DAWN"
-                     tabindex="-1"
+                     aria-label="Hold to speak to DAWN"
+                     aria-pressed="false"
                   ></button>
                   <input
                      id="composer-input"
