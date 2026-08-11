@@ -23,6 +23,13 @@ const MIC_RATE = 48000; // DAWN's ASR is 48k-only; any other context rate is unu
 const FFT_SIZE = 256;
 const DEFAULT_CHUNK_MS = 100; // until the server config frame supplies audio_chunk_ms
 const WORKLET_FLUSH_MS = 60; // let the worklet flush its partial buffer before we tear down
+const DEVICE_KEY = "aurora.micDevice"; // persisted input-device id ("" = system default)
+
+/* An input device the user can pick (from enumerateDevices). */
+export interface MicDevice {
+   id: string; // "" = system default
+   label: string;
+}
 
 /* Opus encode config - matches DAWN's opus-worker.js exactly (48 kHz mono, 24 kbps,
    20 ms frames, VoIP/voice, DTX). Shared: the main thread uses it for the support probe,
@@ -59,6 +66,10 @@ export interface MicControl {
    pttCancel(): void;
    toggleContinuous(): void;
    onState(cb: (s: MicCaptureState) => void): void;
+   /* Input-device selection (the System-menu Microphone picker). */
+   listDevices(): Promise<MicDevice[]>;
+   currentDevice(): string;
+   setDevice(id: string): void;
 }
 
 export class MicCapture {
@@ -90,6 +101,7 @@ export class MicCapture {
    private acquireGen = 0; // bumped by begin()/stop() so an in-flight acquire can detect it's stale
    private disposed = false; // dispose() ran; an in-flight acquire must not rebuild the graph
    private rateUnusable = false; // sticky: a non-48k context was seen -> the mic is unusable
+   private deviceId = localStorage.getItem(DEVICE_KEY) ?? ""; // "" = system default input
    private readonly cb: MicCallbacks;
    private readonly resumeOnGesture: () => void;
    /* Static capture capability: secure context + getUserMedia + AudioWorklet. Opus
@@ -156,6 +168,33 @@ export class MicCapture {
    /* The server's audio_chunk_ms (config frame); applied to the worklet on next acquire. */
    setChunkMs(ms: number): void {
       if (ms > 0) this.chunkMs = ms;
+   }
+
+   /* Input devices the user can choose from. Labels are only populated once mic permission
+      has been granted (a fresh page shows blanks until the first capture). */
+   async listDevices(): Promise<MicDevice[]> {
+      const out: MicDevice[] = [{ id: "", label: "System default" }];
+      try {
+         const devs = await navigator.mediaDevices.enumerateDevices();
+         for (const d of devs) {
+            if (d.kind === "audioinput") out.push({ id: d.deviceId, label: d.label || "Microphone" });
+         }
+      } catch {
+         /* enumeration blocked -> just the default */
+      }
+      return out;
+   }
+
+   getDevice(): string {
+      return this.deviceId;
+   }
+
+   /* Pick an input device (persisted). Takes effect on the next capture; the caller
+      re-latches continuous if it wants the change to apply immediately. */
+   setDevice(id: string): void {
+      this.deviceId = id;
+      if (id) localStorage.setItem(DEVICE_KEY, id);
+      else localStorage.removeItem(DEVICE_KEY);
    }
 
    // --- Push-to-talk -------------------------------------------------------
@@ -347,6 +386,7 @@ export class MicCapture {
    private async acquire(gen: number): Promise<void> {
       const stream = await navigator.mediaDevices.getUserMedia({
          audio: {
+            ...(this.deviceId ? { deviceId: { exact: this.deviceId } } : {}),
             sampleRate: MIC_RATE,
             channelCount: 1,
             echoCancellation: true,

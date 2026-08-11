@@ -27,9 +27,10 @@ export interface MenuOptions {
    displayToggles: MenuToggle[];
    /* Start a fresh conversation (clears context + transcript). Optional. */
    onNewChat?: () => void;
-   /* System menu actions: open the Connection and About dialogs. Optional; a missing
-      one renders its row as an inert stub. */
+   /* System menu actions: open the Connection, Microphone, and About dialogs. Optional; a
+      missing one renders its row as an inert stub. */
    onConnection?: () => void;
+   onMicDevice?: () => void;
    onAbout?: () => void;
    /* LLM selection surface (MODEL menu). Optional. */
    model?: ModelControl;
@@ -74,6 +75,7 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
       () => [
          ...(opts.onNewChat ? [{ label: "New Chat", onClick: opts.onNewChat }] : []),
          { label: "Connection", onClick: opts.onConnection },
+         { label: "Microphone", onClick: opts.onMicDevice },
          { label: "About D.A.W.N.", onClick: opts.onAbout }
       ],
       closeAll

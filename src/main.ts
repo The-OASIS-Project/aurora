@@ -175,9 +175,24 @@ const openConnection = (): void => {
    });
 };
 
+/* System > Microphone: pick the input device voice uses. getUserMedia defaults to the
+   system input, which can be the wrong one; this lets the user choose and remembers it.
+   Device labels populate only after mic permission has been granted. */
+const openMicDevice = async (): Promise<void> => {
+   const mic = dawn.getMicControl();
+   const [devices, current] = [await mic.listDevices(), mic.currentDevice()];
+   openDialog({
+      title: "Microphone",
+      sub: "Voice input device",
+      choices: devices.map((d) => ({ label: d.label, value: d.id, selected: d.id === current })),
+      onChoose: (id) => mic.setDevice(id)
+   });
+};
+
 const menu = mountMenu(stage, {
    onNewChat: () => newChatHook.fire(),
    onConnection: openConnection,
+   onMicDevice: () => void openMicDevice(),
    onAbout: openAbout,
    model: dawn.getModelControl(),
    /* Store-backed panels, plus the standalone calendar + music views appended. */

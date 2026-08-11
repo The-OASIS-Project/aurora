@@ -17,10 +17,20 @@ export interface DialogAction {
    danger?: boolean; // a slightly destructive action (e.g. Disconnect), styled in the alert hue
 }
 
+/* A selectable option in a radio-style list (e.g. the microphone picker). */
+export interface DialogChoice {
+   label: string;
+   value: string;
+   selected?: boolean;
+}
+
 export interface DialogOptions {
    title: string;
    sub?: string;
    rows?: DialogRow[];
+   /* A radio list; choosing one calls onChoose and closes the dialog. */
+   choices?: DialogChoice[];
+   onChoose?: (value: string) => void;
    link?: { label: string; href: string };
    actions?: DialogAction[];
 }
@@ -83,6 +93,29 @@ export function openDialog(opts: DialogOptions): void {
          }
          dd.append(document.createTextNode(r.value)); // WS/DAWN-sourced text -> textContent, never HTML
          list.append(dt, dd);
+      }
+      card.append(list);
+   }
+
+   if (opts.choices?.length) {
+      const list = document.createElement("div");
+      list.className = "dialog-choices";
+      for (const c of opts.choices) {
+         const row = document.createElement("button");
+         row.type = "button";
+         row.className = c.selected ? "dialog-choice selected" : "dialog-choice";
+         row.setAttribute("role", "radio");
+         row.setAttribute("aria-checked", c.selected ? "true" : "false");
+         const dot = document.createElement("span");
+         dot.className = "dialog-choice-dot";
+         const label = document.createElement("span");
+         label.textContent = c.label; // device labels are OS/WS-sourced -> textContent, never HTML
+         row.append(dot, label);
+         row.addEventListener("click", () => {
+            opts.onChoose?.(c.value);
+            close();
+         });
+         list.append(row);
       }
       card.append(list);
    }

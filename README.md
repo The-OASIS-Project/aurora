@@ -15,8 +15,10 @@ all day.
 - **Conversation.** Chat with DAWN and watch its reply appear as it's written. Each
   message shows who said it, and the window eases into the background when you're idle,
   then comes forward when you type.
-- **Voice.** Hear DAWN speak its replies out loud, with a mute toggle. Talking back by
-  microphone is coming later.
+- **Voice.** Talk to DAWN and hear it reply out loud. Hold the mic button to speak a
+  single request, or tap it to switch on hands-free listening so you can just say the wake
+  word whenever you need it. The reactor's ring moves to your voice as you speak, and you
+  can mute DAWN's replies anytime.
 - **Music.** Play and control your music right from the dashboard — see what's playing,
   skip, seek, shuffle, and repeat, with a visualizer that moves to the sound.
 - **Notices.** Reminders, alarms and timers, and heads-ups from DAWN slide in when they

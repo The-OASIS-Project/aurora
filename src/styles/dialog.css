@@ -111,6 +111,48 @@
    box-shadow: 0 0 8px color-mix(in srgb, var(--alert) 60%, transparent);
 }
 
+/* Radio-style choice list (the microphone picker): one selected, the rest pickable. */
+.dialog-choices {
+   display: flex;
+   flex-direction: column;
+   gap: 0.25rem;
+}
+.dialog-choice {
+   display: flex;
+   align-items: center;
+   gap: 0.6rem;
+   padding: 0.5rem 0.6rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   text-align: left;
+   color: var(--text-dim);
+   background: none;
+   border: 1px solid transparent;
+   border-radius: 2px;
+   cursor: pointer;
+   overflow-wrap: anywhere;
+}
+.dialog-choice:hover {
+   color: var(--text);
+   background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.dialog-choice-dot {
+   flex: none;
+   width: 0.6rem;
+   height: 0.6rem;
+   border-radius: 50%;
+   border: 1.5px solid color-mix(in srgb, var(--text) 35%, transparent);
+}
+.dialog-choice.selected {
+   color: var(--text);
+   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.dialog-choice.selected .dialog-choice-dot {
+   border-color: var(--accent);
+   background: var(--accent);
+   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
 .dialog-link {
    color: var(--accent);
    font-size: var(--fs-label);

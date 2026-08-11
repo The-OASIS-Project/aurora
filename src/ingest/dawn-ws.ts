@@ -909,6 +909,13 @@ export class DawnIngest implements Ingest {
                }
                break;
             }
+            /* A push-to-talk hold that exceeds DAWN's ~10s recording cap: the server keeps
+               what it buffered and processes it on release, so this is a soft limit, not a
+               failure - log it, don't flash the reactor red. */
+            if (code === "BUFFER_FULL") {
+               console.warn("[dawn] recording too long (server cap):", p.message);
+               break;
+            }
             const severity =
                typeof p.severity === "string" ? p.severity : code.startsWith("INFO_") ? "info" : "error";
             if (severity === "info") {
@@ -1464,6 +1471,17 @@ export class DawnIngest implements Ingest {
          onState: (cb) => {
             this.micStateListener = cb;
             cb(this.lastMicState);
+         },
+         listDevices: () => this.mic.listDevices(),
+         currentDevice: () => this.mic.getDevice(),
+         setDevice: (id) => {
+            this.mic.setDevice(id);
+            /* Apply immediately if continuous is latched: re-latch on the new device (a
+               fresh always-on context) so the switch takes effect without a manual toggle. */
+            if (this.continuousOn) {
+               this.stopContinuous(true);
+               this.startContinuous();
+            }
          }
       };
    }
