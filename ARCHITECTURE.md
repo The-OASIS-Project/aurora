@@ -81,10 +81,9 @@ The deliberate writes, i.e. the read-mostly exceptions: submitting a chat messag
 (`scheduler_action`), `new_conversation` plus final-answer persistence for the UI's
 own conversation, music transport (`music_subscribe` plus `music_control` from the
 player), and voice input (the mic streams `AUDIO_IN` / `AUDIO_IN_END` binary frames for
-push-to-talk; continuous listening, a later phase, will toggle `always_on_enable` /
-`always_on_disable`). Music control and voice input are Tier C (they mutate DAWN) but
-benign and user-initiated, so they are treated like chat submit, not ambient control.
-Everything else is read.
+push-to-talk; continuous listening toggles `always_on_enable` / `always_on_disable`).
+Music control and voice input are Tier C (they mutate DAWN) but benign and user-initiated,
+so they are treated like chat submit, not ambient control. Everything else is read.
 
 ## Directory structure
 

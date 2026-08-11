@@ -243,9 +243,9 @@ soft exception is the conversation console's `text` submit, which the hero UI
 already treats as an explicit user-initiated action, not ambient control.
 
 The binary audio path is now wired. Outbound, the mic streams `AUDIO_IN` (`0x01`) +
-`AUDIO_IN_END` (`0x02`) for push-to-talk. Continuous listening (a later phase) will
-toggle DAWN's server-side VAD/wake via `always_on_enable` / `always_on_disable`
-(`always_on_state` comes back). Voice input is a deliberate, user-initiated write (the
+`AUDIO_IN_END` (`0x02`) for push-to-talk. Continuous listening toggles DAWN's server-side
+VAD/wake via `always_on_enable` / `always_on_disable` (`always_on_state` comes back, and
+enable failures arrive as ordinary `error` frames). Voice input is a deliberate, user-initiated write (the
 same sanctioned class as the `text` submit above), not ambient control. Inbound,
 `AUDIO_OUT` (`0x11`) TTS drives the reactor's FFT bars with DAWN's real voice, and the
 mic's own analyser drives them while the user speaks (no more state-scaled stand-in).

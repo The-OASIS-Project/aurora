@@ -365,7 +365,10 @@ export class DawnIngest implements Ingest {
       the handshake advertises a codec, and so the reactor tap is wired once. onLevels
       references sinks, which start() sets before any audio can arrive. */
    private readonly tts = new TtsPlayback({
-      onLevels: (bins) => this.sinks.reactor.setLevels(bins)
+      onLevels: (bins) => this.sinks.reactor.setLevels(bins),
+      /* Echo prevention for continuous listening: mute the mic while DAWN's voice actually
+         plays. A no-op outside continuous mode (setMuted early-returns), so PTT is unaffected. */
+      onActive: (active) => this.mic.setMuted(active)
    });
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
@@ -384,7 +387,16 @@ export class DawnIngest implements Ingest {
          if (this.capsSynced) this.sendBinary(new Uint8Array([BIN_AUDIO_IN_END]));
       },
       onState: (s) => this.emitMicState(s),
-      onError: (msg) => console.warn("[mic]", msg)
+      onError: (msg) => {
+         console.warn("[mic]", msg);
+         /* A mic failure/revoke (acquire denied, wrong rate, unplugged) while continuous is
+            latched: disable it server-side instead of leaving DAWN armed with no audio. */
+         if (this.continuousOn) {
+            this.continuousOn = false;
+            this.resumeContinuous = false;
+            this.send({ type: "always_on_disable" });
+         }
+      }
    });
    private micStateListener: (s: MicCaptureState) => void = () => {};
    private lastMicState: MicCaptureState = "idle";
@@ -392,6 +404,11 @@ export class DawnIngest implements Ingest {
       use_opus is set and it is safe to ship Opus. Reset on close: after a drop, Opus sent
       before the new session frame would be decoded as PCM (garbage). */
    private capsSynced = false;
+   /* Continuous-listening (always-on) state. `continuousOn` is the current session's latch;
+      `resumeContinuous` survives a reconnect so the always-on mode is re-enabled from the new
+      session's handshake (DAWN destroys the always-on context on socket close). */
+   private continuousOn = false;
+   private resumeContinuous = false;
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
@@ -579,6 +596,18 @@ export class DawnIngest implements Ingest {
       ws.onclose = (ev: CloseEvent): void => {
          this.ws = null;
          this.capsSynced = false; // a new session must re-confirm before Opus is safe again
+         /* Stop TTS from the dead connection: its buffered tail has nothing to salvage, and
+            leaving it playing would echo into a re-armed mic (and double-drive the reactor)
+            after the reconnect. disconnect() already does this; the drop path must too. */
+         this.tts.stop();
+         /* Release the mic on a drop; the session-frame resume re-enables continuous with a
+            fresh always-on context. A deliberate disconnect (wantConnected false) clears the
+            resume so it does NOT auto-re-arm. */
+         if (this.continuousOn) {
+            this.continuousOn = false;
+            this.mic.continuousStop();
+         }
+         if (!this.wantConnected) this.resumeContinuous = false;
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -643,6 +672,10 @@ export class DawnIngest implements Ingest {
             /* DAWN has processed our handshake (and its audio_codecs): use_opus is set, so
                shipping Opus is now safe. */
             this.capsSynced = true;
+            /* Re-establish continuous listening after a reconnect: DAWN destroyed the
+               always-on context on the drop, so re-enable from HERE (never before the
+               handshake, or the enable targets the throwaway connection and is lost). */
+            if (this.resumeContinuous && !this.continuousOn) this.startContinuous();
             break;
 
          case "config": {
@@ -858,6 +891,24 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why (e.g. the thinking toggle held on). */
             const code = typeof p.code === "string" ? p.code : "";
+            /* Always-on enable failures arrive as ordinary error frames (there is no
+               always_on_error). Clear the latch and don't flash the reactor red - a second
+               tab (ALREADY_ACTIVE), a mid-PTT enable (PTT_ACTIVE), or an init failure just
+               means continuous didn't start. */
+            if (
+               code === "ALREADY_ACTIVE" ||
+               code === "PTT_ACTIVE" ||
+               code === "INVALID_SAMPLE_RATE" ||
+               code === "INIT_FAILED"
+            ) {
+               console.warn("[dawn] continuous listening rejected:", code, p.message);
+               if (this.continuousOn) {
+                  this.continuousOn = false;
+                  this.resumeContinuous = false;
+                  this.mic.continuousStop();
+               }
+               break;
+            }
             const severity =
                typeof p.severity === "string" ? p.severity : code.startsWith("INFO_") ? "info" : "error";
             if (severity === "info") {
@@ -1248,6 +1299,31 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "always_on_state": {
+            /* The ONLY always-on push (states: listening | wake_check | recording |
+               processing | disabled). Wake/recording/processing are DAWN's internal VAD
+               micro-states; we don't map them to the reactor (they'd thrash the busy
+               channel), the normal `state` frames still drive it during an always-on turn. */
+            const st = typeof p.state === "string" ? p.state : "";
+            if (st === "disabled") {
+               /* Server turned us off (60s no-audio auto-disable, or the echo of our own
+                  disable). If our latch is still up it was unsolicited -> tear down + clear
+                  the resume so we don't fight it on reconnect. */
+               if (this.continuousOn) {
+                  this.continuousOn = false;
+                  this.resumeContinuous = false;
+                  this.mic.continuousStop();
+               }
+            } else if (st === "listening" && this.continuousOn && !this.tts.isSpeaking()) {
+               /* Safety net: a dropped playback-end could leave the mic muted forever;
+                  "listening" means the server is ready for audio, so ensure we're unmuted -
+                  BUT only if TTS isn't still audibly playing (the server returns to listening
+                  ahead of the client's buffered tail), or we'd capture DAWN's own voice. */
+               this.mic.setMuted(false);
+            }
+            break;
+         }
+
          default:
             /* Log each unseen type ONCE — this is our live map of what to wire
                next (attention_alert, scheduler_notification, job_*, music_*, ...). */
@@ -1374,9 +1450,9 @@ export class DawnIngest implements Ingest {
       return this.music;
    }
 
-   /* The control surface the composer's mic button binds to. Push-to-talk is a
-      deliberate, user-initiated write (voice input, in the same sanctioned class as
-      chat submit); continuous listening arrives in a later phase. */
+   /* The control surface the composer's mic button binds to. Both push-to-talk and
+      continuous listening are deliberate, user-initiated writes (voice input, in the same
+      sanctioned class as chat submit). */
    getMicControl(): MicControl {
       return {
          available: () => this.mic.available,
@@ -1384,9 +1460,7 @@ export class DawnIngest implements Ingest {
          pttCommit: () => this.mic.pttCommit(),
          pttEnd: () => this.mic.pttEnd(),
          pttCancel: () => this.mic.pttCancel(),
-         toggleContinuous: () => {
-            /* Continuous listening (always_on_enable/disable) lands in a later phase. */
-         },
+         toggleContinuous: () => this.toggleContinuous(),
          onState: (cb) => {
             this.micStateListener = cb;
             cb(this.lastMicState);
@@ -1397,6 +1471,36 @@ export class DawnIngest implements Ingest {
    private emitMicState(s: MicCaptureState): void {
       this.lastMicState = s;
       this.micStateListener(s);
+   }
+
+   /* Tap-to-latch continuous listening. A deliberate, user-initiated write (same sanctioned
+      class as chat submit): it turns on DAWN's server-side VAD + wake word. */
+   private toggleContinuous(): void {
+      if (this.continuousOn) this.stopContinuous(true);
+      else this.startContinuous();
+   }
+
+   private startContinuous(): void {
+      if (this.continuousOn || !this.mic.available || this.ws?.readyState !== WebSocket.OPEN) return;
+      this.continuousOn = true;
+      this.resumeContinuous = true; // survive a reconnect
+      /* Enable BEFORE streaming so DAWN sets up its always-on context first; sample_rate is
+         the constant 48000 (its VAD decimation divides by it - reporting the ctx rate would
+         degrade wake detection). */
+      this.send({ type: "always_on_enable", payload: { sample_rate: 48000 } });
+      /* Seed the echo mute from live TTS: latching while DAWN is mid-reply must not capture
+         its voice. onActive drives the mute after this, but begin() would otherwise start live. */
+      this.mic.continuousStart(this.tts.isSpeaking());
+   }
+
+   /* userInitiated: a tap-off / auto-unlatch clears the resume flag; a transient teardown
+      (server auto-disable, error) leaves it so a reconnect can re-establish. */
+   private stopContinuous(userInitiated: boolean): void {
+      if (!this.continuousOn) return;
+      this.continuousOn = false;
+      if (userInitiated) this.resumeContinuous = false;
+      this.mic.continuousStop(); // synchronous: releases the mic and emits idle
+      this.send({ type: "always_on_disable" });
    }
 
    /* Request the calendar map + today's occurrences (both reads). Called on connect,

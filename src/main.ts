@@ -250,9 +250,9 @@ paintTts();
 
 /* Voice input: the mic dot on the composer. Hold to speak (push-to-talk); the reactor's
    bar ring lights with your voice while held, and the utterance is sent to DAWN on
-   release. Pointer capture keeps the release/cancel on the button even if the pointer
-   drifts off; Space/Enter mirror hold-to-talk for the keyboard. (Tap-to-latch continuous
-   listening lands in a later phase.) */
+   release. A quick tap latches continuous listening (DAWN's wake word). Pointer capture
+   keeps the release/cancel on the button even if the pointer drifts off; Space/Enter
+   mirror hold-to-talk for the keyboard. */
 const micCtl = dawn.getMicControl();
 const micBtn = document.getElementById("composer-mic") as HTMLButtonElement;
 let micState: MicCaptureState = "idle";
@@ -284,43 +284,64 @@ micCtl.onState((s) => {
 /* One button, two gestures. Capture starts immediately on press (so the first word is
    never clipped) but buffers locally; if the press crosses the hold threshold it is a
    push-to-talk utterance (commit + send on release), and if it is released sooner it was
-   a tap (discard the buffer, toggle continuous listening). Continuous transport lands in
-   a later phase, so a tap is currently inert. */
-const MIC_HOLD_MS = 200;
+   a tap (discard the buffer, toggle continuous listening). A hold while continuous is
+   latched auto-unlatches it, then runs push-to-talk. */
+/* Tap-vs-hold threshold. Measured clicks in a relayed/remote input path land near ~750ms
+   (a fixed input-latency floor, not a fast tap), so a click and a short hold are otherwise
+   indistinguishable - the cutoff sits at 1000ms so those clicks read as taps (latch
+   continuous) and only a deliberate >1s hold is push-to-talk. Capture starts on pointerdown
+   regardless (first word kept), so a longer threshold never delays a real hold; it only
+   classifies the gesture on release. */
+const MIC_HOLD_MS = 1000;
 let micHoldTimer = 0;
 let micHeld = false; // this gesture crossed the hold threshold (a real utterance)
+let micFromListening = false; // the press began while continuous listening was latched
 const micHoldStart = (): void => {
-   /* Ignore a press while the mic is still busy/tearing-down (state not yet idle): the
-      prior utterance's release runs an async flush before it settles, and starting here
-      would arm a "holding" UI over a pttStart the mic silently drops. */
-   if (micBtn.disabled || micHolding || micState === "recording" || micState === "listening") return;
+   /* Block only while the mic is mid-teardown after a prior PTT (state "recording" but the
+      gesture already ended): starting here would arm a "holding" UI over a dropped pttStart.
+      A press while idle OR while continuous-listening ("listening") is handled below. */
+   if (micBtn.disabled || micHolding || micState === "recording") return;
    micHolding = true;
    micHeld = false;
-   micCtl.pttStart();
-   micHoldTimer = window.setTimeout(() => {
-      micHeld = true;
-      micCtl.pttCommit();
-   }, MIC_HOLD_MS);
+   micFromListening = micState === "listening";
+   if (micFromListening) {
+      /* Continuous is on: capture nothing yet. A quick tap turns it OFF; crossing the hold
+         threshold auto-unlatches continuous and runs a push-to-talk utterance instead. */
+      micHoldTimer = window.setTimeout(() => {
+         micHeld = true;
+         micCtl.toggleContinuous(); // unlatch (synchronous stop)
+         micCtl.pttStart();
+         micCtl.pttCommit();
+      }, MIC_HOLD_MS);
+   } else {
+      micCtl.pttStart(); // capture-from-pointerdown (first word kept)
+      micHoldTimer = window.setTimeout(() => {
+         micHeld = true;
+         micCtl.pttCommit();
+      }, MIC_HOLD_MS);
+   }
 };
 const micHoldEnd = (): void => {
    if (!micHolding) return;
    micHolding = false;
    window.clearTimeout(micHoldTimer);
    if (micHeld) {
-      micCtl.pttEnd(); // a hold -> send the utterance
+      micCtl.pttEnd(); // a hold (from idle, or after an auto-unlatch) -> send the utterance
+   } else if (micFromListening) {
+      micCtl.toggleContinuous(); // a tap while listening -> turn continuous OFF
    } else {
-      micCtl.pttCancel(); // a tap -> discard the brief buffer, send nothing
-      micCtl.toggleContinuous();
+      micCtl.pttCancel(); // a tap while idle -> discard the brief capture...
+      micCtl.toggleContinuous(); // ...and latch continuous ON
    }
 };
 const micHoldCancel = (): void => {
    if (!micHolding) return;
    micHolding = false;
    window.clearTimeout(micHoldTimer);
-   /* A committed hold that lost the pointer/focus still has valid audio -> send it;
-      an uncommitted press is discarded. */
+   /* A committed hold that lost the pointer/focus still has valid audio -> send it; an
+      uncommitted idle press discarded; an uncommitted listening press left continuous as-is. */
    if (micHeld) micCtl.pttEnd();
-   else micCtl.pttCancel();
+   else if (!micFromListening) micCtl.pttCancel();
 };
 const onMicPointerDown = (e: PointerEvent): void => {
    if (micBtn.disabled) return;

@@ -76,6 +76,7 @@ export class MicCapture {
    private raf = 0;
    private mode: "ptt" | "continuous" | null = null;
    private muted = false;
+   private wantContinuous = false; // intent latch for continuous, survives the async start window
    /* Capture-from-pointerdown: a push-to-talk gesture captures immediately (so the first
       word is never clipped) but holds its chunks here until the gesture is confirmed a
       hold (pttCommit). A tap discards them, so a tap never sends audio nor seeds an orphan
@@ -85,6 +86,7 @@ export class MicCapture {
    private chunkMs = DEFAULT_CHUNK_MS;
    private workletLoaded = false;
    private startPromise: Promise<void> | null = null;
+   private ending: Promise<void> | null = null; // an in-flight PTT teardown, so the next op can await it
    private acquireGen = 0; // bumped by begin()/stop() so an in-flight acquire can detect it's stale
    private disposed = false; // dispose() ran; an in-flight acquire must not rebuild the graph
    private rateUnusable = false; // sticky: a non-48k context was seen -> the mic is unusable
@@ -182,23 +184,41 @@ export class MicCapture {
    /* End a push-to-talk utterance: flush the worklet, release, and signal end. */
    pttEnd(): void {
       if (this.mode !== "ptt") return;
-      void this.finishPtt(true);
+      this.ending = this.finishPtt(true);
    }
 
    /* Abort a push-to-talk gesture (a tap, or a cancelled press): release, send nothing. */
    pttCancel(): void {
       if (this.mode !== "ptt") return;
-      void this.finishPtt(false);
+      this.ending = this.finishPtt(false);
    }
 
    // --- Continuous ---------------------------------------------------------
 
-   continuousStart(): void {
-      if (this.mode) return;
-      this.begin("continuous");
+   /* Await any in-flight PTT teardown first: the tap gesture that latches continuous fires
+      pttStart -> pttCancel (async) -> here, so `mode` may still be "ptt" for a moment. Without
+      the await, begin() would bail on its `if (this.mode)` guard and we'd arm DAWN but never
+      stream (silent listen). `wantContinuous` is the cancel token: a stop/disable/error that
+      lands during the await clears it (continuousStop no-ops on mode, so `mode` alone can't
+      cover this), and we bail rather than open an orphan mic with the ingest already off.
+      initialMuted seeds the echo-mute when latching mid-TTS-reply. */
+   async continuousStart(initialMuted = false): Promise<void> {
+      this.wantContinuous = true;
+      const pending = this.ending;
+      if (pending) {
+         try {
+            await pending;
+         } catch {
+            /* the teardown surfaced its own error */
+         }
+      }
+      if (!this.wantContinuous || this.mode || this.disposed) return;
+      this.begin("continuous", initialMuted);
    }
 
    continuousStop(): void {
+      this.wantContinuous = false; // clear the intent unconditionally (may run before mode flips)
+      this.ending = null;
       if (this.mode !== "continuous") return;
       this.mode = null;
       this.stop();
@@ -212,8 +232,14 @@ export class MicCapture {
       this.muted = muted;
       if (this.mode !== "continuous") return;
       this.postWorklet(muted ? "stop" : "start");
-      if (muted) this.stopSampling();
-      else this.startSampling();
+      if (muted) {
+         this.stopSampling();
+         /* Drop whatever the encoder was mid-batch so the pre-mute tail isn't prepended
+            to post-unmute audio (a fresh stream resumes on unmute). */
+         if (this.useOpus && this.encoder) this.encoder.postMessage({ type: "reset" });
+      } else {
+         this.startSampling();
+      }
    }
 
    // --- Lifecycle ----------------------------------------------------------
@@ -293,7 +319,7 @@ export class MicCapture {
 
    // --- Internals ----------------------------------------------------------
 
-   private begin(mode: "ptt" | "continuous"): void {
+   private begin(mode: "ptt" | "continuous", initialMuted = false): void {
       if (!this.available) {
          this.cb.onError(
             this.supported
@@ -303,7 +329,9 @@ export class MicCapture {
          this.cb.onState("unavailable");
          return;
       }
-      this.muted = false;
+      /* PTT always starts live; continuous seeds its mute from the caller so latching while
+         DAWN is mid-reply doesn't capture the ongoing TTS. */
+      this.muted = mode === "continuous" ? initialMuted : false;
       this.mode = mode;
       this.pending = [];
       this.committed = mode === "continuous"; // continuous streams immediately; PTT waits for commit
@@ -379,7 +407,6 @@ export class MicCapture {
       this.worklet.connect(this.sink); // pull the worklet into the render graph too
       const targetSamples = Math.floor((ctx.sampleRate * this.chunkMs) / 1000);
       this.worklet.port.postMessage({ type: "config", targetSamples });
-      this.worklet.port.postMessage({ type: "start" });
 
       /* A stop()/dispose() during the resume/addModule awaits above would have left this
          freshly-built graph orphaned; tear it back down. */
@@ -387,7 +414,12 @@ export class MicCapture {
          this.stop();
          return;
       }
-      this.startSampling();
+      /* Start streaming + sampling unless we came up muted (continuous latched mid-TTS); a
+         later setMuted(false) starts the worklet + levels when DAWN stops speaking. */
+      if (!this.muted) {
+         this.worklet.port.postMessage({ type: "start" });
+         this.startSampling();
+      }
    }
 
    /* Flush and release a push-to-talk utterance. Awaits any in-flight acquire first so a
@@ -402,7 +434,10 @@ export class MicCapture {
          }
          this.startPromise = null;
       }
-      if (this.mode !== "ptt") return; // acquire failed or already torn down
+      if (this.mode !== "ptt") {
+         this.ending = null; // no longer a teardown in flight (acquire failed / already torn down)
+         return;
+      }
       /* Sending: flush anything still pending (a hold that ended before the commit timer)
          and mark committed so the worklet's final flush chunk streams live, not into the
          about-to-be-discarded buffer. */
@@ -414,6 +449,7 @@ export class MicCapture {
       this.pending = [];
       this.stop();
       this.cb.onState("idle");
+      this.ending = null;
       if (send) {
          /* Opus: route the end through the encoder FIFO so AUDIO_IN_END lands AFTER the
             last Opus frame (the worker flushes, then echoes end -> onEnd). PCM: no worker

@@ -21,6 +21,10 @@ const OPUS_DECODE_CONFIG = { codec: "opus", sampleRate: TTS_SAMPLE_RATE, numberO
 export interface TtsCallbacks {
    /* Normalized (0..1) frequency bins while speaking; null when playback stops. */
    onLevels: (bins: Float32Array | null) => void;
+   /* True while DAWN's voice is actually playing, false when it fully drains/stops. Driven
+      off real playback (not frame arrival), so continuous-listening capture can mute itself
+      against the speakers during a reply. Optional. */
+   onActive?: (active: boolean) => void;
 }
 
 export class TtsPlayback {
@@ -38,12 +42,27 @@ export class TtsPlayback {
    private decodeTs = 0; // running Opus timestamp (monotonic across segments)
    private decoded: Float32Array[] = []; // mono PCM collected for the segment being decoded
    private playGen = 0; // bumped by stop()/dispose() so an in-flight decode can bail on resume
+   private speaking = false; // playback-active edge, for onActive
    opusSupported = false; // AudioDecoder can do the Opus config (async-probed at construction)
    private readonly onLevels: (bins: Float32Array | null) => void;
+   private readonly onActive: (active: boolean) => void;
 
    constructor(cb: TtsCallbacks) {
       this.onLevels = cb.onLevels;
+      this.onActive = cb.onActive ?? ((): void => {});
       void this.probeOpus();
+   }
+
+   private setSpeaking(v: boolean): void {
+      if (this.speaking === v) return;
+      this.speaking = v;
+      this.onActive(v);
+   }
+
+   /* Is DAWN's voice actually playing right now (server-ahead-of-audible lag included)?
+      Used to seed/hold the continuous-listening echo mute against the real playback tail. */
+   isSpeaking(): boolean {
+      return this.speaking;
    }
 
    private async probeOpus(): Promise<void> {
@@ -211,6 +230,7 @@ export class TtsPlayback {
    /* Push the analyser FFT to the reactor each frame while a segment plays. */
    private startSampling(): void {
       if (this.raf || !this.analyser) return;
+      this.setSpeaking(true); // playback actually begins here (first segment; later segments no-op)
       const tick = (): void => {
          if (!this.analyser) return;
          this.analyser.getByteFrequencyData(this.freq);
@@ -226,6 +246,7 @@ export class TtsPlayback {
          cancelAnimationFrame(this.raf);
          this.raf = 0;
       }
+      this.setSpeaking(false); // playback fully drained/stopped
       this.onLevels(null); // back to the idle shimmer
    }
 
