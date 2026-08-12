@@ -88,6 +88,41 @@ export class StubIngest implements Ingest {
    refreshHA(): void {}
    haControl(): void {}
 
+   /* --- Conversation picker (fake data so offline dev shows the panel) ------- */
+   listConversations(_opts: { limit: number; offset: number }): void {
+      const now = Math.floor(Date.now() / 1000);
+      const fake = [
+         { id: 1, title: "OASIS build notes", updatedAt: now - 120, isPinned: true },
+         { id: 2, title: "Weather for the weekend", updatedAt: now - 3600, origin: "voice" },
+         { id: 3, title: "Standup follow-ups", updatedAt: now - 90000 },
+         { id: 4, title: "Grocery reminder", updatedAt: now - 500000, origin: "messaging:sms" }
+      ].map((c) => ({
+         id: c.id,
+         title: c.title,
+         createdAt: c.updatedAt,
+         updatedAt: c.updatedAt,
+         messageCount: 4 + c.id,
+         isArchived: false,
+         isPrivate: false,
+         isPinned: Boolean((c as { isPinned?: boolean }).isPinned),
+         origin: (c as { origin?: string }).origin ?? "webui"
+      }));
+      this.sinks.conversationList.setList(fake, { total: fake.length, append: false, searching: false });
+   }
+   searchConversations(_query: string, _content: boolean): void {
+      this.sinks.conversationList.setList([], { append: false, searching: true });
+   }
+   loadConversation(id: number): void {
+      this.sinks.conversationList.setActive(id);
+   }
+   newConversation(): void {
+      this.sinks.conversation.clear();
+      this.sinks.conversationList.setActive(0);
+   }
+   renameConversation(_id: number, _title: string): void {}
+   deleteConversation(_id: number): void {}
+   setPinned(_id: number, _pinned: boolean): void {}
+
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */
    setEngaged(engaged: boolean): void {
       this.engaged = engaged;

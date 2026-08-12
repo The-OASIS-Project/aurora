@@ -70,6 +70,39 @@ export interface ConversationSink {
    setStatus(status: ActivityStatus | null): void;
 }
 
+/* One conversation's metadata for the picker list (a camelCased mirror of DAWN's
+   conversation object from list_conversations / search_conversations). `id` is a DB
+   AUTOINCREMENT integer (small, monotonic - never near 2^53, so a JS number is exact;
+   the write verbs assume this). `origin` ∈ webui | voice | briefing | messaging:<provider>. */
+export interface ConversationMeta {
+   id: number;
+   title: string;
+   createdAt: number; // epoch seconds
+   updatedAt: number; // epoch seconds
+   messageCount: number;
+   isArchived: boolean;
+   isPrivate: boolean;
+   isPinned: boolean;
+   origin: string;
+}
+
+/* What ingest can push to the conversation picker (a request/response panel, like the
+   calendar/HA boards - it is NOT ambient store state). `setList` replaces or appends a
+   page; `searching` marks a search result set (vs the plain list) so the panel can guard
+   a stale late response. `setActive` reflects which conversation the transcript is showing
+   and clears that row's unread mark. The mark* methods are driven by DAWN pushes. */
+export interface ConversationListSink {
+   setList(
+      items: ConversationMeta[],
+      opts: { total?: number; append: boolean; searching: boolean }
+   ): void;
+   setActive(id: number): void;
+   markRenamed(id: number, title: string): void; // tolerate an unknown id (no-op)
+   markAppended(id: number): void; // a non-active conversation got a new message -> unread
+   /* The user's IANA tz (from DAWN), so date grouping matches the clock, not the box. */
+   setTimezone(tz: string): void;
+}
+
 /* What ingest can push to the HUD telemetry readout. */
 export interface TelemetrySink {
    update(values: Record<string, string>): void;
@@ -246,6 +279,7 @@ export interface IngestSinks {
    calendar: CalendarSink;
    ha: HASink;
    notifications: NotificationsSink;
+   conversationList: ConversationListSink;
 }
 
 /*
@@ -272,6 +306,18 @@ export interface Ingest {
       ha_call_service to DAWN (signal-map §9.4 #8), a Tier-C write treated like music
       transport. The server reconciles by broadcasting fresh state. See DawnIngest.haControl. */
    haControl(call: HAServiceCall): void;
+   /* --- Conversation picker (request/response). listConversations paginates; searchConversations
+      filters (title, or message content when `content`). loadConversation / newConversation are
+      the already-sanctioned reads/opens. rename / delete / setPinned are deliberate, user-initiated
+      Tier-C writes (like set_private / music transport): delete is DESTRUCTIVE (cascades images +
+      child jobs server-side) and MUST be confirm-gated by the caller. --- */
+   listConversations(opts: { limit: number; offset: number }): void;
+   searchConversations(query: string, content: boolean, opts?: { limit?: number; offset?: number }): void;
+   loadConversation(id: number): void;
+   newConversation(): void;
+   renameConversation(id: number, title: string): void;
+   deleteConversation(id: number): void;
+   setPinned(id: number, pinned: boolean): void;
    /* Stop the live session (disconnect); in-session, audio contexts are kept for reuse. */
    stop(): void;
    /* Final teardown (HMR/unmount): stop AND release the audio graphs. Distinct from stop()

@@ -242,6 +242,19 @@ assistant), `music_control`, `scheduler_action`, `job_action`, all `set_*` /
 soft exception is the conversation console's `text` submit, which the hero UI
 already treats as an explicit user-initiated action, not ambient control.
 
+The conversation picker (`src/conversation-picker/`) adds three more sanctioned,
+user-initiated exceptions in the same class as `text` submit / `set_private`:
+`rename_conversation` and `set_pinned` (benign metadata flips), and
+**`delete_conversation`** — the one write in the whole UI that permanently destroys
+DAWN-side data. Per `webui_history.c`, delete cascade-deletes the conversation's images
+and child background jobs and refuses with `"Cancel the background job before deleting it."`
+while a job is running; if the deleted conversation was active, DAWN clears the session
+server-side. The UI therefore gates it behind a named, cascade-explicit confirm dialog,
+surfaces the running-job refusal as a notice, and only ever fires it from a deliberate row
+gesture, never a frame handler. Reads used by the picker (`list_conversations`,
+`search_conversations`, `load_conversation`) and `new_conversation` remain Tier A/B and the
+already-sanctioned open path.
+
 The binary audio path is now wired. Outbound, the mic streams `AUDIO_IN` (`0x01`) +
 `AUDIO_IN_END` (`0x02`) for push-to-talk. Continuous listening toggles DAWN's server-side
 VAD/wake via `always_on_enable` / `always_on_disable` (`always_on_state` comes back, and

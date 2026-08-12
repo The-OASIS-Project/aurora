@@ -28,13 +28,20 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   not a control verb, and voice input: the mic sends `AUDIO_IN` / `AUDIO_IN_END` binary
   frames for push-to-talk, and continuous listening sends `always_on_enable` /
   `always_on_disable` to arm/disarm DAWN's server-side VAD + wake word - all user-initiated
-  conversation input, the same sanctioned class as chat submit). If a new feature needs to
+  conversation input, the same sanctioned class as chat submit), and the conversation
+  picker's management verbs (`rename_conversation`, `set_pinned`, and the confirm-gated
+  **`delete_conversation`**). Rename and pin are benign metadata flips like `set_private`;
+  **delete is the one write that permanently destroys DAWN-side data** (it cascade-deletes
+  the conversation's images + child background jobs and refuses on a running job), so it is
+  gated behind a named, cascade-explicit confirm dialog and only ever reachable from a
+  deliberate user gesture, never a frame handler. If a new feature needs to
   write to DAWN, flag it and confirm first.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
   (e.g. the music player) should be grab-to-move with a persisted position via
   `makeMovable` (`src/render/movable.ts`). Only fixed HUD chrome (clock, telemetry frame)
-  gets a fixed screen position. Store-backed ambient panels dock to the rails through
+  and top-band menu chrome (the menubar and the conversation picker, which is a peer of the
+  menubar) get a fixed screen position. Store-backed ambient panels dock to the rails through
   `PanelDrag` instead.
 - **Colors and feel only from `src/design/tokens.ts`.** Never hardcode a color in a
   component; use or add a token (it is mirrored to CSS custom properties).

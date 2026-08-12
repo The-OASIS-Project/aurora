@@ -27,6 +27,7 @@ import type {
    ActivityStatus,
    CalendarEvent,
    CalendarInfo,
+   ConversationMeta,
    HAAttributes,
    HAEntity,
    HAServiceCall,
@@ -64,6 +65,7 @@ const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after 
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
+const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
@@ -339,6 +341,9 @@ export class DawnIngest implements Ingest {
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
+   private conversationsLoading = false; // single-flight latch: one list/search request at a time
+   private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
+   private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
    private convId = 0; // active conversation; save_message targets persist to it
    private replyBuf = ""; // final assistant answer, accumulated to persist on idle
    /* Texts submitted from the composer, awaiting DAWN's user-transcript echo. DAWN echoes
@@ -549,11 +554,13 @@ export class DawnIngest implements Ingest {
          ws.send(JSON.stringify({ type: "get_my_settings" }));
          /* Local model list for the MODEL panel (cloud lists come from get_config). */
          ws.send(JSON.stringify({ type: "list_llm_models" }));
-         /* Load the most recent conversation as a starting point (and into the
-            session context, so continuing the chat continues it). Jobs are already
-            hidden from this list server-side. Temporary default until we add a
-            picker. */
-         ws.send(JSON.stringify({ type: "list_conversations", payload: { limit: 15, offset: 0 } }));
+         /* The conversation picker's first page (also feeds the boot auto-load of the
+            most recent conversation into the session, so continuing the chat continues
+            it). Jobs are hidden from this list server-side. limit matches the picker's
+            page size so pagination math starts on a full page. */
+         this.conversationsLoading = true;
+         this.pendingListAppend = false;
+         ws.send(JSON.stringify({ type: "list_conversations", payload: { limit: CONV_PAGE, offset: 0 } }));
          /* The caller's active background jobs, for the jobs panel. */
          ws.send(JSON.stringify({ type: "jobs_request" }));
          /* Subscribe to music: replies with the current music_state and, once a
@@ -618,6 +625,10 @@ export class DawnIngest implements Ingest {
          /* Drop the seek-detection baseline: a resume may land at a different track/
             position, and a stale baseline would misread that first music_state as a seek. */
          this.prevMusicIndex = null;
+         /* Drop any in-flight list latch: a load-more that never got its response must not
+            poison the post-reconnect boot response into an append. */
+         this.conversationsLoading = false;
+         this.pendingListAppend = false;
          this.sinks.reactor.setState("idle");
          if (this.wantConnected) {
             /* An unexpected drop while we still want to be connected: auto-reconnect
@@ -813,41 +824,70 @@ export class DawnIngest implements Ingest {
                   with the corrected window (the first fetch used browser-local). */
                this.userTz = tz;
                this.sinks.calendar.setTimezone(tz);
+               this.sinks.conversationList.setTimezone(tz); // date grouping in the user's zone
                this.requestCalendar();
             }
             break;
          }
 
          case "list_conversations_response": {
-            /* Pick the most recently updated conversation and load it. Once only,
-               so a later manual reload is not clobbered. */
-            if (this.loadedInitial) break;
-            const convs = (p.conversations ?? []) as Array<{
-               id: number;
-               title?: string;
-               updated_at?: number;
-               created_at?: number;
-               is_archived?: boolean;
-               origin?: string;
-            }>;
-            if (convs.length === 0) break;
-            /* Only interactive human conversations. `messaging:*` (SMS/Telegram)
-               and `briefing` (automated digests) carry the freshest updated_at but
-               are not what "my last conversation" means; jobs are already excluded
-               server-side. Fall back to the whole list if none match. */
-            const INTERACTIVE = new Set(["webui", "voice"]);
-            const pool = convs.filter((c) => INTERACTIVE.has(c.origin ?? ""));
-            const sorted = [...(pool.length ? pool : convs)].sort(
-               (a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)
-            );
-            const pick = sorted[0];
-            this.loadedInitial = true;
-            this.convId = pick.id; // new turns persist to (and continue) this one
-            this.send({ type: "load_conversation", payload: { conversation_id: pick.id } });
+            const raw = (p.conversations ?? []) as Array<Record<string, unknown>>;
+            const append = this.pendingListAppend;
+            this.pendingListAppend = false;
+            this.conversationsLoading = false;
+            const total = typeof p.total === "number" ? p.total : undefined;
+            this.sinks.conversationList.setList(raw.map((c) => this.toMeta(c)), {
+               total,
+               append,
+               searching: false
+            });
+            /* First list on connect: also auto-load the most recent INTERACTIVE
+               conversation into the session + transcript (F5-resume continuity) and
+               reflect it as the active row. `messaging:*` (SMS/Telegram) and `briefing`
+               carry the freshest updated_at but are not "my last conversation"; jobs are
+               excluded server-side. Fall back to the whole list if none match. */
+            if (!this.loadedInitial && !append) {
+               this.loadedInitial = true;
+               const INTERACTIVE = new Set(["webui", "voice"]);
+               const origin = (c: Record<string, unknown>): string =>
+                  typeof c.origin === "string" ? c.origin : "";
+               const pool = raw.filter((c) => INTERACTIVE.has(origin(c)));
+               const sorted = [...(pool.length ? pool : raw)].sort(
+                  (a, b) => Number(b.updated_at ?? 0) - Number(a.updated_at ?? 0)
+               );
+               const pick = sorted[0];
+               if (pick) {
+                  this.convId = Number(pick.id ?? 0);
+                  this.sinks.conversationList.setActive(this.convId);
+                  this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+               }
+            }
+            break;
+         }
+
+         case "search_conversations_response": {
+            this.conversationsLoading = false;
+            const raw = (p.conversations ?? []) as Array<Record<string, unknown>>;
+            this.sinks.conversationList.setList(raw.map((c) => this.toMeta(c)), {
+               append: false,
+               searching: true
+            });
             break;
          }
 
          case "load_conversation_response": {
+            /* A failed load (e.g. the conversation was deleted from another client) must
+               NOT wipe the surface: guard success and leave state untouched. */
+            if ((p as { success?: boolean }).success === false) {
+               this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+                  to: 0,
+                  x: 0,
+                  y: -0.4,
+                  hold: 4
+               });
+               break;
+            }
+            const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
             const msgs = (p.messages ?? []) as Array<{ role: string; content: string }>;
             this.sinks.conversation.loadHistory(
                msgs
@@ -857,10 +897,76 @@ export class DawnIngest implements Ingest {
                      return info ? [{ role: m.role as "user" | "assistant", ...info }] : [];
                   })
             );
+            this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+            this.sinks.conversationList.setActive(cid);
             /* Reflect the conversation's server-side privacy so the toggle survives a
                reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
             this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
             this.notifyLlm();
+            break;
+         }
+
+         case "rename_conversation_response":
+            /* No conversation_id echo, and no conversation_renamed push on a manual
+               rename: the panel already patched optimistically. Only reconcile on
+               failure by refetching the server's truth. */
+            if ((p as { success?: boolean }).success === false) this.requestConversations();
+            break;
+
+         case "set_pinned_response":
+            /* Echoes conversation_id + is_pinned; the panel patched optimistically on the
+               click, so accept the success and only refetch to correct a failure. */
+            if ((p as { success?: boolean }).success === false) this.requestConversations();
+            break;
+
+         case "delete_conversation_response": {
+            if ((p as { success?: boolean }).success === false) {
+               const msg =
+                  typeof (p as { error?: string }).error === "string"
+                     ? (p as { error?: string }).error
+                     : "Could not delete conversation";
+               this.spikeNotice("conv-delete", "conversation", String(msg), {
+                  to: 0,
+                  x: 0,
+                  y: -0.4,
+                  hold: 5,
+                  tone: "attention"
+               });
+               this.requestConversations(); // restore the row the panel optimistically removed
+               this.pendingDeleteId = 0;
+               break;
+            }
+            /* Deleted the open conversation: DAWN cleared the session server-side, so
+               reset our surface + id to a fresh chat so the transcript doesn't strand. */
+            if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
+               this.convId = 0;
+               this.replyBuf = "";
+               this.sinks.conversation.clear();
+               this.sinks.conversationList.setActive(0);
+            }
+            this.pendingDeleteId = 0;
+            break;
+         }
+
+         case "conversation_renamed": {
+            /* Server auto-title (NOT a manual rename): live-patch the row title. */
+            const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
+            const t = typeof (p as { title?: string }).title === "string" ? (p as { title: string }).title : "";
+            if (cid) this.sinks.conversationList.markRenamed(cid, t);
+            break;
+         }
+
+         case "conversation_messages_appended": {
+            /* Signal-only "a message landed". If it's the conversation we're viewing,
+               reload it so an external turn (SMS/Telegram inbound, job reinvoke) renders
+               live; otherwise mark that row unread. */
+            const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
+            if (!cid) break;
+            if (cid === this.convId) {
+               this.send({ type: "load_conversation", payload: { conversation_id: cid } });
+            } else {
+               this.sinks.conversationList.markAppended(cid);
+            }
             break;
          }
 
@@ -871,18 +977,23 @@ export class DawnIngest implements Ingest {
                preserving the previous conversation instead of appending to it. */
             this.sinks.conversation.clear();
             this.convId = 0;
+            this.sinks.conversationList.setActive(0);
             break;
 
          case "new_conversation_response":
             /* The fresh conversation the daemon just created — persist to it now. */
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
-            /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
-               without an id): the new conversation inherits the pending intent. */
-            if (this.convId > 0 && this.isPrivate) {
-               this.send({
-                  type: "set_private",
-                  payload: { conversation_id: this.convId, is_private: true }
-               });
+            if (this.convId > 0) {
+               this.sinks.conversationList.setActive(this.convId);
+               this.requestConversations(); // the new row now exists — refresh the picker list
+               /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
+                  without an id): the new conversation inherits the pending intent. */
+               if (this.isPrivate) {
+                  this.send({
+                     type: "set_private",
+                     payload: { conversation_id: this.convId, is_private: true }
+                  });
+               }
             }
             break;
 
@@ -1314,17 +1425,14 @@ export class DawnIngest implements Ingest {
             break;
 
          case "message_appended": {
-            /* A server-persisted assistant message pushed live — chiefly a completed
-               background job's answer, which otherwise never surfaces here (it reaches
-               us as this frame, not a stream). Already saved server-side, so DISPLAY
-               only. Skip our own active conversation's rows: those arrive via the
-               stream path, and echoing them here would double them. */
-            const mp = p as { conversation_id?: number; role?: string; text?: string };
-            if (mp.conversation_id !== this.convId && mp.role === "assistant" && mp.text) {
-               const info = interpretMessage(mp.text);
-               if (info?.text) this.sinks.conversation.showReply(info.text);
-               if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
-            }
+            /* A message persisted to a NON-active conversation (chiefly a completed
+               background job's answer). Rather than inject it into whatever transcript is
+               open (it would read as if the open conversation replied), mark that row
+               unread; the answer renders when the user opens it, and a job answer also
+               surfaces via its job_notification toast. The active conversation's own rows
+               arrive via the stream path, so they are skipped here. */
+            const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
+            if (cid && cid !== this.convId) this.sinks.conversationList.markAppended(cid);
             break;
          }
 
@@ -1396,7 +1504,97 @@ export class DawnIngest implements Ingest {
    newChat(): void {
       this.send({ type: "clear_session" });
       this.convId = 0;
+      /* Discard any in-flight reply so its idle-save can't land on the next conversation
+         (H1); mirror the reset to the picker's active highlight (both the menu New Chat
+         and the picker "+ New" arrive here). */
+      this.replyBuf = "";
+      this.sinks.conversation.endReply();
       this.sinks.conversation.clear();
+      this.sinks.conversationList.setActive(0);
+   }
+
+   /* Map DAWN's conversation object (list/search) into the picker's ConversationMeta.
+      ids are DB AUTOINCREMENT ints, so Number() is exact. */
+   private toMeta(c: Record<string, unknown>): ConversationMeta {
+      return {
+         id: Number(c.id ?? 0),
+         title: typeof c.title === "string" ? c.title : "",
+         createdAt: Number(c.created_at ?? 0),
+         updatedAt: Number(c.updated_at ?? 0),
+         messageCount: Number(c.message_count ?? 0),
+         isArchived: Boolean(c.is_archived),
+         isPrivate: Boolean(c.is_private),
+         isPinned: Boolean(c.is_pinned),
+         origin: typeof c.origin === "string" ? c.origin : "webui"
+      };
+   }
+
+   /* Refetch the first page of the list (a replace), reconciling the picker after a
+      mutation whose response can't be patched in place (rename/delete failure, a new row). */
+   private requestConversations(): void {
+      this.pendingListAppend = false;
+      this.conversationsLoading = true;
+      this.send({ type: "list_conversations", payload: { limit: CONV_PAGE, offset: 0 } });
+   }
+
+   /* --- Conversation picker (Ingest) -------------------------------------- */
+   listConversations(opts: { limit: number; offset: number }): void {
+      if (this.conversationsLoading) return; // one list/search request in flight at a time
+      this.pendingListAppend = opts.offset > 0;
+      this.conversationsLoading = true;
+      this.send({ type: "list_conversations", payload: { limit: opts.limit, offset: opts.offset } });
+   }
+
+   searchConversations(query: string, content: boolean, opts?: { limit?: number; offset?: number }): void {
+      this.conversationsLoading = true;
+      this.pendingListAppend = false;
+      this.send({
+         type: "search_conversations",
+         payload: {
+            query,
+            search_content: content,
+            limit: opts?.limit ?? CONV_PAGE,
+            offset: opts?.offset ?? 0
+         }
+      });
+   }
+
+   loadConversation(id: number): void {
+      if (id <= 0) return;
+      /* Discard any in-flight reply BEFORE switching id, so conversation A's partial
+         answer can't be persisted into B on the next idle transition (H1). Set convId
+         optimistically so a text sent before the response is tagged to the right
+         conversation (M2); load_conversation_response confirms it. */
+      this.replyBuf = "";
+      this.sinks.conversation.endReply();
+      this.convId = id;
+      this.sinks.conversationList.setActive(id);
+      this.send({ type: "load_conversation", payload: { conversation_id: id } });
+   }
+
+   newConversation(): void {
+      /* Lazy creation (Aurora's model): clear the surface + id now; the first message
+         opens the conversation via the convId===0 path in submit(). */
+      this.newChat();
+   }
+
+   renameConversation(id: number, title: string): void {
+      if (id > 0 && title.trim()) {
+         this.send({ type: "rename_conversation", payload: { conversation_id: id, title } });
+      }
+   }
+
+   deleteConversation(id: number): void {
+      if (id <= 0) return;
+      /* Responses carry no conversation_id, so remember which delete is in flight to
+         decide the active-delete reset. Confirm is the caller's responsibility (the
+         picker gates it behind a named, cascade-explicit dialog). */
+      this.pendingDeleteId = id;
+      this.send({ type: "delete_conversation", payload: { conversation_id: id } });
+   }
+
+   setPinned(id: number, pinned: boolean): void {
+      if (id > 0) this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
    }
 
    /* Binary frame on the MAIN socket: a 1-byte opcode then payload. Only TTS arrives

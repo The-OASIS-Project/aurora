@@ -39,8 +39,6 @@ export interface MenuOptions {
    displayToggles: MenuToggle[];
    /* Optional stepped slider appended below the Display toggles (e.g. text/UI size). */
    displaySlider?: MenuSlider;
-   /* Start a fresh conversation (clears context + transcript). Optional. */
-   onNewChat?: () => void;
    /* System menu actions: open the Connection, Microphone, and About dialogs. Optional; a
       missing one renders its row as an inert stub. */
    onConnection?: () => void;
@@ -85,11 +83,11 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
          })),
       opts.displaySlider
    );
-   /* System: New Chat plus the Connection and About dialogs (each active when wired). */
+   /* System: the Connection, Microphone, and About dialogs (each active when wired).
+      New Chat now lives in the conversation picker's header. */
    const system = actionMenu(
       "System",
       () => [
-         ...(opts.onNewChat ? [{ label: "New Chat", onClick: opts.onNewChat }] : []),
          { label: "Connection", onClick: opts.onConnection },
          { label: "Microphone", onClick: opts.onMicDevice },
          { label: "About D.A.W.N.", onClick: opts.onAbout }

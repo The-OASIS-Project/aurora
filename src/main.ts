@@ -29,6 +29,7 @@ import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";
+import "./styles/conversations.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import {
@@ -54,6 +55,7 @@ import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
+import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
 import { Notifications } from "./notify/notifications.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
@@ -133,10 +135,9 @@ const saveDisplay = (): void => localStorage.setItem(DISPLAY_KEY, JSON.stringify
 anchor.setStarfield(display.starfield);
 anchor.setClouds(display.clouds);
 anchor.setBloom(display.bloom);
-/* TTS toggle + New Chat are backed by the ingest (DAWN), which exists further down;
-   these hooks are wired once it does. */
+/* TTS toggle is backed by the ingest (DAWN), which exists further down; wired once it
+   does. (New Chat now lives in the conversation picker's header, not the System menu.) */
 const ttsControl = { get: (): boolean => false, toggle: (): void => {} };
-const newChatHook = { fire: (): void => {} };
 
 /* 3. Ingest: the single DAWN boundary. Created here (before the menu) so the MODEL
       panel can bind to it; the rest of the app sees only the `Ingest` interface.
@@ -170,6 +171,20 @@ const calendarPanel = mountCalendarPanel(stage);
 const haPanel = mountHAPanel(stage, {
    onRefresh: () => ingest.refreshHA(),
    onControl: (call) => ingest.haControl(call)
+});
+
+/* The conversation picker: fixed menu-band chrome (top band, between the clock and the
+   center menu) that lists / searches / opens the user's conversations and does the
+   sanctioned conversation writes (new, rename, pin, and confirm-gated delete). It reaches
+   DAWN only through the ingest; the ingest feeds it the list + active id + live pushes. */
+const conversationPicker = mountConversationPicker(stage, {
+   onLoad: (id) => ingest.loadConversation(id),
+   onNew: () => ingest.newConversation(),
+   onSearch: (query, content) => ingest.searchConversations(query, content),
+   onRename: (id, title) => ingest.renameConversation(id, title),
+   onDelete: (id) => ingest.deleteConversation(id),
+   onPin: (id, pinned) => ingest.setPinned(id, pinned),
+   onLoadMore: (offset) => ingest.listConversations({ limit: 50, offset })
 });
 
 /* System > About: what this is, the daemon + interface versions, and the project link.
@@ -225,7 +240,6 @@ const openMicDevice = async (): Promise<void> => {
 };
 
 const menu = mountMenu(stage, {
-   onNewChat: () => newChatHook.fire(),
    onConnection: openConnection,
    onMicDevice: () => void openMicDevice(),
    onAbout: openAbout,
@@ -296,7 +310,6 @@ const panelDrag = new PanelDrag(stage, {
 notifyDismiss = (id) => ingest.dismiss(id);
 ttsControl.get = () => dawn.isTtsEnabled();
 ttsControl.toggle = () => dawn.setTtsEnabled(!dawn.isTtsEnabled());
-newChatHook.fire = () => dawn.newChat();
 
 /* Voice (TTS) toggle: a small speaker icon on the composer, next to the mic. It is
    a frequently-reached control, so it lives by the input rather than in a menu.
@@ -470,7 +483,8 @@ ingest.start({
    music: musicPlayer,
    calendar: calendarPanel,
    ha: haPanel,
-   notifications
+   notifications,
+   conversationList: conversationPicker
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -520,6 +534,7 @@ function dispose(): void {
    musicPlayer.destroy();
    calendarPanel.destroy();
    haPanel.destroy();
+   conversationPicker.destroy();
    notifications.dispose();
    hud.destroy();
    menu.destroy();
