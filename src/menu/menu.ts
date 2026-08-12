@@ -21,10 +21,24 @@ export interface MenuToggle {
    toggle: () => void;
 }
 
+/* A stepped slider setting (Display menu): a discrete ladder of values with a live
+   readout. `value`/`onChange` speak the real value (e.g. 1.05); `steps` is the ordered
+   ladder the range input indexes into. `reset` returns to the neutral default. */
+export interface MenuSlider {
+   label: string;
+   steps: readonly number[];
+   get: () => number;
+   format: (v: number) => string;
+   onChange: (v: number) => void;
+   reset: () => void;
+}
+
 export interface MenuOptions {
    getPanels: () => MenuPanel[];
    onTogglePanel: (id: string) => void;
    displayToggles: MenuToggle[];
+   /* Optional stepped slider appended below the Display toggles (e.g. text/UI size). */
+   displaySlider?: MenuSlider;
    /* Start a fresh conversation (clears context + transcript). Optional. */
    onNewChat?: () => void;
    /* System menu actions: open the Connection, Microphone, and About dialogs. Optional; a
@@ -62,12 +76,14 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
          onChange: () => opts.onTogglePanel(p.id)
       }))
    );
-   const display = toggleMenu("Display", () =>
-      opts.displayToggles.map((t) => ({
-         label: t.label,
-         checked: t.get(),
-         onChange: () => t.toggle()
-      }))
+   const display = displayMenu(
+      () =>
+         opts.displayToggles.map((t) => ({
+            label: t.label,
+            checked: t.get(),
+            onChange: () => t.toggle()
+         })),
+      opts.displaySlider
    );
    /* System: New Chat plus the Connection and About dialogs (each active when wired). */
    const system = actionMenu(
@@ -142,6 +158,94 @@ function toggleMenu(
    };
    refresh();
    return { el, refresh };
+}
+
+/* The Display menu: the visual-layer toggles plus an optional stepped slider (text/UI
+   size) below a divider. Like toggleMenu but with the extra control kind. */
+function displayMenu(
+   getRows: () => ToggleRow[],
+   slider?: MenuSlider
+): { el: HTMLElement; refresh: () => void } {
+   const { el, dropdown } = menuGroup("Display");
+   const refresh = (): void => {
+      const rows: HTMLElement[] = getRows().map((r) => {
+         const row = document.createElement("label");
+         row.className = "menu-row";
+         const cb = document.createElement("input");
+         cb.type = "checkbox";
+         cb.className = "menu-check";
+         cb.checked = r.checked;
+         cb.addEventListener("change", r.onChange);
+         const span = document.createElement("span");
+         span.textContent = r.label;
+         row.append(cb, span);
+         return row;
+      });
+      if (slider) {
+         const divider = document.createElement("div");
+         divider.className = "menu-divider";
+         rows.push(divider, sliderRow(slider));
+      }
+      dropdown.replaceChildren(...rows);
+   };
+   refresh();
+   return { el, refresh };
+}
+
+/* A labelled stepped-slider row: label, a range input snapped to the ladder, and a
+   live readout that doubles as a reset-to-default control (click / Enter). */
+function sliderRow(s: MenuSlider): HTMLElement {
+   const row = document.createElement("div");
+   row.className = "menu-row menu-slider-row";
+
+   const lbl = document.createElement("span");
+   lbl.className = "menu-slider-label";
+   lbl.textContent = s.label;
+
+   const range = document.createElement("input");
+   range.type = "range";
+   range.className = "menu-slider";
+   range.min = "0";
+   range.max = String(s.steps.length - 1);
+   range.step = "1";
+   /* Nearest ladder index for the current value (tolerates a value off the ladder). */
+   const idxOf = (v: number): number => {
+      let best = 0;
+      let bestD = Infinity;
+      s.steps.forEach((step, i) => {
+         const d = Math.abs(step - v);
+         if (d < bestD) {
+            best = i;
+            bestD = d;
+         }
+      });
+      return best;
+   };
+
+   const readout = document.createElement("button");
+   readout.type = "button";
+   readout.className = "menu-slider-val";
+   readout.title = "Reset to default";
+
+   const paint = (v: number): void => {
+      range.value = String(idxOf(v));
+      readout.textContent = s.format(v);
+   };
+   paint(s.get());
+
+   range.addEventListener("input", () => {
+      const v = s.steps[Number(range.value)];
+      readout.textContent = s.format(v);
+      s.onChange(v);
+   });
+   readout.addEventListener("click", (e) => {
+      e.preventDefault();
+      s.reset();
+      paint(s.get());
+   });
+
+   row.append(lbl, range, readout);
+   return row;
 }
 
 /* A menu of rows that are either clickable actions (onClick set) or inert stubs.

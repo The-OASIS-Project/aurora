@@ -30,6 +30,14 @@ import "./styles/homeassistant.css";
 import "./styles/dialog.css";
 
 import { applyPalette } from "./design/tokens.ts";
+import {
+   applyUiScale,
+   formatUiScale,
+   getUiScale,
+   setUiScale,
+   UI_SCALE_DEFAULT,
+   UI_SCALE_STEPS
+} from "./design/ui-scale.ts";
 import { Store } from "./state/store.ts";
 import { Choreographer } from "./choreography/choreographer.ts";
 import { Css3dRenderer } from "./render/css3d.ts";
@@ -49,6 +57,9 @@ import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
       stylesheets and the anchor shader share one tunable source. */
 applyPalette();
+/* User's persisted UI-size multiplier, applied before first paint so type/spacing
+   settle at the chosen scale with no reflow flash. */
+applyUiScale();
 
 /* 2. The layers + views. */
 const store = new Store();
@@ -99,9 +110,27 @@ const PANEL_LABELS: Record<string, string> = {
    documents: "Documents"
 };
 /* Display kill switches double as a profiling tool (bloom is the real GPU cost;
-   star field and clouds are cheap but exposed for comparison). State lives here;
-   the anchor just applies it. */
-const display = { starfield: true, clouds: true, bloom: true };
+   star field and clouds are cheap but exposed for comparison). Persisted so a chosen
+   profile survives a reload; the anchor applies it (below, and on each toggle). */
+const DISPLAY_KEY = "aurora.display";
+const display = ((): { starfield: boolean; clouds: boolean; bloom: boolean } => {
+   const d = { starfield: true, clouds: true, bloom: true };
+   try {
+      const saved = JSON.parse(localStorage.getItem(DISPLAY_KEY) ?? "{}") as Record<string, unknown>;
+      for (const k of Object.keys(d) as (keyof typeof d)[]) {
+         if (typeof saved[k] === "boolean") d[k] = saved[k] as boolean;
+      }
+   } catch {
+      /* corrupt/absent -> defaults (all on) */
+   }
+   return d;
+})();
+const saveDisplay = (): void => localStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
+/* Push the persisted layer state onto the anchor now (its own defaults are all-on, so a
+   saved-off layer would otherwise flash on until first toggled). */
+anchor.setStarfield(display.starfield);
+anchor.setClouds(display.clouds);
+anchor.setBloom(display.bloom);
 /* TTS toggle + New Chat are backed by the ingest (DAWN), which exists further down;
    these hooks are wired once it does. */
 const ttsControl = { get: (): boolean => false, toggle: (): void => {} };
@@ -215,19 +244,36 @@ const menu = mountMenu(stage, {
       {
          label: "Star Field",
          get: () => display.starfield,
-         toggle: () => anchor.setStarfield((display.starfield = !display.starfield))
+         toggle: () => {
+            anchor.setStarfield((display.starfield = !display.starfield));
+            saveDisplay();
+         }
       },
       {
          label: "Nebula Clouds",
          get: () => display.clouds,
-         toggle: () => anchor.setClouds((display.clouds = !display.clouds))
+         toggle: () => {
+            anchor.setClouds((display.clouds = !display.clouds));
+            saveDisplay();
+         }
       },
       {
          label: "Bloom (glow)",
          get: () => display.bloom,
-         toggle: () => anchor.setBloom((display.bloom = !display.bloom))
+         toggle: () => {
+            anchor.setBloom((display.bloom = !display.bloom));
+            saveDisplay();
+         }
       }
-   ]
+   ],
+   displaySlider: {
+      label: "Text Size",
+      steps: UI_SCALE_STEPS,
+      get: () => getUiScale(),
+      format: (v) => formatUiScale(v),
+      onChange: (v) => setUiScale(v),
+      reset: () => setUiScale(UI_SCALE_DEFAULT)
+   }
 });
 
 /* Pointer taps and drags for panels: drag to a rail docks (foreground), drop off the
