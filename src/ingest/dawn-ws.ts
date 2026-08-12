@@ -57,6 +57,7 @@ import {
 const BIN_AUDIO_IN = 0x01; // mic audio to DAWN ([0x01][raw Int16 PCM] or [0x01][len-prefixed opus])
 const BIN_AUDIO_IN_END = 0x02; // end of a push-to-talk utterance (no payload); triggers ASR
 const TYPED_ECHO_TTL_MS = 15000; // window to match a typed turn's echo before it's stale
+const MIC_MUTE_COOLDOWN_MS = 800; // hold the continuous mute this long after DAWN stops speaking
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after the opcode)
@@ -366,9 +367,11 @@ export class DawnIngest implements Ingest {
       references sinks, which start() sets before any audio can arrive. */
    private readonly tts = new TtsPlayback({
       onLevels: (bins) => this.sinks.reactor.setLevels(bins),
-      /* Echo prevention for continuous listening: mute the mic while DAWN's voice actually
-         plays. A no-op outside continuous mode (setMuted early-returns), so PTT is unaffected. */
-      onActive: (active) => this.mic.setMuted(active)
+      /* Echo prevention for continuous listening: onActive tracks real TTS playback (the
+         buffered tail included); updateMicMute combines it with DAWN's speaking state so the
+         mic stays muted through the whole reply - sentence gaps and tail. No-op outside
+         continuous mode, so PTT is unaffected. */
+      onActive: () => this.updateMicMute()
    });
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
@@ -409,6 +412,8 @@ export class DawnIngest implements Ingest {
       session's handshake (DAWN destroys the always-on context on socket close). */
    private continuousOn = false;
    private resumeContinuous = false;
+   private dawnSpeaking = false; // DAWN's `state` is "speaking" (persists across TTS sentence gaps)
+   private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
@@ -884,6 +889,11 @@ export class DawnIngest implements Ingest {
          case "state": {
             const st = String(p.state ?? "idle");
             const detail = typeof p.detail === "string" ? p.detail : undefined;
+            /* Drive the continuous echo-mute off DAWN's speaking state: it stays "speaking"
+               across TTS sentence gaps, so muting on it (not on per-segment TTS playback)
+               keeps the mic from hearing DAWN's own voice between sentences. */
+            this.dawnSpeaking = st === "speaking";
+            this.updateMicMute();
             this.sinks.reactor.setState(toReactorState(st));
             this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
             this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
@@ -1333,12 +1343,11 @@ export class DawnIngest implements Ingest {
                   this.resumeContinuous = false;
                   this.mic.continuousStop();
                }
-            } else if (st === "listening" && this.continuousOn && !this.tts.isSpeaking()) {
-               /* Safety net: a dropped playback-end could leave the mic muted forever;
-                  "listening" means the server is ready for audio, so ensure we're unmuted -
-                  BUT only if TTS isn't still audibly playing (the server returns to listening
-                  ahead of the client's buffered tail), or we'd capture DAWN's own voice. */
-               this.mic.setMuted(false);
+            } else if (st === "listening" && this.continuousOn) {
+               /* Re-evaluate the mute (backstop): updateMicMute keeps it muted while DAWN is
+                  still speaking or its tail is playing, and reopens the mic once both settle -
+                  so this can't reopen mid-reply the way a bare unmute here used to. */
+               this.updateMicMute();
             }
             break;
          }
@@ -1518,9 +1527,9 @@ export class DawnIngest implements Ingest {
          the constant 48000 (its VAD decimation divides by it - reporting the ctx rate would
          degrade wake detection). */
       this.send({ type: "always_on_enable", payload: { sample_rate: 48000 } });
-      /* Seed the echo mute from live TTS: latching while DAWN is mid-reply must not capture
-         its voice. onActive drives the mute after this, but begin() would otherwise start live. */
-      this.mic.continuousStart(this.tts.isSpeaking());
+      /* Seed the echo mute: latching while DAWN is mid-reply (speaking or audio still
+         playing) must not capture its voice. updateMicMute drives it after this. */
+      this.mic.continuousStart(this.dawnSpeaking || this.tts.isSpeaking());
    }
 
    /* userInitiated: a tap-off / auto-unlatch clears the resume flag; a transient teardown
@@ -1529,8 +1538,33 @@ export class DawnIngest implements Ingest {
       if (!this.continuousOn) return;
       this.continuousOn = false;
       if (userInitiated) this.resumeContinuous = false;
+      window.clearTimeout(this.micMuteCooldown);
+      this.micMuteCooldown = 0;
       this.mic.continuousStop(); // synchronous: releases the mic and emits idle
       this.send({ type: "always_on_disable" });
+   }
+
+   /* Single echo-mute decision for continuous listening. Muted while DAWN is speaking OR its
+      voice is still audibly playing (the buffered tail after state:idle); when both settle,
+      a short cooldown holds the mute a beat longer, then reopens the mic. Using DAWN's
+      speaking state - which spans the whole reply - closes the inter-sentence gaps that
+      per-segment TTS playback alone would leave open. No-op outside continuous mode. */
+   private updateMicMute(): void {
+      if (!this.continuousOn) {
+         window.clearTimeout(this.micMuteCooldown);
+         this.micMuteCooldown = 0;
+         return;
+      }
+      if (this.dawnSpeaking || this.tts.isSpeaking()) {
+         window.clearTimeout(this.micMuteCooldown);
+         this.micMuteCooldown = 0;
+         this.mic.setMuted(true);
+      } else if (this.micMuteCooldown === 0) {
+         this.micMuteCooldown = window.setTimeout(() => {
+            this.micMuteCooldown = 0;
+            this.mic.setMuted(false);
+         }, MIC_MUTE_COOLDOWN_MS);
+      }
    }
 
    /* Request the calendar map + today's occurrences (both reads). Called on connect,
@@ -1840,6 +1874,9 @@ export class DawnIngest implements Ingest {
       this.stopMetrics();
       this.closeMusicStream();
       this.tts?.stop();
+      window.clearTimeout(this.micMuteCooldown);
+      this.micMuteCooldown = 0;
+      this.dawnSpeaking = false;
       /* Drop any in-flight utterance: the server's accumulated audio dies with the
          connection, so there is nothing to salvage. Reset the button to idle. */
       this.mic.stop();
