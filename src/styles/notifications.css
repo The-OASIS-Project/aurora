@@ -1,0 +1,154 @@
+/*
+ * Notice cards: self-owned movable notification cards (src/notify/notifications.ts).
+ * Same frosted/machined language as the dock cards and the movable instruments, so a
+ * notice snapped flush against music/calendar/HA reads as one family. Tone-aware: the
+ * cool accent for nominal, the warm alert channel for "attention" (needs-you).
+ *
+ * Lifecycle classes (JS-driven): .notice-in = entrance spike; .notice-rest = quiet dim
+ * float (a settled persist notice); .notice-leaving = fading out to auto-dismiss;
+ * .notice-snapped = docked/persistent (a left accent rail marks it as kept).
+ */
+
+.notice-card {
+   position: absolute;
+   left: 28px;
+   top: 28px;
+   z-index: 7; /* above the instruments (5) and docks (6); below the drag ghost (40) */
+   width: 15rem;
+   max-width: 80vw;
+   box-sizing: border-box;
+   padding: 0.7rem 0.85rem 0.8rem 0.95rem;
+   /* Whole card is a drag handle (the x opts out); position persists via makeMovable. */
+   cursor: grab;
+   touch-action: none;
+   color: var(--text);
+   background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--node-accent, var(--accent)) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 40%, transparent) 92%
+   );
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent, var(--accent)) 26%, transparent);
+   backdrop-filter: blur(8px);
+   -webkit-backdrop-filter: blur(8px);
+   transition:
+      opacity 450ms ease,
+      box-shadow 300ms ease;
+}
+.notice-card.movable-dragging {
+   cursor: grabbing;
+}
+/* Tone: nominal uses the accent; attention uses the warm alert channel. Both flow
+   through --node-accent so the bg/border/dot pick it up in one place. */
+.notice-card {
+   --node-accent: var(--accent);
+   --node-accent-glow: var(--accent-glow);
+}
+.notice-card.notice-attention {
+   --node-accent: var(--alert);
+   --node-accent-glow: var(--alert-glow);
+}
+.notice-card .panel-corner {
+   border-color: color-mix(in srgb, var(--node-accent) 45%, transparent);
+}
+
+.notice-head {
+   display: flex;
+   align-items: center;
+   gap: 0.45rem;
+   margin-bottom: 0.3rem;
+}
+.notice-dot {
+   flex: 0 0 auto;
+   width: 7px;
+   height: 7px;
+   border-radius: 50%;
+   background: var(--node-accent);
+   box-shadow: 0 0 8px color-mix(in srgb, var(--node-accent-glow) 65%, transparent);
+}
+.notice-kind {
+   flex: 1 1 auto;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   color: color-mix(in srgb, var(--node-accent-glow) 70%, var(--text-dim));
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.notice-close {
+   flex: 0 0 auto;
+   width: 1.2rem;
+   height: 1.2rem;
+   display: grid;
+   place-items: center;
+   padding: 0;
+   font-size: var(--fs-body);
+   line-height: 1;
+   color: var(--text-faint);
+   background: none;
+   border: none;
+   cursor: pointer;
+   transition: color 140ms ease;
+}
+.notice-close:hover {
+   color: var(--node-accent-glow);
+}
+.notice-close:focus-visible {
+   outline: 2px solid var(--node-accent);
+   outline-offset: 1px;
+}
+
+.notice-title {
+   font-size: var(--fs-data);
+   line-height: 1.35;
+   color: var(--text);
+   word-break: break-word;
+}
+.notice-sub {
+   margin-top: 0.2rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.03em;
+   color: var(--text-faint);
+   word-break: break-word;
+}
+
+/* Docked/persistent: a left accent rail marks it as kept (vs a transient toast). */
+.notice-card.notice-snapped {
+   border-left: 2px solid var(--node-accent);
+   padding-left: calc(0.95rem - 2px);
+}
+
+/* Settled persist notice: quiet dim float, still there. */
+.notice-card.notice-rest {
+   opacity: 0.5;
+}
+/* Auto-dismissing toast: fade out, then the layer removes it. */
+.notice-card.notice-leaving {
+   opacity: 0;
+   transition: opacity 1400ms ease;
+   pointer-events: none;
+}
+
+/* Entrance spike. Keyframe (not transition) so it never fights makeMovable's inline
+   transition during a snap glide. */
+.notice-card.notice-in {
+   animation: notice-in 340ms cubic-bezier(0.2, 0.75, 0.2, 1) both;
+}
+@keyframes notice-in {
+   from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+   }
+   to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+   .notice-card.notice-in {
+      animation: none;
+   }
+}

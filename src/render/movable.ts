@@ -20,6 +20,20 @@
  * side rails and reports intent to the store; this moves a live self-owned view.
  */
 
+import { ANCHOR_SIZE_FRAC } from "../design/tokens.ts";
+
+/* Central dead zone: a full-height vertical strip as wide as the reactor, centered on it.
+   Reused from ANCHOR_SIZE_FRAC (the atom's real footprint) so it tracks the reactor at
+   any resolution. No view snaps INTO this strip - drops resolve to the left/right regions
+   flanking it (the two side columns) - and a card released with its center inside the
+   strip stays free (unsnapped): that free drop over the atom is the undock gesture. */
+const DEAD_ZONE_RADIUS_FRAC = ANCHOR_SIZE_FRAC / 2;
+function deadZoneX(): [number, number] {
+   const r = DEAD_ZONE_RADIUS_FRAC * Math.min(window.innerWidth, window.innerHeight);
+   const cx = window.innerWidth / 2;
+   return [cx - r, cx + r];
+}
+
 export interface MovableOptions {
    /* localStorage key for the persisted top-left position. */
    storageKey: string;
@@ -34,6 +48,10 @@ export interface MovableOptions {
    /* Magnetic distance around each axis stop, as a fraction of the smaller viewport
       dimension. Larger = stickier stops / narrower free bands. */
    snapZone?: number;
+   /* Fired on drop with whether the view landed on a snap stop (a viewport dock OR a
+      sibling edge, either axis) vs. a free band. Lets a caller behave differently when
+      snapped - e.g. a notification stays persistent when snapped, transient when not. */
+   onSnap?: (snapped: boolean) => void;
 }
 
 /* A preview for one snapped axis: a short glowing bar, either at a viewport edge
@@ -49,6 +67,10 @@ interface Snap {
    top: number;
    xPrev: AxisPreview;
    yPrev: AxisPreview;
+   /* Whether each axis actually landed on a stop (true even for the preview-less
+      viewport-center dock, where xPrev/yPrev are null). Drives onSnap. */
+   xSnapped: boolean;
+   ySnapped: boolean;
 }
 
 const THRESHOLD = 4; // px of movement before a press becomes a drag (taps still click)
@@ -124,13 +146,18 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       const h = r.height;
 
       type Stop = { pos: number; preview: AxisPreview };
-      const nearest = (cur: number, stops: Stop[]): { pos: number; preview: AxisPreview } => {
+      const nearest = (
+         cur: number,
+         stops: Stop[]
+      ): { pos: number; preview: AxisPreview; snapped: boolean } => {
          let best: { stop: Stop; d: number } | null = null;
          for (const s of stops) {
             const d = Math.abs(cur - s.pos);
             if (d <= th && (!best || d < best.d)) best = { stop: s, d };
          }
-         return best ? { pos: best.stop.pos, preview: best.stop.preview } : { pos: cur, preview: null };
+         return best
+            ? { pos: best.stop.pos, preview: best.stop.preview, snapped: true }
+            : { pos: cur, preview: null, snapped: false };
       };
 
       /* X: viewport docks + per-sibling (left-align / right-align / flush-right /
@@ -161,9 +188,22 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
          yStops.push({ pos: o.top - h - SNAP_GAP, preview: { type: "guide", coord: o.top - SNAP_GAP } });
       }
 
-      const sx = nearest(r.left, xStops);
+      /* Reject any X stop that would land the card overlapping the central dead strip
+         (this also drops the viewport-center stop, whose card sits over the atom): a view
+         can only snap into the left or right region flanking the reactor. */
+      const [dxMin, dxMax] = deadZoneX();
+      const validXStops = xStops.filter((s) => !(s.pos < dxMax && s.pos + w > dxMin));
+
+      const sx = nearest(r.left, validXStops);
       const sy = nearest(r.top, yStops);
-      return { left: sx.pos, top: sy.pos, xPrev: sx.preview, yPrev: sy.preview };
+      return {
+         left: sx.pos,
+         top: sy.pos,
+         xPrev: sx.preview,
+         yPrev: sy.preview,
+         xSnapped: sx.snapped,
+         ySnapped: sy.snapped
+      };
    };
 
    /* Show a glowing bar for each snapped axis: at the viewport edge for a screen
@@ -229,6 +269,23 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       }
    };
 
+   /* True when the view's horizontal centre sits inside the central dead strip: a drop
+      here does not snap (it floats free), which is the undock gesture for a notice. */
+   const inDeadZone = (r: DOMRect): boolean => {
+      const [lo, hi] = deadZoneX();
+      const cx = r.left + r.width / 2;
+      return cx >= lo && cx <= hi;
+   };
+   /* A "no snap" result: stay exactly where dropped, report unsnapped. */
+   const freeSnap = (r: DOMRect): Snap => ({
+      left: r.left,
+      top: r.top,
+      xPrev: null,
+      yPrev: null,
+      xSnapped: false,
+      ySnapped: false
+   });
+
    const onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
@@ -258,8 +315,15 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       }
       place(originLeft + dx, originTop + dy);
       const r = el.getBoundingClientRect();
-      pending = computeSnap(r, otherRects);
-      showPreview(pending, r);
+      if (inDeadZone(r)) {
+         /* Over the atom: no snapping - it drops free here (the undock region). */
+         pending = freeSnap(r);
+         vbar.style.display = "none";
+         hbar.style.display = "none";
+      } else {
+         pending = computeSnap(r, otherRects);
+         showPreview(pending, r);
+      }
    };
 
    const onUp = (): void => {
@@ -271,7 +335,8 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       document.body.style.userSelect = "";
       hidePreview();
 
-      const snap = pending ?? computeSnap(el.getBoundingClientRect(), otherRects);
+      const rect = el.getBoundingClientRect();
+      const snap = inDeadZone(rect) ? freeSnap(rect) : (pending ?? computeSnap(rect, otherRects));
       pending = null;
       const moved = Math.round(snap.left) !== Math.round(parseFloat(el.style.left || "0"));
       if (moved || snap.xPrev || snap.yPrev) {
@@ -284,6 +349,7 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
          opts.storageKey,
          JSON.stringify({ x: parseFloat(el.style.left), y: parseFloat(el.style.top) })
       );
+      opts.onSnap?.(snap.xSnapped || snap.ySnapped);
    };
 
    const onResize = (): void => {

@@ -27,6 +27,7 @@ import "./styles/list-card.css";
 import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
+import "./styles/notifications.css";
 import "./styles/dialog.css";
 
 import { applyPalette } from "./design/tokens.ts";
@@ -53,6 +54,7 @@ import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
+import { Notifications } from "./notify/notifications.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
       stylesheets and the anchor shader share one tunable source. */
@@ -141,6 +143,10 @@ const newChatHook = { fire: (): void => {} };
       Started at the end, once all four sinks exist. */
 const dawn = new DawnIngest();
 const ingest: Ingest = dawn;
+
+/* Notification layer: self-owned movable notice cards (they snap like the instruments).
+   The x closes a notice and propagates to DAWN (a ringing alarm needs a real dismiss). */
+const notifications = new Notifications(stage, (id) => ingest.dismiss(id));
 
 /* The music player: a dedicated interactive view (like the conversation console).
    It reflects DAWN's music_state/position and sends transport through the ingest;
@@ -463,7 +469,8 @@ ingest.start({
    },
    music: musicPlayer,
    calendar: calendarPanel,
-   ha: haPanel
+   ha: haPanel,
+   notifications
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -513,6 +520,7 @@ function dispose(): void {
    musicPlayer.destroy();
    calendarPanel.destroy();
    haPanel.destroy();
+   notifications.dispose();
    hud.destroy();
    menu.destroy();
    login.destroy();

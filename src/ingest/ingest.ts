@@ -210,6 +210,32 @@ export interface HASink {
    setStatus(status: HAStatus): void;
 }
 
+/* A transient attention card: a proactive alert, a ringing alarm, a job/observation
+   toast. `tone:"attention"` is the warm needs-you channel. `persist` marks a needs-you
+   notice that settles to a quiet float instead of auto-dismissing when left unsnapped.
+   `hold` is seconds fully visible before an unsnapped toast begins to fade. `x`/`y` are
+   the abstract default spot (-1..1) the card first appears at, until the user moves or
+   snaps it (after which its own persisted position wins). */
+export interface Notice {
+   id: string;
+   kind: string;
+   summary: string;
+   detail?: string;
+   tone?: "nominal" | "attention";
+   persist?: boolean;
+   hold?: number;
+   x: number;
+   y: number;
+}
+
+/* What ingest can push to the notification layer. Notices are self-owned movable cards
+   (they snap exactly like the music/calendar/HA instruments); the layer owns their
+   lifecycle, so this sink is just add/replace (`notify`, keyed by id) and `remove`. */
+export interface NotificationsSink {
+   notify(notice: Notice): void;
+   remove(id: string): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -219,6 +245,7 @@ export interface IngestSinks {
    music: MusicSink;
    calendar: CalendarSink;
    ha: HASink;
+   notifications: NotificationsSink;
 }
 
 /*

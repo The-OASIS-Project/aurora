@@ -1208,7 +1208,7 @@ export class DawnIngest implements Ingest {
                });
             } else if (this.schedulerEventId > 0 && Number(p.event_id ?? 0) === this.schedulerEventId) {
                this.schedulerEventId = 0;
-               this.sinks.store.remove("scheduler");
+               this.sinks.notifications.remove("scheduler");
             }
             break;
          }
@@ -1982,17 +1982,20 @@ export class DawnIngest implements Ingest {
          persist?: boolean;
       }
    ): void {
-      this.sinks.store.upsert({
+      /* Notices are self-owned movable cards now (they snap like the instruments); the
+         notification layer owns presence/recede, so we just hand it the notice. `to`
+         (the old store importance target) is no longer needed. */
+      this.sinks.notifications.notify({
          id,
          kind,
          summary,
          detail: opts.detail,
-         restImportance: opts.persist ? IMPORTANCE.ambient : IMPORTANCE.invisible,
-         position: { x: opts.x, y: opts.y },
          tone: opts.tone ?? "nominal",
-         closeable: true
+         persist: opts.persist,
+         hold: opts.hold,
+         x: opts.x,
+         y: opts.y
       });
-      this.sinks.store.spike(id, opts.to, opts.tone ?? "nominal", opts.hold ?? 6);
    }
 
    /* Track a job in the active set. `queued`/`running` are active; everything else
