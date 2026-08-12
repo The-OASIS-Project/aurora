@@ -63,7 +63,7 @@
    min-height: 2.4em;
 }
 .music-title {
-   font-size: var(--fs-body);
+   font-size: var(--fs-data);
    color: var(--text);
    letter-spacing: 0.01em;
    white-space: nowrap;

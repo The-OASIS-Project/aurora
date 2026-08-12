@@ -46,7 +46,7 @@
    cursor: grabbing;
 }
 .ha-title {
-   font-size: var(--fs-body);
+   font-size: var(--fs-data);
    color: var(--text);
    letter-spacing: 0.04em;
    text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
@@ -180,11 +180,11 @@
    background: var(--accent);
    box-shadow: 0 0 6px color-mix(in srgb, var(--accent-glow) 65%, transparent);
 }
-/* Names sit at the mono data size (not the larger body size) so the board holds more
-   rows without scrolling. All online rows read the same (on/off is the toggle's job);
-   the offline dim below is what recedes a row. */
+/* Names sit at the label size (matching the state readout) so the board holds more rows
+   without scrolling. All online rows read the same (on/off is the toggle's job); the
+   offline dim below is what recedes a row. */
 .ha-name {
-   font-size: var(--fs-data);
+   font-size: var(--fs-label);
    color: var(--text);
    overflow: hidden;
    text-overflow: ellipsis;

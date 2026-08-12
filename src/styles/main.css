@@ -359,7 +359,9 @@ body.engaged #docks {
    align-items: center;
    gap: 0.6rem;
    padding: 0.42rem 0.55rem;
-   font-size: var(--fs-data);
+   /* Dropdown items sit at the label size (matching the top-bar buttons and the model
+      panel), not the larger data size. */
+   font-size: var(--fs-label);
    color: var(--text);
    cursor: pointer;
    white-space: nowrap;

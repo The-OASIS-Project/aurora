@@ -148,7 +148,7 @@
    white-space: pre-wrap;
 }
 .convo-msg.assistant .convo-body {
-   font-size: var(--fs-body);
+   font-size: var(--fs-data);
    color: var(--text);
 }
 
