@@ -37,12 +37,14 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   deliberate user gesture, never a frame handler. If a new feature needs to
   write to DAWN, flag it and confirm first.
 - **Three-space indentation. No em dashes in prose.**
-- **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
-  (e.g. the music player) should be grab-to-move with a persisted position via
-  `makeMovable` (`src/render/movable.ts`). Only fixed HUD chrome (clock, telemetry frame)
-  and top-band menu chrome (the menubar and the conversation picker, which is a peer of the
-  menubar) get a fixed screen position. Store-backed ambient panels dock to the rails through
-  `PanelDrag` instead.
+- **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
+  (music player, calendar, HA board) and the notification cards (`src/notify/`) are
+  grab-to-move with a persisted position via `makeMovable` (`src/render/movable.ts`), all
+  sharing one snap set with a central dead zone around the reactor. Only fixed HUD chrome
+  (clock, telemetry frame) and top-band menu chrome (the menubar and the conversation
+  picker, which is a peer of the menubar) get a fixed screen position. Store-backed ambient
+  panels dock to the rails through `PanelDrag` instead - but that path is stub-only today
+  (see the notification note below).
 - **Colors and feel only from `src/design/tokens.ts`.** Never hardcode a color in a
   component; use or add a token (it is mirrored to CSS custom properties).
 - **Feedback before implementation.** For a question or a design choice, give analysis,
@@ -74,12 +76,24 @@ spawning new tabs.
 ## Architecture in one paragraph
 
 `ingest -> state -> choreography -> render`, downward dependencies only. `Ingest`
-(`src/ingest/`) is the single DAWN boundary with four sinks (store, reactor,
-conversation, telemetry); `DawnIngest` is the real WebSocket client and `StubIngest` is
-fake data, swapped in one line in `main.ts`. The `Store` holds importance;
-`spike()` / `tick()` are the spike-then-recede. The choreographer maps importance to
-depth. The CSS-3D renderer is the only pixel code; Three.js lives only in the anchor
+(`src/ingest/`) is the single DAWN boundary; it feeds the four seam sinks (store, reactor,
+conversation, telemetry) plus the self-owned view sinks (music, calendar, ha,
+notifications, conversation list). `DawnIngest` is the real WebSocket client and
+`StubIngest` is fake data, swapped in one line in `main.ts`. The `Store` holds importance;
+`spike()` / `tick()` are the spike-then-recede, and the choreographer maps importance to
+depth - but this seam is exercised only by `StubIngest` now (see the notification note
+below). The CSS-3D renderer is the only pixel code; Three.js lives only in the anchor
 (the center reactor) and never crosses the seam.
+
+**Notifications are NOT store-backed** (as of 2026-08-13). Notices - proactive alerts,
+alarms, job/observation toasts, and the sticky jobs card - are self-owned movable cards in
+`src/notify/`, fed by the `notifications` ingest sink, snapping like the instruments
+(`makeMovable` + central dead zone). Their spike/recede/contention/engagement-dim/60s-toast
+lifecycle is a per-frame importance model inside that layer (ticked from the frame loop,
+orthogonal to `makeMovable`: X/Y is placement, Z/blur/opacity is the model), NOT the
+store/choreographer. `spikeNotice` / `renderJobs` route to that sink. In the live DAWN path
+nothing writes the store, so the whole store/choreography/rail/`PanelDrag` pipeline is
+stub-only - kept as the render seam and the extension point for future store-backed panels.
 
 ## Non-obvious gotchas (these cost real time)
 

@@ -101,7 +101,7 @@ thing, briefly, without being asked. It is wired and live in
 | Frame | Payload | Meaning |
 |-------|---------|---------|
 | `attention_alert` | `summary` (text), `level` ∈ **alert \| ambient** | The banner channel. `alert` = needs you; `ambient` = ambient FYI. **Maps 1:1 onto the dashboard's importance/tone.** Its own channel so it never triggers the scheduler chime. |
-| `silent_observation` | `ts`, `category`, `note`, `filter_match` | A quieter rail-icon / peek primitive. WebUI-only; satellites never get it. |
+| `silent_observation` | `ts`, `category`, `note`, `filter_match` | A quieter FYI/peek primitive (surfaced as a low-importance notice card). WebUI-only; satellites never get it. |
 | `context_injection` | `conversation_id`, `turn_id`, `items[]` (each `source_id`, `source_type` ∈ internal \| external \| user-content, `text`, score breakdown) | What DAWN pulled into context for a turn. Rich, for a "why did it say that" surface. |
 | `memory_extraction_notice` | `level`, `message` | DAWN learned/stored something. |
 | `memory_proposals_changed` | `count` | Pending memory proposals count changed. |

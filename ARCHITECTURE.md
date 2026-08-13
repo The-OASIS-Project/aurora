@@ -30,9 +30,11 @@ ingest  ->  state  ->  choreography  ->  render
 ```
 
 - **ingest** (`src/ingest/`) is the single boundary to DAWN. An `Ingest` implementation
-  feeds four sinks: the store, the reactor, the conversation, and the HUD telemetry.
-  `StubIngest` (fake data) and `DawnIngest` (the real WebSocket client) are
-  interchangeable; swapping DAWN in is one line in `main.ts`.
+  feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
+  HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar,
+  Home Assistant, notifications, conversation list). `StubIngest` (fake data) and
+  `DawnIngest` (the real WebSocket client) are interchangeable; swapping DAWN in is one
+  line in `main.ts`.
 - **state** (`src/state/`) is the `Store` of `ElementState`: what is true right now
   (summary, importance, planar position, tone), with zero notion of pixels. `spike()`
   raises importance; `tick()` decays it back toward a floor. That is the whole "spike
@@ -43,6 +45,15 @@ ingest  ->  state  ->  choreography  ->  render
 - **render** (`src/render/`) is the only code that knows what a pixel is. The CSS-3D
   renderer maps depth 0..1 to translateZ + perspective + blur, presence to opacity,
   tone to a palette token.
+
+Not everything flows through this seam. Store-backed ambient elements do (they earn depth
+and front-slot contention from the choreographer). The standalone interactive views - the
+music player, calendar, Home Assistant board, conversation picker, and the **notification
+layer** - are self-owned: ingest feeds each its own sink, and the view owns its DOM and
+position directly (see the notification-layer and conventions sections). In the live DAWN
+path today nothing drives the store - notices and the jobs card moved to the notification
+layer - so the seam is exercised only by `StubIngest`. It remains the spine and the
+extension point for any future store-backed panel.
 
 ### The render seam
 
@@ -68,6 +79,26 @@ The anchor is a full-screen canvas that also holds the drifting particle nebula,
 there is no compositing seam between the background and the reactor. (The bloom pass
 outputs opaque black with no alpha, which is why the ground token is pure black by
 design.)
+
+## The notification layer (`src/notify/`)
+
+Notices (proactive alerts, ringing alarms, job/observation toasts, and the sticky jobs
+card) are NOT store-backed ambient panels. They are self-owned movable cards, fed by the
+`notifications` ingest sink and owning their own DOM, position, and lifecycle - so they
+snap exactly like the instruments (music/calendar/HA) via `makeMovable`, including the
+central dead zone around the reactor (a drop over the atom un-snaps a notice).
+
+Their motion is a self-contained importance model, ticked from the frame loop and kept
+orthogonal to `makeMovable`: `makeMovable` owns X/Y (placement), the model owns Z / blur /
+opacity (translateZ + depth-of-field blur + presence). A notice spikes forward, holds,
+then recedes into depth as its importance decays - the same "spike then recede" the store
+does, reimplemented here because one card cannot be positioned by both `makeMovable` and
+the choreographer at once. Front-slot contention (with severity preemption so a real alert
+jumps ahead), engagement dim (notices recede while the chat input is focused), and a ~60s
+hover-resettable toast life all fall out of that model. A notice is transient - a toast
+recedes to a visible floor and is then removed; a persist alert settles to a dim float -
+until it is SNAPPED, which makes it persistent like an instrument. `prefers-reduced-motion`
+drops the depth slide + blur, leaving opacity alone.
 
 ## The ingest boundary (`src/ingest/`)
 
@@ -95,18 +126,24 @@ from a deliberate user gesture. Everything else is read.
 ```
 src/
   main.ts            composition root: wires the layers, runs the one frame loop
-  design/tokens.ts   palette + feel, mirrored to CSS custom properties
+  design/tokens.ts   palette + feel + type scale, mirrored to CSS custom properties
   ingest/            the DAWN boundary (Ingest, DawnIngest, StubIngest, sinks)
   state/             Store + ElementState
   choreography/      importance -> depth / presence
-  render/            css3d renderer, RenderNode contract, panel drag
+  render/            css3d renderer, RenderNode contract, makeMovable, panel drag
   anchor/            the Three.js reactor (the only WebGL)
   conversation/      the front window, markdown, and the 3D-lean recede
+  conversation-picker/  the top-band history panel
+  notify/            the self-owned movable notification cards + importance model
+  music/             the movable music player view
+  calendar/          the movable calendar card
+  homeassistant/     the movable Home Assistant board
   audio/             TTS playback + FFT tap to the reactor
   hud/               clock + telemetry readout
   menu/              top menu: panels, display, model, system
   auth/              login panel
   model/             LLM-selection types + effort rules
+  util/              small shared helpers (time formatting, ...)
   styles/            CSS (driven by the design tokens via custom properties)
 docs/                the DAWN signal map
 ```
@@ -119,6 +156,7 @@ docs/                the DAWN signal map
 store.tick(dt)                    // importance decays (the recede)
 nodes = choreographer.tick(...)   // state -> coordinates
 renderer.render(nodes)            // coordinates -> pixels
+notifications.tick(dt)            // notice importance -> depth recede + contention
 anchor.frame(t)                   // the center light
 ```
 
@@ -130,9 +168,11 @@ has no use for change-notification plumbing, and polling has no ordering surpris
 - **Swap the renderer to WebGL.** Implement `Renderer` against `RenderNode` and wire it
   in `main.ts`. Nothing above the seam changes.
 - **Consume a new DAWN signal.** Handle its frame in `DawnIngest` and route it to a sink
-  (a store spike, the reactor, the conversation, or telemetry). See the signal map.
+  (a store spike, the reactor, the conversation, telemetry, or a view sink such as
+  `notifications`). See the signal map.
 - **Add an ambient panel kind.** `store.upsert({ id, kind, ... })`; the renderer is
-  data-driven and renders unknown kinds generically.
+  data-driven and renders unknown kinds generically. (For an attention-style card, prefer
+  the notification layer's `notify()` instead - see `src/notify/`.)
 
 ## Conventions
 
@@ -140,8 +180,10 @@ has no use for change-notification plumbing, and polling has no ordering surpris
 - No em dashes in prose.
 - Colors and feel come only from `src/design/tokens.ts` (the single source of truth,
   mirrored to CSS custom properties). Do not hardcode colors in components.
-- **Views are user-arrangeable, not glued to a corner.** A standalone interactive view
-  (the music player today; future floating instruments) should be grab-to-move with a
-  persisted position, via `makeMovable` (`src/render/movable.ts`). This is distinct from
-  the store-backed ambient panels, which drag onto the side rails through `PanelDrag`.
-  Reserve a fixed screen position for fixed HUD chrome (clock, telemetry frame) only.
+- **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
+  (music player, calendar, Home Assistant board) and the notification cards are grab-to-move
+  with a persisted position, via `makeMovable` (`src/render/movable.ts`) - all sharing one
+  snap set (they snap to each other and the viewport, with a central dead zone around the
+  reactor). This is distinct from the store-backed ambient panels, which drag onto the side
+  rails through `PanelDrag` (a path only `StubIngest` exercises today). Reserve a fixed
+  screen position for fixed HUD chrome (clock, telemetry frame) only.
