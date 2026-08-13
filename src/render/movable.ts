@@ -88,7 +88,7 @@ const movables = new Set<HTMLElement>();
 /* The gutter a docked view keeps from the viewport edge. Read from the
    --movable-edge CSS custom property so the snap inset and the cards' default CSS
    position (which use the same property) can never drift apart. */
-function cssMovableEdge(): number {
+export function cssMovableEdge(): number {
    const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--movable-edge"));
    return Number.isFinite(v) ? v : 24;
 }

@@ -28,7 +28,7 @@
  */
 
 import { addCorners } from "../render/corners.ts";
-import { makeMovable } from "../render/movable.ts";
+import { cssMovableEdge, makeMovable } from "../render/movable.ts";
 import type { Notice, NotificationsSink } from "../ingest/ingest.ts";
 
 const DEFAULT_HOLD = 6; // seconds a notice holds at peak before it begins to recede
@@ -111,6 +111,11 @@ export class Notifications implements NotificationsSink {
    private frontHolder: string | null = null;
    private frontHeld = 0;
    private rev = 0;
+   /* Honor the OS reduced-motion setting like the anchor/choreographer: no depth slide or
+      DOF blur, and no eased drift - notices settle to their target opacity directly. */
+   private readonly reducedMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
    constructor(container: HTMLElement, onDismiss: (id: string) => void) {
       this.container = container;
@@ -175,7 +180,9 @@ export class Notifications implements NotificationsSink {
          card.depth = ease(card.depth, depthTarget, DEPTH_EASE, dt);
          card.presence = ease(card.presence, presTarget, FADE_EASE, dt);
          card.emphasis = ease(card.emphasis, empTarget, FADE_EASE, dt);
-         this.applyVisual(card, this.engageAmt);
+         /* Hovering a notice to read/grab it lifts the engagement dim so it's legible even
+            while the chat input is focused. */
+         this.applyVisual(card, card.hovered ? 0 : this.engageAmt);
 
          /* A toast lingers - receded but visible and grabbable - for TOAST_LIFE seconds,
             then leaves; hovering restarts that timer so it is never lost while unwatched.
@@ -208,21 +215,37 @@ export class Notifications implements NotificationsSink {
          return;
       }
       const challenger = wants[0];
-      if (challenger && challenger.notice.id !== this.frontHolder && this.frontHeld >= FRONT_DWELL) {
-         this.frontHolder = challenger.notice.id;
-         this.frontHeld = 0;
+      if (challenger && challenger.notice.id !== this.frontHolder) {
+         /* A genuinely higher-severity notice (e.g. an attention alert over a nominal
+            toast) preempts immediately; same-severity peers still wait out the dwell so a
+            burst of equals reads as a paced sequence rather than a flicker. */
+         const higherSeverity = !!holder && challenger.peak > holder.peak + 0.001;
+         if (higherSeverity || this.frontHeld >= FRONT_DWELL) {
+            this.frontHolder = challenger.notice.id;
+            this.frontHeld = 0;
+         }
       }
    }
 
    private applyVisual(card: Card, engageAmt: number): void {
       const depth = card.depth * (1 - ENGAGE_PUSH * engageAmt);
-      const presence = card.presence * (1 - ENGAGE_DIM * engageAmt);
-      const z = Z_BACK + (Z_FRONT - Z_BACK) * depth;
-      const blur = (1 - depth) * MAX_BLUR;
-      card.root.style.transform = `perspective(${PERSPECTIVE}px) translateZ(${z.toFixed(1)}px)`;
-      card.root.style.filter = blur > 0.05 ? `blur(${blur.toFixed(2)}px)` : "";
-      card.root.style.opacity = clamp01(presence).toFixed(3);
+      const presence = clamp01(card.presence * (1 - ENGAGE_DIM * engageAmt));
+      if (this.reducedMotion) {
+         /* No depth slide or DOF blur: convey state through opacity alone. */
+         card.root.style.transform = "";
+         card.root.style.filter = "";
+      } else {
+         const z = Z_BACK + (Z_FRONT - Z_BACK) * depth;
+         const blur = (1 - depth) * MAX_BLUR;
+         card.root.style.transform = `perspective(${PERSPECTIVE}px) translateZ(${z.toFixed(1)}px)`;
+         card.root.style.filter = blur > 0.05 ? `blur(${blur.toFixed(2)}px)` : "";
+      }
+      card.root.style.opacity = presence.toFixed(3);
       card.root.style.setProperty("--notice-glow", card.emphasis.toFixed(3));
+      /* A near-invisible card must not swallow clicks meant for what's behind it (the old
+         fading toast set pointer-events:none). Above the threshold it stays grabbable so a
+         receded toast can still be hovered back. */
+      card.root.style.pointerEvents = presence < 0.18 ? "none" : "";
    }
 
    private exempt(card: Card): boolean {
@@ -398,7 +421,7 @@ export class Notifications implements NotificationsSink {
       const ch = r.height || 96;
       const nx = (card.notice.x + 1) / 2;
       const ny = (card.notice.y + 1) / 2;
-      const edge = 28;
+      const edge = cssMovableEdge(); // same inset makeMovable docks to (the --movable-edge token)
       const left = Math.round(edge + nx * Math.max(0, W - cw - 2 * edge));
       const top = Math.round(edge + ny * Math.max(0, H - ch - 2 * edge));
       card.root.style.left = `${left}px`;
