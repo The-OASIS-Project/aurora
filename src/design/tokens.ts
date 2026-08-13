@@ -37,8 +37,10 @@ export interface Palette {
    alertGlow: string;
 
    /* Secondary cool hue for the second gimbal gauge ring so the two are not one
-      teal. Still cool, still calm, but distinct. */
+      teal. Still cool, still calm, but distinct. `coolGlow` is its bright/hot end (cool
+      lifted toward white), the cool-ring analogue of accentGlow - drives the comet head. */
    cool: string;
+   coolGlow: string;
 
    /* Text: low-luminance off-white with a faint teal cast, so it belongs to the
       same light as the accent rather than sitting on top as plain white. The
@@ -70,6 +72,7 @@ export const PALETTE: Palette = {
    alertGlow: "#FF8A6B",
 
    cool: "#2FB4D6",
+   coolGlow: "#97D9EA",
 
    text: "#CAD7D5",
    textDim: "#8AA09C",
@@ -153,6 +156,7 @@ export function applyPalette(p: Palette = PALETTE): void {
    root.setProperty("--alert", p.alert);
    root.setProperty("--alert-glow", p.alertGlow);
    root.setProperty("--cool", p.cool);
+   root.setProperty("--cool-glow", p.coolGlow);
    root.setProperty("--text", p.text);
    root.setProperty("--text-dim", p.textDim);
    root.setProperty("--text-faint", p.textFaint);
