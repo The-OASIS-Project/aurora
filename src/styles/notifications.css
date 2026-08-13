@@ -4,9 +4,11 @@
  * notice snapped flush against music/calendar/HA reads as one family. Tone-aware: the
  * cool accent for nominal, the warm alert channel for "attention" (needs-you).
  *
- * Lifecycle classes (JS-driven): .notice-in = entrance spike; .notice-rest = quiet dim
- * float (a settled persist notice); .notice-leaving = fading out to auto-dismiss;
- * .notice-snapped = docked/persistent (a left accent rail marks it as kept).
+ * Recede / entrance / fade are the importance model's job (opacity, transform translateZ,
+ * and DOF blur are set per-frame in src/notify/notifications.ts), so there are no
+ * lifecycle state classes here. The only stateful class is .notice-snapped (docked: a
+ * left accent rail marks it as kept). --notice-glow (0..1, set per-frame) drives the
+ * front-holder glow.
  */
 
 .notice-card {
@@ -27,12 +29,18 @@
       color-mix(in srgb, var(--node-accent, var(--accent)) 8%, transparent),
       color-mix(in srgb, var(--ground-raise) 40%, transparent) 92%
    );
-   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--node-accent, var(--accent)) 26%, transparent);
+   /* Inset border + the front-holder glow (--notice-glow, 0..1, set per-frame). */
+   box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--node-accent, var(--accent)) 26%, transparent),
+      0 0 calc(22px * var(--notice-glow, 0))
+         color-mix(in srgb, var(--node-accent-glow, var(--accent-glow)) 45%, transparent);
    backdrop-filter: blur(8px);
    -webkit-backdrop-filter: blur(8px);
-   transition:
-      opacity 450ms ease,
-      box-shadow 300ms ease;
+   /* opacity / transform (translateZ) / filter (DOF blur) are driven per-frame by the
+      importance model (src/notify/notifications.ts) - no CSS transition on them, or it
+      would double-ease. box-shadow (the emphasis glow) may still transition. */
+   transition: box-shadow 300ms ease;
+   transform-style: preserve-3d;
 }
 .notice-card.movable-dragging {
    cursor: grabbing;
@@ -132,41 +140,10 @@
    padding-left: 0.5rem;
 }
 
-/* Docked/persistent: a left accent rail marks it as kept (vs a transient toast). */
+/* Docked/persistent: a left accent rail marks it as kept (vs a transient toast).
+   Recede/fade/entrance are the importance model's job (opacity/transform/filter set
+   per-frame), so there are no state classes here. */
 .notice-card.notice-snapped {
    border-left: 2px solid var(--node-accent);
    padding-left: calc(0.95rem - 2px);
-}
-
-/* Settled persist notice: quiet dim float, still there. */
-.notice-card.notice-rest {
-   opacity: 0.5;
-}
-/* Auto-dismissing toast: fade out, then the layer removes it. */
-.notice-card.notice-leaving {
-   opacity: 0;
-   transition: opacity 1400ms ease;
-   pointer-events: none;
-}
-
-/* Entrance spike. Keyframe (not transition) so it never fights makeMovable's inline
-   transition during a snap glide. */
-.notice-card.notice-in {
-   animation: notice-in 340ms cubic-bezier(0.2, 0.75, 0.2, 1) both;
-}
-@keyframes notice-in {
-   from {
-      opacity: 0;
-      transform: translateY(8px) scale(0.98);
-   }
-   to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-   .notice-card.notice-in {
-      animation: none;
-   }
 }

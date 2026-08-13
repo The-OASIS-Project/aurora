@@ -1235,9 +1235,9 @@ export class DawnIngest implements Ingest {
          }
 
          case "job_update": {
-            /* One job's transition. Upsert by id, drop on any terminal status. A
-               newly-appearing active job gets a brief foreground notice, since the
-               dock-rail panel itself is exempt from the spike choreography. */
+            /* One job's transition. Track by id, drop on any terminal status. A
+               newly-appearing active job also fires a brief toast notice, separate from
+               the sticky jobs card (which just reflects the active set). */
             const job = (p.job ?? {}) as JobRow;
             const wasActive = job.conversation_id != null && this.jobs.has(job.conversation_id);
             this.trackJob(job);

@@ -467,6 +467,7 @@ const conversation = mountConversation(stage, {
    onSubmit: (text) => ingest.submit(text),
    onEngage: (engaged) => {
       choreographer.setEngaged(engaged);
+      notifications.setEngaged(engaged);
       document.body.classList.toggle("engaged", engaged);
       ingest.setEngaged(engaged);
    }
@@ -509,6 +510,7 @@ function frame(now: number): void {
    store.tick(dt); // state evolves (importance decays: the recede)
    const nodes = choreographer.tick(store.snapshot(), dt); // state -> coordinates
    renderer.render(nodes); // coordinates -> pixels
+   notifications.tick(dt); // notice importance -> depth recede + contention + engagement
    anchor.frame((now - start) / 1000); // the center light
    musicPlayer.frame(); // spectrum meter + interpolated progress (when playing)
 
