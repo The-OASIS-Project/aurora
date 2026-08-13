@@ -37,7 +37,6 @@ import type {
    MusicTrack
 } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
-import { IMPORTANCE } from "../state/types.ts";
 import { TtsPlayback } from "../audio/tts.ts";
 import { MusicAudio } from "../audio/music.ts";
 import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
@@ -880,7 +879,6 @@ export class DawnIngest implements Ingest {
                NOT wipe the surface: guard success and leave state untouched. */
             if ((p as { success?: boolean }).success === false) {
                this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-                  to: 0,
                   x: 0,
                   y: -0.4,
                   hold: 4
@@ -926,7 +924,6 @@ export class DawnIngest implements Ingest {
                      ? (p as { error?: string }).error
                      : "Could not delete conversation";
                this.spikeNotice("conv-delete", "conversation", String(msg), {
-                  to: 0,
                   x: 0,
                   y: -0.4,
                   hold: 5,
@@ -1056,7 +1053,6 @@ export class DawnIngest implements Ingest {
                console.info("[dawn] notice:", code, message);
                if (message) {
                   this.spikeNotice("llm-notice", "notice", message, {
-                     to: IMPORTANCE.notice,
                      tone: "nominal",
                      hold: 7,
                      x: 0,
@@ -1198,7 +1194,6 @@ export class DawnIngest implements Ingest {
                console.warn("[dawn] ha_call_service failed:", p.entity_id, err);
                this.refreshHA();
                this.spikeNotice("ha-notice", "home", err, {
-                  to: IMPORTANCE.notice,
                   tone: "attention",
                   hold: 7,
                   x: 0,
@@ -1249,7 +1244,6 @@ export class DawnIngest implements Ingest {
             const nowActive = job.conversation_id != null && this.jobs.has(job.conversation_id);
             if (!wasActive && nowActive) {
                this.spikeNotice("job-notice", "jobs", `Started: ${job.title || "background job"}`, {
-                  to: IMPORTANCE.notice,
                   x: 0.6,
                   y: -0.4
                });
@@ -1265,7 +1259,6 @@ export class DawnIngest implements Ingest {
          case "job_notification":
             /* A job finished: spike a transient notice that recedes on its own. */
             this.spikeNotice("job-notice", "jobs", String(p.text ?? "Background job complete"), {
-               to: IMPORTANCE.notice,
                x: 0.6,
                y: -0.4
             });
@@ -1276,7 +1269,6 @@ export class DawnIngest implements Ingest {
                needs the user (warm + claims the front); level=ambient is an FYI. */
             const alert = String(p.level ?? "ambient") === "alert";
             this.spikeNotice("attention", "attention", String(p.summary ?? ""), {
-               to: alert ? IMPORTANCE.alert : IMPORTANCE.notice,
                tone: alert ? "attention" : "nominal",
                hold: alert ? 9 : 6,
                persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
@@ -1289,7 +1281,6 @@ export class DawnIngest implements Ingest {
          case "silent_observation":
             /* A quieter noticed-something FYI, categorized (calendar/email/…). */
             this.spikeNotice("observation", String(p.category ?? "note"), String(p.note ?? ""), {
-               to: IMPORTANCE.notice,
                hold: 5,
                x: -0.62,
                y: 0.42
@@ -1309,7 +1300,6 @@ export class DawnIngest implements Ingest {
                /* Only `ringing` needs a real dismiss; `fired` already auto-dismissed. */
                this.schedulerEventId = status === "ringing" ? Number(p.event_id ?? 0) : 0;
                this.spikeNotice("scheduler", String(p.event_type ?? "alarm"), String(p.name ?? "Alarm"), {
-                  to: IMPORTANCE.alert,
                   tone: "attention",
                   hold: 10,
                   detail: String(p.message ?? ""),
@@ -2161,17 +2151,17 @@ export class DawnIngest implements Ingest {
       window.clearInterval(this.haTimer);
    }
 
-   /* A notification card. It spikes forward, then either settles to a quiet floating
-      presence (`persist`, for the things you may want to act on: an attention alert, a
-      ringing alarm) or auto-fades away (a toast: job/observation/info). Either way it
-      carries an × close control and can be dragged to a rail to dock. Fixed id per
-      channel so a newer notice replaces the older, which also bounds the set. */
+   /* A notification card. Handed to the notification layer, which owns its life: it
+      spikes in, then either settles to a quiet float (`persist`, for things you may act
+      on: an attention alert, a ringing alarm) or auto-fades (a toast: job/observation/
+      info). It carries an × and snaps like the instruments (drag to dock, drag onto the
+      atom to undock). Fixed id per channel so a newer notice replaces the older. `x`/`y`
+      are the abstract default spot (-1..1) until the user moves/snaps it. */
    private spikeNotice(
       id: string,
       kind: string,
       summary: string,
       opts: {
-         to: number;
          x: number;
          y: number;
          tone?: "nominal" | "attention";
@@ -2180,9 +2170,6 @@ export class DawnIngest implements Ingest {
          persist?: boolean;
       }
    ): void {
-      /* Notices are self-owned movable cards now (they snap like the instruments); the
-         notification layer owns presence/recede, so we just hand it the notice. `to`
-         (the old store importance target) is no longer needed. */
       this.sinks.notifications.notify({
          id,
          kind,
