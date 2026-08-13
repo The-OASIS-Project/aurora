@@ -254,9 +254,16 @@ export interface Notice {
    kind: string;
    summary: string;
    detail?: string;
+   /* A list body (e.g. the active-jobs card's job titles), rendered under the summary. */
+   items?: string[];
    tone?: "nominal" | "attention";
    persist?: boolean;
    hold?: number;
+   /* A persistent status widget (the jobs card), not a transient toast: always full
+      presence, never fades or auto-dismisses, and has no close control - it is shown
+      while relevant and removed via `remove` when not. Still movable/snappable like the
+      instruments. `persist`/`hold`/`tone` transient fields are ignored when sticky. */
+   sticky?: boolean;
    x: number;
    y: number;
 }

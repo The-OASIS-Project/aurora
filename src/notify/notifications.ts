@@ -32,6 +32,7 @@ interface Card {
    kindEl: HTMLElement;
    titleEl: HTMLElement;
    subEl: HTMLElement;
+   listEl: HTMLElement;
    disposeMovable: () => void;
    snapped: boolean;
    hovered: boolean;
@@ -88,19 +89,27 @@ export class Notifications implements NotificationsSink {
       dot.className = "notice-dot";
       const kindEl = document.createElement("span");
       kindEl.className = "notice-kind";
-      const close = document.createElement("button");
-      close.className = "notice-close";
-      close.type = "button";
-      close.setAttribute("aria-label", "Dismiss notification");
-      close.textContent = "×"; // ×
-      head.append(dot, kindEl, close);
+      head.append(dot, kindEl);
+      /* A sticky status widget (jobs card) has no close control - it is shown/removed by
+         its source, not dismissed by the user. */
+      let close: HTMLButtonElement | null = null;
+      if (!notice.sticky) {
+         close = document.createElement("button");
+         close.className = "notice-close";
+         close.type = "button";
+         close.setAttribute("aria-label", "Dismiss notification");
+         close.textContent = "×"; // ×
+         head.append(close);
+      }
 
       const titleEl = document.createElement("div");
       titleEl.className = "notice-title";
       const subEl = document.createElement("div");
       subEl.className = "notice-sub";
+      const listEl = document.createElement("ul");
+      listEl.className = "notice-list";
 
-      root.append(head, titleEl, subEl);
+      root.append(head, titleEl, subEl, listEl);
       this.container.appendChild(root);
 
       const card: Card = {
@@ -109,6 +118,7 @@ export class Notifications implements NotificationsSink {
          kindEl,
          titleEl,
          subEl,
+         listEl,
          disposeMovable: () => {},
          snapped: localStorage.getItem(this.snapKey(notice.id)) === "1",
          hovered: false,
@@ -126,22 +136,25 @@ export class Notifications implements NotificationsSink {
          onSnap: (snapped) => this.onSnap(card, snapped)
       });
 
-      close.addEventListener("click", (e) => {
+      close?.addEventListener("click", (e) => {
          e.stopPropagation();
          this.dismiss(card);
       });
       root.addEventListener("pointerenter", () => this.setHover(card, true));
       root.addEventListener("pointerleave", () => this.setHover(card, false));
 
-      /* Entrance spike, then run the lifecycle for its snapped state. */
       requestAnimationFrame(() => root.classList.add("notice-in"));
-      if (card.snapped) this.applySnapped(card);
+      /* Sticky widgets are always full-presence (no transient life); notices run the
+         lifecycle for their snapped state. */
+      if (notice.sticky) root.classList.add("notice-snapped");
+      else if (card.snapped) this.applySnapped(card);
       else this.startTransient(card);
    }
 
    private update(card: Card, notice: Notice): void {
       card.notice = notice;
       this.paint(card);
+      if (notice.sticky) return; // persistent widget: content updates, presence unchanged
       /* A fresh notice on the same channel re-spikes; snapped cards stay put and full,
          unsnapped ones restart their transient life (brought back from any fade/rest). */
       if (card.snapped) this.applySnapped(card);
@@ -166,6 +179,13 @@ export class Notifications implements NotificationsSink {
    /* ---- lifecycle ---- */
 
    private startTransient(card: Card): void {
+      /* A sticky widget never goes transient - keep it full-presence. */
+      if (card.notice.sticky) {
+         this.clearTimers(card);
+         card.root.classList.remove("notice-rest", "notice-leaving");
+         card.root.classList.add("notice-snapped");
+         return;
+      }
       this.clearTimers(card);
       card.root.classList.remove("notice-snapped", "notice-rest", "notice-leaving");
       const hold = (card.notice.hold ?? DEFAULT_HOLD) * 1000;
@@ -197,6 +217,7 @@ export class Notifications implements NotificationsSink {
    }
 
    private onSnap(card: Card, snapped: boolean): void {
+      if (card.notice.sticky) return; // stays persistent wherever dropped (position persists)
       localStorage.setItem(this.snapKey(card.notice.id), snapped ? "1" : "0");
       if (snapped) {
          this.applySnapped(card);
@@ -213,7 +234,7 @@ export class Notifications implements NotificationsSink {
          /* Pause any fade/settle and bring it back to full so it can be read and grabbed. */
          this.clearTimers(card);
          card.root.classList.remove("notice-leaving", "notice-rest");
-      } else if (!card.snapped) {
+      } else if (!card.snapped && !card.notice.sticky) {
          this.startTransient(card);
       }
    }
@@ -229,6 +250,24 @@ export class Notifications implements NotificationsSink {
       const sub = notice.detail ?? "";
       card.subEl.style.display = sub ? "" : "none";
       if (card.subEl.textContent !== sub) card.subEl.textContent = sub;
+
+      const items = notice.items ?? [];
+      if (items.length) {
+         card.listEl.style.display = "";
+         const sig = items.join("\n");
+         if (card.listEl.dataset.sig !== sig) {
+            card.listEl.dataset.sig = sig;
+            card.listEl.replaceChildren(
+               ...items.map((it) => {
+                  const li = document.createElement("li");
+                  li.textContent = it;
+                  return li;
+               })
+            );
+         }
+      } else {
+         card.listEl.style.display = "none";
+      }
    }
 
    /* Initial spot from the notice's abstract x/y (-1..1), used ONLY when the card has no

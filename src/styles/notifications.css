@@ -114,6 +114,24 @@
    word-break: break-word;
 }
 
+/* List body (the sticky jobs card's active-job titles). Same look as the dock list. */
+.notice-list {
+   list-style: none;
+   margin: 0.5rem 0 0;
+   padding: 0;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   line-height: 1.85;
+   color: var(--text-dim);
+}
+.notice-list li {
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+   border-left: 2px solid color-mix(in srgb, var(--node-accent, var(--accent)) 40%, transparent);
+   padding-left: 0.5rem;
+}
+
 /* Docked/persistent: a left accent rail marks it as kept (vs a transient toast). */
 .notice-card.notice-snapped {
    border-left: 2px solid var(--node-accent);

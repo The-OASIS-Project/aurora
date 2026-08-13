@@ -2206,28 +2206,25 @@ export class DawnIngest implements Ingest {
       else this.jobs.delete(j.conversation_id);
    }
 
-   /* Reflect the active set into the jobs panel: a pinned right-rail card listing
-      running jobs. When none are active the panel leaves the dashboard entirely. */
+   /* Reflect the active set into the jobs card: a sticky, movable status widget listing
+      running jobs. It snaps like the instruments (central dead zone, side columns) and,
+      being sticky, is always full-presence - never a fading toast. When none are active
+      the card leaves the dashboard entirely. */
    private renderJobs(): void {
       const count = this.jobs.size;
       if (count === 0) {
-         this.sinks.store.remove("jobs");
+         this.sinks.notifications.remove("jobs");
          return;
       }
       const items = [...this.jobs.values()].map((j) => `${j.running ? "▹" : "·"} ${j.title}`);
-      this.sinks.store.upsert({
+      this.sinks.notifications.notify({
          id: "jobs",
          kind: "jobs",
          summary: `${count} active job${count > 1 ? "s" : ""}`,
          items,
-         pinned: true,
-         dock: "right",
-         dockOrder: 0,
-         dockOnly: true,
-         restImportance: IMPORTANCE.ambient,
-         importance: IMPORTANCE.ambient,
-         position: { x: 0, y: 0 },
-         tone: "nominal"
+         sticky: true,
+         x: 0.62, // defaults to the right region (its old rail side); persists once moved
+         y: -0.2
       });
    }
 
