@@ -7,8 +7,22 @@
 
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { emojify } from "../util/emoji.ts";
 
 marked.setOptions({ gfm: true, breaks: true });
+
+/* Expand `:shortcode:` in the assistant's reply, mirroring the composer. Only
+   plain text tokens are touched - `code`/`codespan` are skipped so literal colons
+   in code samples stay literal, and only KNOWN shortcodes expand (emojify leaves
+   the rest verbatim). walkTokens runs before rendering, so mutating token.text is
+   what the renderer emits. */
+marked.use({
+   walkTokens: (token) => {
+      if (token.type === "text" && typeof token.text === "string") {
+         token.text = emojify(token.text);
+      }
+   }
+});
 
 /* Any link kept with target="_blank" also gets rel="noopener noreferrer" so the opened
    page cannot reach window.opener (reverse tabnabbing). DOMPurify already strips

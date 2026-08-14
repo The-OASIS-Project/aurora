@@ -713,6 +713,68 @@ body.engaged #docks {
    color: var(--text-faint);
 }
 
+/* Emoji `:shortcode:` autocomplete: a frosted, angular dropdown that rises just
+   above the input bar, same machined language as the status chip. Anchored to the
+   composer (position:relative). Newest match on top; the highlighted row carries
+   the accent tint. */
+.emoji-picker {
+   position: absolute;
+   bottom: 100%;
+   left: 0;
+   margin-bottom: 0.5rem;
+   z-index: 6;
+   min-width: 15rem;
+   max-height: 15rem;
+   overflow-y: auto;
+   display: flex;
+   flex-direction: column;
+   /* Near-opaque: the picker floats over the dense reply text, so it must read as
+      its own surface, not let the words behind bleed through. */
+   background: color-mix(in srgb, var(--ground-raise) 96%, transparent);
+   box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+      0 10px 26px color-mix(in srgb, var(--ground) 82%, transparent);
+   backdrop-filter: blur(12px);
+   -webkit-backdrop-filter: blur(12px);
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.emoji-row {
+   display: flex;
+   align-items: center;
+   gap: 0.7rem;
+   width: 100%;
+   padding: 0.4rem 0.7rem;
+   border: none;
+   background: none;
+   text-align: left;
+   cursor: pointer;
+   color: var(--text-dim);
+   transition: background 140ms ease, color 140ms ease;
+}
+.emoji-row.active {
+   background: color-mix(in srgb, var(--accent) 24%, transparent);
+   color: var(--text);
+}
+.emoji-glyph {
+   flex-shrink: 0;
+   width: 1.4rem;
+   text-align: center;
+   font-size: 1.1rem;
+   line-height: 1;
+}
+.emoji-name {
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   letter-spacing: 0.04em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+   .emoji-row {
+      transition: none;
+   }
+}
+
 @media (prefers-reduced-motion: reduce) {
    .reticle-ring {
       animation: none;

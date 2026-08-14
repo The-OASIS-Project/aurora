@@ -18,6 +18,8 @@
 import type { ActivityStatus, ConversationItem } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
 import { renderMarkdown } from "./format.ts";
+import { emojify } from "../util/emoji.ts";
+import { attachEmojiPicker } from "./emoji-picker.ts";
 
 export interface ConversationController {
    setThinking(thinking: boolean): void;
@@ -302,7 +304,9 @@ export function mountConversation(
 
    const onSubmit = (e: SubmitEvent): void => {
       e.preventDefault();
-      const text = input.value.trim();
+      /* Expand any typed-but-not-picked `:shortcode:` so the user's bubble and the
+         text DAWN receives both carry the real glyph. */
+      const text = emojify(input.value.trim());
       if (!text) return;
       input.value = "";
       appendMsg("user", text);
@@ -347,6 +351,10 @@ export function mountConversation(
    input.addEventListener("blur", disengage);
    window.addEventListener("pointermove", onMove);
 
+   /* `:shortcode:` autocomplete over the input; anchored to the composer bar
+      (position:relative), it owns its own dropdown + keys and is torn down below. */
+   const emojiPicker = attachEmojiPicker(input, form);
+
    return {
       setThinking,
       startReply,
@@ -368,6 +376,7 @@ export function mountConversation(
          input.removeEventListener("focus", engage);
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
+         emojiPicker.destroy();
          win.remove();
          chip.remove();
       }
