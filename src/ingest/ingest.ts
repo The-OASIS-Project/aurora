@@ -276,6 +276,33 @@ export interface NotificationsSink {
    remove(id: string): void;
 }
 
+/* One item from DAWN's document library (doc_library_list). A NOTE carries its full body
+   inline (`text`, ≤4KB, single-chunk); an uploaded DOCUMENT carries metadata only over the
+   WebSocket. `filetype` is "note" for notes, else the file extension (pdf/txt/md/docx/...).
+   `originalBlobId`/`hasOriginal` gate reading a document's body: the original file is fetched
+   separately via Ingest.fetchDocumentOriginal, but only once DAWN exposes the blob id on the
+   list response (signal-map §9 backend ask). Until then a document is a metadata-only row. */
+export interface LibraryItem {
+   id: number;
+   filename: string; // note label, or the document's filename
+   filetype: string; // "note" | "pdf" | "txt" | "md" | "docx" | ...
+   isNote: boolean;
+   text?: string; // note body (notes only; documents have no body over the WS)
+   numChunks: number;
+   isGlobal: boolean;
+   createdAt: number; // epoch seconds
+   originalBlobId?: string; // present once DAWN ships the field; else no fetch/download
+   hasOriginal?: boolean; // an original file is stored (best-effort server-side)
+}
+
+/* What ingest can push to the library panel (a passive, read-only view; a poll like the
+   calendar/HA boards, not ambient store state). `setItems` replaces (`append:false`) or
+   appends a page; `searching` marks a search result set so the panel can guard a stale late
+   response after the query was cleared; `hasMore` drives the load-more affordance. */
+export interface LibrarySink {
+   setItems(items: LibraryItem[], opts: { append: boolean; searching: boolean; hasMore: boolean }): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -285,6 +312,7 @@ export interface IngestSinks {
    music: MusicSink;
    calendar: CalendarSink;
    ha: HASink;
+   library: LibrarySink;
    notifications: NotificationsSink;
    conversationList: ConversationListSink;
 }
@@ -325,6 +353,23 @@ export interface Ingest {
    renameConversation(id: number, title: string): void;
    deleteConversation(id: number): void;
    setPinned(id: number, pinned: boolean): void;
+   /* --- Library (document + notes viewer). All reads: doc_library_list (list/search/
+      paginate) plus an original-file fetch. No write verbs are wired (read-mostly). ---
+      refreshLibrary re-lists the first page; searchLibrary runs the BM25 label/body search;
+      loadMoreLibrary pages the plain list (server offset = current loaded count). */
+   refreshLibrary(): void;
+   searchLibrary(query: string, opts?: { limit?: number; offset?: number }): void;
+   loadMoreLibrary(offset: number): void;
+   /* Fetch a document's original file (txt/md rendered inline; binary types downloaded). A
+      read, same class as the calendar/HA polls; routed through ingest so the view never
+      touches the DAWN HTTP boundary directly. Returns the raw bytes + content type - the
+      view decodes text itself and object-URLs binaries for download. Rejects on failure. */
+   fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }>;
+   /* Fetch a document's reassembled full text (doc_library_get) - the readable body of a
+      document with no uploaded original (e.g. a generated research report), or the
+      extracted text of one that has. Resolves with the text + metadata, or null when
+      unavailable (owner-scoped, requires stored full text). A read, over the WS. */
+   getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null>;
    /* Stop the live session (disconnect); in-session, audio contexts are kept for reuse. */
    stop(): void;
    /* Final teardown (HMR/unmount): stop AND release the audio graphs. Distinct from stop()

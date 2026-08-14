@@ -33,6 +33,7 @@ import type {
    HAServiceCall,
    Ingest,
    IngestSinks,
+   LibraryItem,
    MusicState,
    MusicTrack
 } from "./ingest.ts";
@@ -65,6 +66,7 @@ const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after th
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
 const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
+const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
@@ -240,6 +242,27 @@ function toCalendarEvent(e: Record<string, unknown>): CalendarEvent {
    };
 }
 
+/* A doc_library_list document/note -> our LibraryItem. `text` is present for notes only.
+   `original_blob_id`/`has_original` gate a document's readability and are only present once
+   DAWN ships the signal-map §9 backend field; absent, hasOriginal falls back to whether a
+   blob id came through, and if neither is present the document is a metadata-only row. */
+function toLibraryItem(d: Record<string, unknown>): LibraryItem {
+   const filetype = String(d.filetype ?? "");
+   const blobId = typeof d.original_blob_id === "string" && d.original_blob_id ? d.original_blob_id : undefined;
+   return {
+      id: Number(d.id ?? 0),
+      filename: String(d.filename ?? ""),
+      filetype,
+      isNote: d.is_note === true || filetype === "note",
+      text: typeof d.text === "string" ? d.text : undefined,
+      numChunks: Number(d.num_chunks ?? 0),
+      isGlobal: d.is_global === true,
+      createdAt: Number(d.created_at ?? 0),
+      originalBlobId: blobId,
+      hasOriginal: d.has_original === true || blobId !== undefined
+   };
+}
+
 /* Parse the optional per-entity `attributes` object (signal-map §9.4 #7). Only present
    once DAWN ships it; absent, the board falls back to on/off toggles. Numbers are read
    defensively (HA sometimes sends strings). */
@@ -356,6 +379,18 @@ export class DawnIngest implements Ingest {
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
+   /* doc_library_list_response is one type for list / search / load-more, so remember
+      what the in-flight request was to label the response for the library panel. */
+   private pendingLibraryAppend = false;
+   private pendingLibrarySearching = false;
+   /* In-flight doc_library_get requests, keyed by document id, so an async full-text
+      read (the reader overlay) resolves against its own response (or null on error). The
+      timeout handle is stored so it can be cleared on response/supersede/dispose (no
+      dangling timer firing into a resolved promise or a torn-down instance). */
+   private readonly pendingDocGets = new Map<
+      number,
+      { resolve: (v: { text: string; filename: string; filetype: string } | null) => void; timer: number }
+   >();
    private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
    /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
       realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
@@ -572,6 +607,9 @@ export class DawnIngest implements Ingest {
          this.requestCalendar();
          window.clearInterval(this.calendarTimer);
          this.calendarTimer = window.setInterval(() => this.requestCalendar(), 15 * 60 * 1000);
+         /* Library: the notes + documents list for the Library panel. A poll (there is no
+            push feed); the panel's refresh control re-lists on demand. A read, no writes. */
+         this.requestLibrary();
          /* Home Assistant: a read-only status board. There is no push feed yet (SAGE
             item #3), so poll. ha_status reports configured/connected for the header;
             ha_list_entities fills from DAWN's <=5min cache immediately; then a slow
@@ -1150,6 +1188,41 @@ export class DawnIngest implements Ingest {
             this.scheduleCalendarRefetch();
             break;
 
+         case "doc_library_list_response": {
+            /* Notes + documents for the Library panel. success:false (or an empty set)
+               renders "Nothing in the library"; the panel labels this response by the
+               in-flight request kind (list / search / load-more). */
+            if (p.success === false) break;
+            const docs = (p.documents ?? []) as Array<Record<string, unknown>>;
+            this.sinks.library.setItems(docs.map(toLibraryItem), {
+               append: this.pendingLibraryAppend,
+               searching: this.pendingLibrarySearching,
+               hasMore: p.has_more === true
+            });
+            break;
+         }
+
+         case "doc_library_get_response": {
+            /* Resolve the reader's pending full-text request for this id. success:false
+               (unavailable) resolves null so the reader can fall back. */
+            const id = Number(p.id ?? 0);
+            const pending = this.pendingDocGets.get(id);
+            if (pending) {
+               window.clearTimeout(pending.timer);
+               this.pendingDocGets.delete(id);
+               if (p.success === true && typeof p.text === "string") {
+                  pending.resolve({
+                     text: p.text,
+                     filename: String(p.filename ?? ""),
+                     filetype: String(p.filetype ?? "")
+                  });
+               } else {
+                  pending.resolve(null);
+               }
+            }
+            break;
+         }
+
          case "ha_status_response":
             /* Configured/connected for the board header. Absent fields => false. */
             this.sinks.ha.setStatus({
@@ -1587,6 +1660,53 @@ export class DawnIngest implements Ingest {
       if (id > 0) this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
    }
 
+   /* --- Library (Ingest) -------------------------------------------------- */
+   refreshLibrary(): void {
+      this.requestLibrary();
+   }
+
+   searchLibrary(query: string, opts?: { limit?: number; offset?: number }): void {
+      this.requestLibrary({ query, offset: opts?.offset ?? 0, searching: true });
+   }
+
+   loadMoreLibrary(offset: number): void {
+      this.requestLibrary({ offset, append: true });
+   }
+
+   /* Fetch a document's original file over the same-origin /api proxy (the cookie rides
+      it). A GET read; the view decodes text or object-URLs binaries for download. The
+      attachment/nosniff headers on the endpoint don't affect a fetch(). */
+   async fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }> {
+      const res = await fetch(`/api/documents/original/${encodeURIComponent(blobId)}`, {
+         credentials: "same-origin"
+      });
+      if (!res.ok) throw new Error(`document fetch failed: ${res.status}`);
+      const blob = await res.blob();
+      return { blob, contentType: res.headers.get("content-type") ?? "" };
+   }
+
+   /* doc_library_get over the WS, promise-correlated by id. Resolves null on an error
+      response, a superseding request for the same id, or a 15s timeout (a dropped
+      response must not leak the promise). */
+   getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {
+      return new Promise((resolve) => {
+         /* Supersede any in-flight request for this id (clear its timer, resolve it null). */
+         const prev = this.pendingDocGets.get(id);
+         if (prev) {
+            window.clearTimeout(prev.timer);
+            prev.resolve(null);
+         }
+         const timer = window.setTimeout(() => {
+            if (this.pendingDocGets.get(id)?.resolve === resolve) {
+               this.pendingDocGets.delete(id);
+               resolve(null);
+            }
+         }, 15000);
+         this.pendingDocGets.set(id, { resolve, timer });
+         this.send({ type: "doc_library_get", payload: { id } });
+      });
+   }
+
    /* Binary frame on the MAIN socket: a 1-byte opcode then payload. Only TTS arrives
       here now - chunks accumulate and the segment-end plays them. Music has its own
       dedicated socket (see openMusicStream) and never rides the main socket. */
@@ -1767,6 +1887,16 @@ export class DawnIngest implements Ingest {
    private scheduleCalendarRefetch(): void {
       window.clearTimeout(this.calendarDebounce);
       this.calendarDebounce = window.setTimeout(() => this.requestCalendar(), 500);
+   }
+
+   /* Request a page of the document library (list / search / load-more). Records the
+      request kind so the shared doc_library_list_response can be labeled for the panel. */
+   private requestLibrary(opts: { query?: string; offset?: number; append?: boolean; searching?: boolean } = {}): void {
+      this.pendingLibraryAppend = opts.append === true;
+      this.pendingLibrarySearching = opts.searching === true;
+      const payload: Record<string, unknown> = { limit: LIB_PAGE, offset: opts.offset ?? 0 };
+      if (opts.query) payload.query = opts.query;
+      this.send({ type: "doc_library_list", payload });
    }
 
    /* Open the dedicated dawn-music stream socket and authenticate it with the session
@@ -2084,6 +2214,12 @@ export class DawnIngest implements Ingest {
       dies). tts may be undefined if start() never ran. */
    dispose(): void {
       this.disconnect();
+      /* Settle any in-flight full-text reads so their promises + timers never dangle across HMR. */
+      for (const pending of this.pendingDocGets.values()) {
+         window.clearTimeout(pending.timer);
+         pending.resolve(null);
+      }
+      this.pendingDocGets.clear();
       this.tts?.dispose();
       this.music.dispose();
       this.mic.dispose();

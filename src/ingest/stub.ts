@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -52,6 +52,7 @@ export class StubIngest implements Ingest {
    start(sinks: IngestSinks): void {
       this.sinks = sinks;
       this.seed(sinks.store);
+      this.seedLibrary();
       this.startPanelEvents();
       this.startTelemetry();
       this.startReactorDemo();
@@ -122,6 +123,36 @@ export class StubIngest implements Ingest {
    renameConversation(_id: number, _title: string): void {}
    deleteConversation(_id: number): void {}
    setPinned(_id: number, _pinned: boolean): void {}
+
+   /* --- Library (fake notes + documents so offline dev shows the panel) ------ */
+   private libraryItems: LibraryItem[] = [];
+   refreshLibrary(): void {
+      this.sinks.library.setItems(this.libraryItems, { append: false, searching: false, hasMore: false });
+   }
+   searchLibrary(query: string): void {
+      const q = query.toLowerCase();
+      const hits = this.libraryItems.filter(
+         (i) => i.filename.toLowerCase().includes(q) || (i.text ?? "").toLowerCase().includes(q)
+      );
+      this.sinks.library.setItems(hits, { append: false, searching: true, hasMore: false });
+   }
+   loadMoreLibrary(_offset: number): void {}
+   /* No real files behind the stub: hand back a small markdown blob so the reader has
+      something to render for a txt/md stub doc (a pdf stub just "downloads" this). */
+   async fetchDocumentOriginal(_blobId: string): Promise<{ blob: Blob; contentType: string }> {
+      const text = "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
+      return { blob: new Blob([text], { type: "text/markdown" }), contentType: "text/markdown" };
+   }
+   /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
+   async getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {
+      const item = this.libraryItems.find((i) => i.id === id);
+      if (!item) return null;
+      return {
+         text: `# ${item.filename}\n\nReassembled full text (stub) for offline dev.\n\nThis stands in for a generated document's body fetched via doc_library_get.`,
+         filename: item.filename,
+         filetype: item.filetype
+      };
+   }
 
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */
    setEngaged(engaged: boolean): void {
@@ -209,6 +240,77 @@ export class StubIngest implements Ingest {
          position: { x: 0, y: 0 },
          tone: "nominal"
       });
+   }
+
+   /* Fake library: two notes with bodies, a couple readable docs, a binary doc, and one
+      with no stored original (metadata-only) so every reader branch is exercised offline. */
+   private seedLibrary(): void {
+      const now = Math.floor(Date.now() / 1000);
+      this.libraryItems = [
+         {
+            id: 1,
+            filename: "Kitchen remodel notes",
+            filetype: "note",
+            isNote: true,
+            text: "## Kitchen remodel\n\n- Replace the **backsplash**\n- Pendant lights over the island\n- Call the electrician re: 240V for the range\n\n> Keep it under budget.",
+            numChunks: 1,
+            isGlobal: false,
+            createdAt: now - 3600
+         },
+         {
+            id: 2,
+            filename: "Standup scratch",
+            filetype: "note",
+            isNote: true,
+            text: "Yesterday: wired the Library panel.\nToday: reader overlay + document fetch.\nBlockers: none.",
+            numChunks: 1,
+            isGlobal: false,
+            createdAt: now - 90000
+         },
+         {
+            id: 3,
+            filename: "q3_roadmap.md",
+            filetype: "md",
+            isNote: false,
+            numChunks: 6,
+            isGlobal: true,
+            createdAt: now - 200000,
+            originalBlobId: "stub-md",
+            hasOriginal: true
+         },
+         {
+            id: 4,
+            filename: "meeting_transcript.txt",
+            filetype: "txt",
+            isNote: false,
+            numChunks: 3,
+            isGlobal: false,
+            createdAt: now - 400000,
+            originalBlobId: "stub-txt",
+            hasOriginal: true
+         },
+         {
+            id: 5,
+            filename: "DAWN_architecture.pdf",
+            filetype: "pdf",
+            isNote: false,
+            numChunks: 14,
+            isGlobal: false,
+            createdAt: now - 800000,
+            originalBlobId: "stub-pdf",
+            hasOriginal: true
+         },
+         {
+            id: 6,
+            filename: "legacy_upload.docx",
+            filetype: "docx",
+            isNote: false,
+            numChunks: 9,
+            isGlobal: false,
+            createdAt: now - 1000000
+         }
+      ];
+      this.sinks.library.setItems(this.libraryItems, { append: false, searching: false, hasMore: false });
    }
 
    /* Borrow a panel to announce, then hand it back to its resting summary. */

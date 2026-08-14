@@ -187,6 +187,7 @@ Convention: every response is `{type: "<request>_response", payload: {success, e
 | **Memory** | `get_memory_stats`, `list_memory_facts`, `search_memory` | matching `*_response` | Fact/preference/summary counts and lists. |
 | **Conversation history** | `list_conversations`, `load_conversation`, `search_conversations` | matching `*_response` | Saved conversations, full transcripts. |
 | **Music library** | `music_search`, `music_library`, `music_queue` | matching `*_response` | Search, browse, queue contents. |
+| **Document library** | `doc_library_list` | `doc_library_list_response` | Notes + documents (paginated; optional `query` = BM25 search). **A NOTE carries its full body inline** (`text`, ≤4KB); a DOCUMENT is metadata only over the WS (see §9.5). Feeds the Library panel. |
 
 ---
 
@@ -321,6 +322,7 @@ behaviour you must handle** — several of these changed the wire contract.
 | 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
 | 7 | Rich HA entity attributes in `ha_entities_response` | ✅ **SHIPPED (backend)** — per-entity `attributes` object, **domain-switched** (only the keys relevant to the entity's domain, not a flat superset): `brightness` (light), `percentage` (fan), `current_position` (cover), `hvac_mode`/`hvac_modes`/`current_temperature`/`temperature` (climate), `unit_of_measurement`/`device_class` (sensor). Emitted on all three `ha_entities_response` sources (list/refresh/reconcile). Additive; absent ⇒ on/off fallback. Exact per-domain shape in §9.4 |
 | 8 | HA entity control verb — `ha_call_service` | ✅ **SHIPPED (backend)** — admin-only general verb (`entity_id`/`domain`/`service`/`data`). Server enforces a **write allowlist** (only the board's widget services; anything else ⇒ `"Service not permitted"`) and does **server-authoritative reconcile** (re-polls HA on success and broadcasts a fresh `ha_entities_response` — the UI just renders it, no client re-poll). `data` passed verbatim to HA. UI can flip its stubbed `send()` to live. Full contract + error strings + allowlist in §9.4. **NB:** adding a controllable domain to the UI requires extending the server allowlist (`HA_BOARD_SERVICES[]`) in the same change |
+| 9 | Make documents readable over the WS + a real size (Library panel) | ✅ **SHIPPED (backend + consumed, 2026-08-13)** — (a) **`original_blob_id` + `has_original`** now on each `doc_library_list` document row → txt/md **uploads** render inline (via `GET /api/documents/original/<blob_id>`), any type downloads; (b) **`doc_library_get {id}`** full-text verb (owner-scoped, v63+ stored full text) → DAWN-**generated** docs (research reports etc) read inline. Aurora consumes both (blob-id map in `dawn-ws.ts`, promise-correlated get for the reader). ⏳ **still deferred: (c) `size_bytes`** — the panel shows `num_chunks` ("N parts") as a proxy; a real byte size needs a schema migration, held out of this change. Detail in §9.5 |
 
 (Original item write-ups #1–#6 with source cites are preserved below the two new
 subsections for reference.)
@@ -578,6 +580,78 @@ the on/off board).
 
 ---
 
+### 9.5 Document library — the Library panel (#9) — consumer contract + backend ask
+
+> ⚠️ **Undocumented family.** The entire `doc_library_*` request family is implemented in
+> DAWN (`src/webui/webui_doc_library.c`, dispatch `webui_message_dispatch.c`) but is **absent
+> from `WEBSOCKET_PROTOCOL.md`**. Everything below was read from that C source, not the
+> protocol doc — flag the gap to whoever owns the protocol doc.
+
+The Library panel (`src/library/`) consumes exactly one verb, **read-only**:
+
+**Request** `doc_library_list` — `{ limit?, offset?, scope?, query? }`. Omitting `scope`
+returns notes + documents together; `query` runs a BM25 label/body search. (The panel omits
+`show_all`, the admin-only all-users extension.) The panel does **not** wire any of the
+library WRITE verbs (`doc_library_note_save`/`note_update`, `doc_library_delete`,
+`doc_library_index`, `doc_library_toggle_global`, `doc_library_version_restore`).
+
+**Response** `doc_library_list_response` — `{ success, count, has_more, documents[] }`. Each
+`documents[]` row (as read from the serializer):
+
+| Field | Meaning |
+|---|---|
+| `id` | int64 document/note id |
+| `filename` | note label, or the document's filename |
+| `filetype` | `"note"` for notes, else the extension (`pdf`/`txt`/`md`/`docx`/…) |
+| `is_note` | bool |
+| `text` | **notes only** — the full note body inline (single chunk, ≤4096 B). Absent for documents. |
+| `num_chunks` | int |
+| `is_global` | bool (shared) |
+| `created_at` | int64 epoch seconds |
+
+So **notes read fully today** (body inline → rendered as markdown). A **document's body is
+not on the wire**: the row is metadata only. The original file *is* served over HTTP at
+`GET /api/documents/original/<blob_id>` (a plain read; `Content-Disposition: attachment` +
+`nosniff` govern a browser *navigation*, not a `fetch()`), but the list response **never
+carries the blob id**, so the client cannot construct that URL.
+
+**Size:** the row carries `num_chunks` but **no byte size**. The panel shows `num_chunks`
+as a rough proxy (e.g. "28 parts") for documents and the exact body byte size for notes. A
+real per-row **`size_bytes`** is still deferred (it needs a schema migration) — the two
+readability pieces below shipped without it.
+
+**Shipped (#9a/#9b, additive + read-only, 2026-08-13):**
+- **`original_blob_id` + `has_original`** on each document row of `doc_library_list_response`
+  (`webui_doc_library.c` reads it via `document_db_get_original_blob_id()`, an isolated query
+  that leaves the shared `row_to_document`/list SELECTs untouched). **Emitted only for docs
+  the requester owns** — the blob download (`doc_can_read`) is owner-only, so advertising it on
+  a listed *global* doc would offer a download the server always refuses.
+- **`doc_library_get {id}`** → `doc_library_get_response` `{ success, id, filename, filetype,
+  text }`; owner-scoped and requires stored full text (v63+). A missing, non-owned/global, or
+  legacy doc returns one generic `success:false` `error:"Document unavailable"` (id echoed on
+  every branch for correlation) — deliberately indistinguishable, so the verb is not a
+  document-existence oracle. A payload-less frame gets `"Missing document id"` (never silently
+  dropped).
+
+With those, the reader opens a document by priority:
+1. a **txt/md upload** → fetch `original_blob_id` via the same-origin `/api` proxy, render inline (exact original);
+2. **otherwise** → `doc_library_get` reassembled full text, rendered as markdown (covers generated docs + extracted pdf/docx text); if a binary original also exists, a download is offered alongside;
+3. **binary with no readable text** → download the original;
+4. **nothing readable** (no full text, no original) → a metadata-only "No preview available" state.
+
+Both reads route through the ingest boundary (`Ingest.fetchDocumentOriginal` over HTTP,
+`Ingest.getDocumentText` promise-correlated over the WS), never issued from the view, so the
+single-DAWN-boundary rule holds. Bind every row string via `textContent`; fetched/reassembled
+text is untrusted (markdown → `renderMarkdown`/DOMPurify, plain text → `textContent`).
+
+**Why both shipped (live finding, 2026-08-13).** Verified against a real library: the bulk of
+documents are DAWN-*generated* text (research reports, agendas) with **no uploaded original**, so
+`original_blob_id` alone would leave them metadata-only — `doc_library_get` (reassembled full
+text) is what makes them readable. `original_blob_id`/`has_original` covers uploaded files (exact
+original: txt/md render, any-type download). Together they cover both classes.
+
+---
+
 **Original item write-ups (source cites preserved):**
 
 1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.** ✅ Done (§9.1a).
@@ -631,4 +705,6 @@ shipped 2026-08-01** — the WS upgrade is same-origin-checked, closing the cros
 admin-cookie ride into the allowlisted `lock`/`cover` writes (browser-shaped origins matched
 vs Host; `null`/opaque rejected; native no-Origin clients allowed). The HA board is fully
 real-time + hardened. Still deferred: the SAGE *proactive-alert* side of #2/#3 (vs the board
-push, which shipped).*
+push, which shipped). **Library panel wired 2026-08-13** (§4 + §9.5; consumes the
+undocumented `doc_library_list` — notes read inline, documents list as metadata; **#9
+requested**: add `original_blob_id`/`has_original` so document bodies render/download).*

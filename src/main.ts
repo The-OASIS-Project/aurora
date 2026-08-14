@@ -27,6 +27,7 @@ import "./styles/list-card.css";
 import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
+import "./styles/library.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";
 import "./styles/conversations.css";
@@ -55,6 +56,7 @@ import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
+import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
 import { Notifications } from "./notify/notifications.ts";
 
@@ -173,6 +175,17 @@ const haPanel = mountHAPanel(stage, {
    onControl: (call) => ingest.haControl(call)
 });
 
+/* The Library panel: a standalone movable view listing DAWN's notes + documents, opening
+   any item in a large centered reading overlay. Read-only; the ingest polls doc_library_list
+   and the panel fetches a document's original through the ingest (never DAWN directly). */
+const libraryPanel = mountLibraryPanel(stage, {
+   onRefresh: () => ingest.refreshLibrary(),
+   onSearch: (query) => ingest.searchLibrary(query),
+   onLoadMore: (offset) => ingest.loadMoreLibrary(offset),
+   fetchOriginal: (blobId) => ingest.fetchDocumentOriginal(blobId),
+   getFullText: (id) => ingest.getDocumentText(id)
+});
+
 /* The conversation picker: fixed menu-band chrome (top band, between the clock and the
    center menu) that lists / searches / opens the user's conversations and does the
    sanctioned conversation writes (new, rename, pin, and confirm-gated delete). It reaches
@@ -252,12 +265,14 @@ const menu = mountMenu(stage, {
          .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
       { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
+      { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
    ],
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
+      else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else store.toggleEnabled(id);
    },
    displayToggles: [
@@ -484,6 +499,7 @@ ingest.start({
    music: musicPlayer,
    calendar: calendarPanel,
    ha: haPanel,
+   library: libraryPanel,
    notifications,
    conversationList: conversationPicker
 });
@@ -536,6 +552,7 @@ function dispose(): void {
    musicPlayer.destroy();
    calendarPanel.destroy();
    haPanel.destroy();
+   libraryPanel.destroy();
    conversationPicker.destroy();
    notifications.dispose();
    hud.destroy();
