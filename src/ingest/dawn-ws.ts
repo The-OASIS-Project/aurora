@@ -2128,10 +2128,17 @@ export class DawnIngest implements Ingest {
       };
    }
 
-   /* TTS on/off, enforced entirely client-side (read-mostly charter: no set_tts_enabled
-      write to DAWN). Persisted; muting stops audio in flight and onBinary drops further
-      incoming audio while muted. The preference rides the next init/reconnect handshake so
-      DAWN can skip synthesis when we connect already muted. */
+   /* TTS on/off. `set_tts_enabled` is a per-connection preference ("don't synthesize
+      voice for MY socket") - a sanctioned user-initiated write in the same benign class
+      as set_private, NOT a depower-DAWN control. Telling DAWN matters beyond the local
+      audio drop: with tts_enabled true, DAWN synthesizes each sentence SYNCHRONOUSLY on
+      the worker thread that reads LLM tokens (webui_text_processing.c), so the whole reply
+      - text included - gets paced to synthesis speed. Muting only client-side leaves that
+      pacing in place; the write is what makes the reply stream at line speed. DAWN captures
+      tts_enabled once at turn start, so this takes effect from the NEXT turn (a reply already
+      in flight stays paced). Persisted; muting also stops audio in flight and onBinary drops
+      any further incoming audio. The preference still rides the init/reconnect handshake for
+      the connect-already-muted case. */
    isTtsEnabled(): boolean {
       return this.ttsEnabled;
    }
@@ -2140,6 +2147,10 @@ export class DawnIngest implements Ingest {
       this.ttsEnabled = on;
       localStorage.setItem(TTS_KEY, on ? "true" : "false");
       if (!on) this.tts.stop();
+      /* Tell DAWN so it stops (or resumes) synthesis for this connection - see above. */
+      if (this.ws?.readyState === WebSocket.OPEN) {
+         this.send({ type: "set_tts_enabled", payload: { enabled: on } });
+      }
    }
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is

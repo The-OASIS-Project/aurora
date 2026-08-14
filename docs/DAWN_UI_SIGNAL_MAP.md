@@ -239,9 +239,21 @@ Listed so a read-mostly client knows the boundary. These mutate DAWN or depower
 it, which the hero UI's charter forbids. Includes: `text` / `cancel` (drive the
 assistant), `music_control`, `scheduler_action`, `job_action`, all `set_*` /
 `get_config` / `set_config` / `set_secrets` / `restart`, user management
-(`create_user`, `delete_user`, ...), memory deletes, `set_tts_enabled`. The one
+(`create_user`, `delete_user`, ...), memory deletes. The one
 soft exception is the conversation console's `text` submit, which the hero UI
 already treats as an explicit user-initiated action, not ambient control.
+
+**`set_tts_enabled` is a sanctioned exception, NOT a forbidden write** (in the
+`text` submit / `set_private` benign class). It is a per-connection preference -
+"don't synthesize voice for MY socket" - that touches no global state and depowers
+nothing. It matters beyond a local audio drop: while `tts_enabled` is true DAWN
+synthesizes each sentence **synchronously on the LLM-token worker thread**
+(`webui_text_processing.c:485`, `session_manager_llm.c`), so the whole reply - text
+included - is paced to synthesis speed. Muting only client-side leaves that pacing in
+place; sending `set_tts_enabled {enabled:false}` is what lets the reply stream at line
+speed. DAWN captures the flag once at turn start, so a toggle takes effect from the next
+turn. The UI sends it on toggle (`DawnIngest.setTtsEnabled`) and also rides `tts_enabled`
+on the init/reconnect handshake for the connect-already-muted case.
 
 The conversation picker (`src/conversation-picker/`) adds three more sanctioned,
 user-initiated exceptions in the same class as `text` submit / `set_private`:

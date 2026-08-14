@@ -22,7 +22,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   spine of the whole design.
 - **Read-mostly.** Do not add control paths that could depower DAWN. Writes are limited
   to deliberate user actions (chat submit, `set_session_llm`, `set_private`,
-  `scheduler_action` dismiss, `new_conversation` plus the UI's own message
+  `set_tts_enabled` (a per-connection "mute my socket's voice" preference; it also
+  stops DAWN pacing the reply to synthesis speed, so muting client-side alone is not
+  enough), `scheduler_action` dismiss, `new_conversation` plus the UI's own message
   persistence, music transport via `music_subscribe` / `music_control` plus the
   `music_buffer` flow-control report, which is solicited telemetry the server clamps,
   not a control verb, and voice input: the mic sends `AUDIO_IN` / `AUDIO_IN_END` binary

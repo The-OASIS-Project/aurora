@@ -108,7 +108,10 @@ session reuse, and translating DAWN's `{type, payload}` frames into sink calls. 
 DAWN signals map to what is documented in `docs/DAWN_UI_SIGNAL_MAP.md`.
 
 The deliberate writes, i.e. the read-mostly exceptions: submitting a chat message,
-`set_session_llm` (the model panel), `set_private`, dismissing an alarm
+`set_session_llm` (the model panel), `set_private`, `set_tts_enabled` (a per-connection
+voice-mute preference; it also stops DAWN synthesizing each sentence on the LLM-token
+thread, so a client-side audio drop alone leaves the reply paced to synthesis speed),
+dismissing an alarm
 (`scheduler_action`), `new_conversation` plus final-answer persistence for the UI's
 own conversation, music transport (`music_subscribe` plus `music_control` from the
 player), voice input (the mic streams `AUDIO_IN` / `AUDIO_IN_END` binary frames for
