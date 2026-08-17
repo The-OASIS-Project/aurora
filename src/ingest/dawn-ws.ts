@@ -365,6 +365,7 @@ export class DawnIngest implements Ingest {
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
+   private reanchoring = false; // a reconnect re-anchor load (restore server active-conv, do NOT re-render the transcript)
    private conversationsLoading = false; // single-flight latch: one list/search request at a time
    private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
@@ -582,6 +583,20 @@ export class DawnIngest implements Ingest {
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
          else this.send({ type: "init", payload: caps });
+         /* Re-anchor the active conversation after a reconnect. DAWN's active
+            conversation is per-CONNECTION and resets to 0 on a new socket, so the
+            next turn - typed OR voice - would run orphaned (conv=0) until something
+            re-asserts it. Typed turns now carry the id inline (submit), but a voice
+            turn can't, so we heal the server's active id here, once, at the seam.
+            convId is only >0 on a RECONNECT (a fresh page load starts at 0 and the
+            initial resume path in list_conversations_response handles that), so this
+            targets exactly the reconnect case. `reanchoring` suppresses the transcript
+            re-render in load_conversation_response - we want the server-side heal, not
+            a reload of what is already on screen. */
+         if (this.convId > 0) {
+            this.reanchoring = true;
+            this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+         }
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
          ws.send(JSON.stringify({ type: "get_config" }));
@@ -922,6 +937,16 @@ export class DawnIngest implements Ingest {
                   this.sinks.conversationList.setActive(0);
                   break;
                }
+               if (this.reanchoring) {
+                  /* The conversation we were in was deleted/inaccessible while we were
+                     away: drop to a fresh chat so the next turn opens a new one via the
+                     convId===0 path, rather than tagging turns to a dead id. Silent. */
+                  this.reanchoring = false;
+                  this.convId = 0;
+                  localStorage.removeItem(CONV_KEY);
+                  this.sinks.conversationList.setActive(0);
+                  break;
+               }
                this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
                   x: 0,
                   y: -0.4,
@@ -930,6 +955,19 @@ export class DawnIngest implements Ingest {
                break;
             }
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+            if (this.reanchoring) {
+               /* Reconnect re-anchor: DAWN's per-connection active conversation is now
+                  restored, so the next turn (typed or voice) is tagged correctly. Do NOT
+                  touch the transcript - it is already on screen; loadHistory would rebuild
+                  it needlessly. Reconcile the cheap server-authoritative bits only. */
+               this.reanchoring = false;
+               this.convId = cid;
+               localStorage.setItem(CONV_KEY, String(cid));
+               this.sinks.conversationList.setActive(cid);
+               this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+               this.notifyLlm();
+               break;
+            }
             const msgs = (p.messages ?? []) as Array<{ role: string; content: string }>;
             this.sinks.conversation.loadHistory(
                msgs
@@ -2182,7 +2220,16 @@ export class DawnIngest implements Ingest {
          persists the user message itself (text_input_dispatch.c: conv_db_add on
          conversation_id > 0); saving it again produced double user rows. We only own
          the FINAL ANSWER, saved on the idle transition. */
-      this.send({ type: "text", payload: { text } });
+      /* Tag the turn with our conversation so it can't run orphaned. DAWN's active
+         conversation is per-CONNECTION and resets to 0 on a reconnect; without this
+         tag the daemon would fall back to that stale id and stream the turn against
+         conv=0 - answered but never persisted, lost on the next reload. The `text`
+         handler validates ownership and heals its active id from this field (the
+         reconnect/multi-tab path it was built for). Omit it while convId is 0: the
+         new_conversation above will mint and back-fill the id server-side. */
+      const payload: { text: string; conversation_id?: number } = { text };
+      if (this.convId > 0) payload.conversation_id = this.convId;
+      this.send({ type: "text", payload });
       /* DAWN will echo this as a user `transcript` (it drives its own WebUI's typed
          bubble). We already showed it locally, so remember it to dedupe that echo; a
          voice transcript has no local counterpart and displays. Bounded so a dropped
