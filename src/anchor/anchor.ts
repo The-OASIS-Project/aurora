@@ -652,15 +652,20 @@ export class Anchor {
       this.p.hue += (tp.hue - this.p.hue) * k;
       this.hesitation += (this.hesitationTarget - this.hesitation) * k;
 
-      /* Gauge arcs: speed and brightness rise with gauge activity (thinking); the outer
-         ring gets a hesitation jitter whose amplitude rises with DAWN's real hesitation
-         (time-to-first-token), still gated by gauge activity so an idle ring never
-         wobbles. Incremental so speed can vary without the angle jumping. */
-      const jitter =
-         Math.sin(mt * 17) * 0.05 * Math.max(0, this.p.gaugeGain - 0.4) * (1 + 2 * this.hesitation);
+      /* Gauge arcs: speed and brightness rise with gauge activity (thinking). The outer
+         ring carries the hesitation signal as a VELOCITY surge, not a positional wobble:
+         its orbital speed swells and ebbs so the head lurches - stalls, then catches up -
+         while always moving forward (the factor stays > 0), which the old angle-jitter
+         broke by rocking the head backward. Depth rises with DAWN's real hesitation
+         (time-to-first-token), gated by gauge activity so an idle ring stays smooth, and
+         capped so the head can near-stall but never reverse. The oscillation has zero mean,
+         so the average orbit rate is unchanged - only its evenness reads the signal. */
+      const surgeDepth = Math.min(0.85, 1.4 * Math.max(0, this.p.gaugeGain - 0.4) * this.hesitation);
+      const surge = 1 + surgeDepth * Math.sin(mt * 5); // in [0.15, 1.85]: forward-only lurch
       this.rings.forEach((r, i) => {
-         r.angle += dt * motion * r.spin * (0.7 + this.p.gaugeGain * 0.95);
-         r.mesh.rotation.z = r.angle + (i === 1 ? jitter : 0);
+         const speed = r.spin * (0.7 + this.p.gaugeGain * 0.95) * (i === 1 ? surge : 1);
+         r.angle += dt * motion * speed;
+         r.mesh.rotation.z = r.angle;
          r.arcMat.uniforms.uOpacity.value = 0.4 + this.p.gaugeGain * 0.45;
          /* Head stays opaque (a solid nucleus); only the halo glow responds to activity. */
          r.glowMat.opacity = 0.4 + this.p.gaugeGain * 0.35;
@@ -796,8 +801,9 @@ export class Anchor {
    }
 
    setHesitation(load: number): void {
-      /* Drives the outer ring's jitter amplitude in frame(), gated by gauge activity so
-         a stale reading can't wobble an idle ring. */
+      /* Drives the depth of the outer ring's velocity surge in frame() (a forward-only
+         lurch, not a positional wobble), gated by gauge activity so a stale reading can't
+         disturb an idle ring. */
       this.hesitationTarget = clamp01(load);
    }
 }
