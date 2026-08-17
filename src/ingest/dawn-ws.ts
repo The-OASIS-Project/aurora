@@ -66,6 +66,7 @@ const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after th
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
 const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
+const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
 const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
@@ -363,6 +364,7 @@ export class DawnIngest implements Ingest {
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
+   private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
    private conversationsLoading = false; // single-flight latch: one list/search request at a time
    private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
@@ -878,25 +880,20 @@ export class DawnIngest implements Ingest {
                append,
                searching: false
             });
-            /* First list on connect: also auto-load the most recent INTERACTIVE
-               conversation into the session + transcript (F5-resume continuity) and
-               reflect it as the active row. `messaging:*` (SMS/Telegram) and `briefing`
-               carry the freshest updated_at but are not "my last conversation"; jobs are
-               excluded server-side. Fall back to the whole list if none match. */
+            /* First list on connect: resume the conversation the user last had open,
+               persisted across reloads (see CONV_KEY). Reflect it as the active row and
+               load it into the session + transcript. A stale/deleted stored id fails the
+               load and falls back silently to a fresh chat (resumingStored). With no
+               stored id we start fresh - the picker is now how you reopen an older thread,
+               so the old "auto-open the latest" heuristic is gone. */
             if (!this.loadedInitial && !append) {
                this.loadedInitial = true;
-               const INTERACTIVE = new Set(["webui", "voice"]);
-               const origin = (c: Record<string, unknown>): string =>
-                  typeof c.origin === "string" ? c.origin : "";
-               const pool = raw.filter((c) => INTERACTIVE.has(origin(c)));
-               const sorted = [...(pool.length ? pool : raw)].sort(
-                  (a, b) => Number(b.updated_at ?? 0) - Number(a.updated_at ?? 0)
-               );
-               const pick = sorted[0];
-               if (pick) {
-                  this.convId = Number(pick.id ?? 0);
-                  this.sinks.conversationList.setActive(this.convId);
-                  this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+               const storedId = Number(localStorage.getItem(CONV_KEY) ?? 0);
+               if (storedId > 0) {
+                  this.convId = storedId;
+                  this.resumingStored = true;
+                  this.sinks.conversationList.setActive(storedId);
+                  this.send({ type: "load_conversation", payload: { conversation_id: storedId } });
                }
             }
             break;
@@ -916,6 +913,15 @@ export class DawnIngest implements Ingest {
             /* A failed load (e.g. the conversation was deleted from another client) must
                NOT wipe the surface: guard success and leave state untouched. */
             if ((p as { success?: boolean }).success === false) {
+               if (this.resumingStored) {
+                  /* The persisted conversation is gone or inaccessible: silently fall
+                     back to a fresh chat - no error notice for an auto-resume. */
+                  this.resumingStored = false;
+                  this.convId = 0;
+                  localStorage.removeItem(CONV_KEY);
+                  this.sinks.conversationList.setActive(0);
+                  break;
+               }
                this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
                   x: 0,
                   y: -0.4,
@@ -934,6 +940,8 @@ export class DawnIngest implements Ingest {
                   })
             );
             this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+            this.resumingStored = false; // a successful load ends any in-flight resume
+            localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
             this.sinks.conversationList.setActive(cid);
             /* Reflect the conversation's server-side privacy so the toggle survives a
                reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
@@ -975,6 +983,7 @@ export class DawnIngest implements Ingest {
                reset our surface + id to a fresh chat so the transcript doesn't strand. */
             if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
                this.convId = 0;
+               localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.replyBuf = "";
                this.sinks.conversation.clear();
                this.sinks.conversationList.setActive(0);
@@ -1012,6 +1021,7 @@ export class DawnIngest implements Ingest {
                preserving the previous conversation instead of appending to it. */
             this.sinks.conversation.clear();
             this.convId = 0;
+            localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
             break;
 
@@ -1019,6 +1029,7 @@ export class DawnIngest implements Ingest {
             /* The fresh conversation the daemon just created — persist to it now. */
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             if (this.convId > 0) {
+               localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
                this.sinks.conversationList.setActive(this.convId);
                this.requestConversations(); // the new row now exists — refresh the picker list
                /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
@@ -1567,6 +1578,7 @@ export class DawnIngest implements Ingest {
    newChat(): void {
       this.send({ type: "clear_session" });
       this.convId = 0;
+      localStorage.removeItem(CONV_KEY); // fresh chat: nothing to resume until a message opens one
       /* Discard any in-flight reply so its idle-save can't land on the next conversation
          (H1); mirror the reset to the picker's active highlight (both the menu New Chat
          and the picker "+ New" arrive here). */
