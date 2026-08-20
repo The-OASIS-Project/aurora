@@ -177,3 +177,30 @@
    background: var(--accent);
    box-shadow: 0 0 8px var(--accent-glow);
 }
+
+/* Unstable link: a heartbeat ping went unanswered. Warm the chip and pulse the dot so
+   it reads "something's off" without the full alert red (reserved for "needs you"). */
+#link-chip[data-state="stale"] {
+   color: var(--warn);
+   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+   opacity: 0.9;
+}
+#link-chip[data-state="stale"] .link-dot {
+   background: var(--warn);
+   box-shadow: 0 0 8px var(--warn-glow);
+   animation: link-stale-pulse 1s ease-in-out infinite;
+}
+@keyframes link-stale-pulse {
+   0%,
+   100% {
+      opacity: 1;
+   }
+   50% {
+      opacity: 0.35;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   #link-chip[data-state="stale"] .link-dot {
+      animation: none;
+   }
+}

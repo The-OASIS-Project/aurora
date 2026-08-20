@@ -26,6 +26,7 @@ const STATUS_TEXT: Record<LinkStatus, string> = {
    authenticating: "Authenticating…",
    connecting: "Opening channel…",
    connected: "Linked",
+   stale: "Link unstable…",
    disconnected: "Disconnected",
    error: "Link failed"
 };
@@ -99,15 +100,18 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       overlay.dataset.state = status;
 
       const linked = status === "connected";
-      if (linked) manual = false;
+      /* The corner chip stands for "link is up" — including the unstable "stale" state,
+         which is still a live socket, just probing. It must NOT drop to the login card. */
+      const chipVisible = linked || status === "stale";
+      if (chipVisible) manual = false;
       /* Show the card only when the user is actually needed (enter creds) or while
          a manual login is running. `checking` and a silent auto-resume's
          connecting phase keep it hidden — no blip on a successful F5 resume. */
       const needsUser = status === "idle" || status === "disconnected" || status === "error";
       const manualProgress = manual && (status === "authenticating" || status === "connecting");
-      overlay.hidden = linked || !(needsUser || manualProgress);
+      overlay.hidden = chipVisible || !(needsUser || manualProgress);
 
-      chip.hidden = !linked;
+      chip.hidden = !chipVisible;
       chip.dataset.state = status;
       chipText.textContent = label;
       if (linked) password.value = "";

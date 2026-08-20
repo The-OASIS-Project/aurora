@@ -109,6 +109,7 @@ export type LinkStatus =
    | "authenticating"
    | "connecting"
    | "connected"
+   | "stale" // socket open but a heartbeat ping went unanswered — link unstable, not yet dead
    | "disconnected"
    | "error";
 
@@ -785,11 +786,15 @@ export class DawnIngest implements Ingest {
 
    private onPong(seq: number): void {
       if (seq !== this.pendingPingSeq) return; // stale/duplicate
+      const wasSuspect = this.missedPongs > 0; // recovered from a "stale" state
       this.pongSupported = true; // the watchdog's feature gate: DAWN answers pings
       this.unsupportedProbes = 0;
       this.missedPongs = 0;
       this.pendingPingSeq = 0;
       window.clearTimeout(this.pongTimer);
+      /* Only re-assert "connected" if we had told the UI the link went stale; a healthy
+         heartbeat stays quiet so the chip does not churn every 10s. */
+      if (wasSuspect && this.lastStatus === "stale") this.emit("connected");
    }
 
    private onPongTimeout(seq: number): void {
@@ -801,7 +806,13 @@ export class DawnIngest implements Ingest {
          if (++this.unsupportedProbes >= MAX_UNSUPPORTED_PROBES) this.stopHeartbeat();
          return;
       }
-      if (++this.missedPongs >= MAX_MISSED_PONGS) this.deadLink();
+      if (++this.missedPongs >= MAX_MISSED_PONGS) {
+         this.deadLink();
+      } else {
+         /* First miss: the link is unstable but not yet dead. Tell the UI now (the chip
+            goes "unstable") instead of waiting the full ~20s for the watchdog to reconnect. */
+         this.emit("stale", "link unstable…");
+      }
    }
 
    private deadLink(): void {
