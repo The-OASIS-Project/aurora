@@ -82,6 +82,10 @@ body {
    position: fixed;
    inset: 0;
    overflow: hidden;
+   /* Reveal the shell now that the real styles are in: overrides the critical inline
+      `visibility: hidden` (index.html) that hides the unstyled DOM to prevent the FOUC
+      flash. This rule loads after that inline block, so it wins on source order. */
+   visibility: visible;
 }
 
 /* The WebGL layer, now FULL-SCREEN: it holds the background nebula and the

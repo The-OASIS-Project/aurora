@@ -4,6 +4,23 @@
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>DAWN</title>
+      <!-- Critical bootstrap CSS. The stylesheets are imported through main.ts (JS), so
+           without this the browser paints the raw static HTML on default white first -
+           a FOUC flash. Paint the ground color and hide the unstyled shell on the very
+           first frame; main.css reveals #stage once the real styles have applied.
+           #000 is a literal here on purpose: it mirrors --ground (pure black by design),
+           but the token->CSS-var mirror runs in JS and isn't available on first paint. -->
+      <style>
+         html,
+         body {
+            margin: 0;
+            height: 100%;
+            background: #000;
+         }
+         #stage {
+            visibility: hidden;
+         }
+      </style>
    </head>
    <body>
       <!-- The stage holds everything. The anchor canvas is the one real-WebGL
