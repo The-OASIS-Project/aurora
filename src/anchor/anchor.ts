@@ -52,6 +52,9 @@ interface Spark {
 }
 const SPARK_COUNT = 160;
 
+/* Boot power-on ramp duration (seconds): the cold->warm cinematic cold open on load. */
+const BOOT_DUR = 1.8;
+
 const BAR_COUNT = 96;
 const BAR_INNER_R = 0.86;
 const BAR_BASE_H = 0.05;
@@ -211,6 +214,17 @@ export class Anchor {
       scales the outer ring's jitter amplitude in frame() (gated by gauge activity). */
    private hesitation = 0;
    private hesitationTarget = 0;
+
+   /* Boot power-on ramp (the cinematic cold open). A one-shot cold->warm envelope:
+      bootGain scales the reactor's light/bars/gauges up from black and the assembly up
+      into place; bootSpin (computed in frame) whips the gauge heads fast then settles them
+      to their normal orbit. The reactor is held fully dark (bootGain 0) until startBoot()
+      is called, so the composition root can let the background nebula linger first and let
+      the reactor's shaders compile behind the dark reactor before it ignites (crisp). Under
+      reduced motion frame() forces bootGain to 1 (starts fully on, no ramp). */
+   private bootT = 0;
+   private booting = false;
+   private bootGain = 0;
 
    /* Ambient background: a dim drifting particle field plus a few large, very
       faint haze clouds behind the reactor, in the same scene so the full-screen
@@ -620,6 +634,16 @@ export class Anchor {
       this.state = state;
    }
 
+   /* Ignite the reactor: run the boot power-on ramp from cold. The composition root calls
+      this after letting the background linger (and the shaders warm); calling it again is a
+      scripted demo re-trigger (the cold open) without a full page reload. No-op under
+      reduced motion (the reactor is already fully on there). */
+   startBoot(): void {
+      if (this.reducedMotion) return;
+      this.bootT = 0;
+      this.booting = true;
+   }
+
    /* Display kill switches (menu / profiling). Bloom is the real GPU cost; the
       star field and clouds are cheap but exposed for comparison. */
    setStarfield(on: boolean): void {
@@ -652,6 +676,17 @@ export class Anchor {
       this.p.hue += (tp.hue - this.p.hue) * k;
       this.hesitation += (this.hesitationTarget - this.hesitation) * k;
 
+      /* Boot power-on: a one-shot cold->warm ramp on load. bootGain fades the core, bars,
+         and gauges up from black; bootSpin whips the gauge heads fast then settles; the
+         assembly scales up into place (below). Reduced motion appears fully on. */
+      if (this.booting && !this.reducedMotion) {
+         this.bootT = Math.min(this.bootT + dt, BOOT_DUR);
+         if (this.bootT >= BOOT_DUR) this.booting = false;
+      }
+      const bootGain = this.reducedMotion ? 1 : easeOutCubic(this.bootT / BOOT_DUR);
+      this.bootGain = bootGain;
+      const bootSpin = 1 + (1 - bootGain) * 5; // 6x at ignition, settling to 1x
+
       /* Gauge arcs: speed and brightness rise with gauge activity (thinking). The outer
          ring carries the hesitation signal as a VELOCITY surge, not a positional wobble:
          its orbital speed swells and ebbs so the head lurches - stalls, then catches up -
@@ -663,12 +698,13 @@ export class Anchor {
       const surgeDepth = Math.min(0.85, 1.4 * Math.max(0, this.p.gaugeGain - 0.4) * this.hesitation);
       const surge = 1 + surgeDepth * Math.sin(mt * 5); // in [0.15, 1.85]: forward-only lurch
       this.rings.forEach((r, i) => {
-         const speed = r.spin * (0.7 + this.p.gaugeGain * 0.95) * (i === 1 ? surge : 1);
+         const speed = r.spin * (0.7 + this.p.gaugeGain * 0.95) * (i === 1 ? surge : 1) * bootSpin;
          r.angle += dt * motion * speed;
          r.mesh.rotation.z = r.angle;
-         r.arcMat.uniforms.uOpacity.value = 0.4 + this.p.gaugeGain * 0.45;
+         r.arcMat.uniforms.uOpacity.value = (0.4 + this.p.gaugeGain * 0.45) * bootGain;
+         r.headMat.uniforms.uOpacity.value = 0.95 * bootGain; // heads ignite with the trails
          /* Head stays opaque (a solid nucleus); only the halo glow responds to activity. */
-         r.glowMat.opacity = 0.4 + this.p.gaugeGain * 0.35;
+         r.glowMat.opacity = (0.4 + this.p.gaugeGain * 0.35) * bootGain;
       });
 
       /* Shed comet sparks from each head (skipped under reduced motion - they are motion).
@@ -678,7 +714,7 @@ export class Anchor {
          this.rings.forEach((r, i) => {
             r.mesh.updateMatrix(); // refresh the local matrix from the rotation just set
             this.vHead.copy(r.head.position).applyMatrix4(r.mesh.matrix);
-            this.sparkAccum[i] += dt * (14 + this.p.gaugeGain * 22);
+            this.sparkAccum[i] += dt * (14 + this.p.gaugeGain * 22) * bootGain;
             while (this.sparkAccum[i] >= 1) {
                this.sparkAccum[i] -= 1;
                this.spawnSpark(this.vHead, r.glow);
@@ -689,6 +725,7 @@ export class Anchor {
 
       this.assembly.rotation.y = Math.sin(mt * 0.11) * 0.22;
       this.assembly.rotation.x = Math.sin(mt * 0.07) * 0.1;
+      this.assembly.scale.setScalar(0.72 + 0.28 * bootGain); // grows into place as it powers on
 
       /* Drift is a slow swirl around the VIEW axis (z) only: that keeps every
          point at a constant depth, so nothing ever rotates behind the camera and
@@ -707,7 +744,7 @@ export class Anchor {
       const pulse = 0.5 + 0.5 * Math.sin(mt * this.p.pulseRate);
       this.core.scale.setScalar((0.92 + 0.08 * breath) * (0.95 + 0.12 * energy));
       this.coreMat.uniforms.uIntensity.value =
-         this.p.coreBase + this.p.corePulse * pulse + 0.14 * energy;
+         (this.p.coreBase + this.p.corePulse * pulse + 0.14 * energy) * bootGain;
       this.coreColor.copy(this.cAccent).lerp(this.cAlert, this.p.hue);
       this.coreGlow.copy(this.cAccentGlow).lerp(this.cAlert, this.p.hue);
 
@@ -765,7 +802,7 @@ export class Anchor {
          }
          sum += shimmer;
 
-         const h = BAR_BASE_H + BAR_AMP_H * shimmer * this.p.barGain;
+         const h = (BAR_BASE_H + BAR_AMP_H * shimmer * this.p.barGain) * this.bootGain;
          const r = BAR_INNER_R + h / 2;
          this.dummy.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
          this.dummy.rotation.set(0, 0, a - Math.PI / 2);
@@ -810,4 +847,11 @@ export class Anchor {
 
 function clamp01(v: number): number {
    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/* Ease-out cubic on a clamped 0..1 input: fast rise settling gently into place, the
+   envelope shape for the boot power-on ramp. */
+function easeOutCubic(t: number): number {
+   const c = clamp01(t);
+   return 1 - Math.pow(1 - c, 3);
 }

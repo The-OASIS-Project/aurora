@@ -20,9 +20,20 @@
          #stage {
             visibility: hidden;
          }
+         /* Boot cinematic (sequenced in main.ts): hide every chrome overlay from the VERY
+            FIRST paint so no panel or item can glimmer before the JS takes over the
+            reveal. The canvas (#anchor, the background nebula) is never hidden. This MUST
+            be inline: the same rule in main.css loads via JS a frame too late and loses the
+            race. Gated to motion-OK so a reduced-motion user - or a JS failure that never
+            removes the class - can never be left staring at hidden chrome. */
+         @media (prefers-reduced-motion: no-preference) {
+            body.boot-intro #stage > *:not(#anchor) {
+               opacity: 0;
+            }
+         }
       </style>
    </head>
-   <body>
+   <body class="boot-intro boot-anim">
       <!-- The stage holds everything. The anchor canvas is the one real-WebGL
            element (the center light source, brief S4.4). The field is the
            CSS-3D depth space the DOM panels hover in. Both are painted only by

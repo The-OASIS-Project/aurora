@@ -88,6 +88,41 @@ body {
    visibility: visible;
 }
 
+/* Boot cinematic (the cold open, beats 1+2; sequenced from main.ts). During the intro
+   only the #anchor canvas (background nebula) shows; every chrome overlay is held at
+   opacity:0 - hidden but IN LAYOUT, so fonts rasterize and shaders warm during the linger -
+   then fades in once the reactor has ignited. The canvas itself is never dimmed.
+
+   `.boot-anim` carries a TEMPORARY opacity transition, added with `.boot-intro` and dropped
+   shortly after the reveal, so each chrome element keeps its own transition the rest of the
+   time (e.g. the console's engage-recede). Reduced motion never gets these classes. */
+/* Staggered reveal: when `.boot-intro` is dropped, each chrome overlay fades in over ~0.7s,
+   but in TIERS via transition-delay, so it reads as "systems coming online" piece by piece
+   rather than one blanket fade. The reticle leads (in with the reactor), then the HUD frame,
+   then the side panels/menus (the default tier), and the console settles in last as the
+   "ready" beat. Opacity only - the movable views are positioned by makeMovable's transform,
+   so a boot transform would fight it; the sequence is what carries the motion.
+   The largest delay below MUST match BOOT_STAGGER_MAX_MS in main.ts (so `.boot-anim` isn't
+   stripped mid-fade), and the duration MUST match BOOT_ANIM_MS. */
+body.boot-anim #stage > *:not(#anchor) {
+   transition: opacity 700ms ease;
+   transition-delay: 320ms; /* default tier: menus, conversation picker, movable panels/views */
+}
+/* Overrides need >= the base's specificity (two ids: #stage + #anchor), so they use
+   `#stage > #id` and sit after the base to win on source order. */
+body.boot-anim #stage > #reticle {
+   transition-delay: 0ms; /* frames the reactor - arrives with it */
+}
+body.boot-anim #stage > #hud {
+   transition-delay: 140ms; /* the cockpit frame + readouts */
+}
+body.boot-anim #stage > #console {
+   transition-delay: 520ms; /* the input surface settles in last */
+}
+/* The `.boot-intro` chrome-hide (opacity:0) lives in the CRITICAL INLINE CSS in index.html,
+   not here: it must apply on the very first paint, and this stylesheet loads via JS a frame
+   too late - which let items glimmer through before the hide landed. See index.html. */
+
 /* The WebGL layer, now FULL-SCREEN: it holds the background nebula and the
    reactor in one scene, so there is no compositing seam (no black square). Sits
    behind the panels. */

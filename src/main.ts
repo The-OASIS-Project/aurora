@@ -538,6 +538,38 @@ function frame(now: number): void {
 }
 requestAnimationFrame(frame);
 
+/* 7. Boot cinematic (the cold open, beats 1+2). Let the background nebula linger alone
+      for a beat while the chrome sits hidden-but-in-layout (opacity:0, NOT display:none, so
+      fonts rasterize, layout settles, and the reactor's Three shaders compile behind the
+      still-dark reactor while the frame loop runs) - so the reveal is crisp, not janky. Then
+      ignite the reactor, then fade the chrome in over it. Reduced motion skips straight to
+      fully-on (frame() forces bootGain to 1; no class, no delay). */
+let bootLeadTimer = 0;
+let bootRevealTimer = 0;
+let bootCleanupTimer = 0;
+/* The `boot-intro`/`boot-anim` classes are set on <body> in index.html so the chrome is
+   hidden from the very first paint (no item glimmer); this only removes them. */
+if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+   /* Reduced motion: no cinematic. The chrome-hide is already disabled for this user by the
+      motion-OK media query (index.html); drop the classes and hold the reactor fully on. */
+   document.body.classList.remove("boot-intro", "boot-anim");
+   anchor.startBoot(); // no-op ramp; the reactor is already held fully on
+} else {
+   const BOOT_LEAD_MS = 1200; // background lingers alone before the reactor ignites (demo cold open)
+   const BOOT_REVEAL_MS = 2000; // chrome begins assembling in (reactor well into its ramp, still leading)
+   const BOOT_ANIM_MS = 700; // MUST match the .boot-anim chrome fade DURATION in main.css
+   const BOOT_STAGGER_MAX_MS = 520; // MUST match the LARGEST .boot-anim transition-delay in main.css (#console)
+   bootLeadTimer = window.setTimeout(() => anchor.startBoot(), BOOT_LEAD_MS);
+   bootRevealTimer = window.setTimeout(() => document.body.classList.remove("boot-intro"), BOOT_REVEAL_MS);
+   /* Drop the temporary intro transition once the LAST staggered tier has finished fading
+      (reveal + max stagger delay + fade), so each chrome element returns to its own opacity
+      transition (e.g. the console's engage-recede) instead of being snapped mid-fade. */
+   bootCleanupTimer = window.setTimeout(
+      () => document.body.classList.remove("boot-anim"),
+      BOOT_REVEAL_MS + BOOT_STAGGER_MAX_MS + BOOT_ANIM_MS
+   );
+}
+
 /* Teardown so hot-module reloads (and any future unmount) do not stack WebGL
    contexts, listeners, timers, and rAF loops on top of the old ones. */
 function dispose(): void {
@@ -551,6 +583,9 @@ function dispose(): void {
    micBtn.removeEventListener("keyup", onMicKeyUp);
    micBtn.removeEventListener("blur", onMicPointerCancel);
    window.clearTimeout(micHoldTimer); // a hold in progress at teardown leaves a pending one-shot
+   window.clearTimeout(bootLeadTimer); // pending boot-cinematic one-shots
+   window.clearTimeout(bootRevealTimer);
+   window.clearTimeout(bootCleanupTimer);
    ingest.dispose(); // full teardown: also closes the audio graphs so HMR doesn't stack AudioContexts
    conversation.destroy();
    musicPlayer.destroy();
