@@ -65,6 +65,20 @@ const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after 
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
+
+/* Liveness heartbeat. A half-open socket (TCP alive, but DAWN's session is gone or the
+   backend was silently dropped by a proxy) leaves readyState OPEN forever, so onclose never
+   fires and the UI would sit falsely "Linked" while every send vanishes. We app-level ping
+   (DAWN answers `pong`, gated on a live authed session - a revoked session gets an
+   UNAUTHORIZED error and no pong) and force-close the socket after repeated silence, which
+   routes into the normal reconnect. Feature-detected: the watchdog only declares death once
+   we have seen at least one pong, so an older DAWN that ignores `ping` degrades to the old
+   onclose-only behavior instead of a false-dead reconnect loop. */
+const PING_IDLE_MS = 8000; // only ping after this much inbound silence (active traffic already proves life)
+const PING_INTERVAL_MS = 10000; // heartbeat tick cadence (well under DAWN's 1800s idle expiry)
+const PONG_TIMEOUT_MS = 6000; // a ping unanswered this long counts as one miss
+const MAX_MISSED_PONGS = 2; // consecutive misses -> the link is dead, force a reconnect
+const MAX_UNSUPPORTED_PROBES = 3; // no pong EVER -> assume an older DAWN, stop probing (no false dead)
 const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
 const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
 const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
@@ -366,6 +380,15 @@ export class DawnIngest implements Ingest {
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
    private reanchoring = false; // a reconnect re-anchor load (restore server active-conv, do NOT re-render the transcript)
+   /* Liveness heartbeat state (see the PING_* constants). */
+   private heartbeatTimer = 0;
+   private pongTimer = 0;
+   private lastInboundAt = 0; // performance.now() of the last received frame, any type
+   private pingSeq = 0; // increments per ping
+   private pendingPingSeq = 0; // seq of an outstanding ping (0 = none in flight)
+   private missedPongs = 0; // consecutive unanswered pings, once pong is known-supported
+   private pongSupported = false; // DAWN answered a ping at least once (the watchdog's feature gate)
+   private unsupportedProbes = 0; // unanswered pings before any pong (an older DAWN that ignores ping)
    private conversationsLoading = false; // single-flight latch: one list/search request at a time
    private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
@@ -649,6 +672,9 @@ export class DawnIngest implements Ingest {
       };
 
       ws.onmessage = (ev: MessageEvent): void => {
+         /* Any inbound frame proves the link is alive right now, so it resets the
+            heartbeat's silence timer (and clears a suspect state). */
+         this.lastInboundAt = performance.now();
          /* One malformed frame must not take down the message pump: if a handler throws
             on an unexpected payload, drop that frame and keep processing the stream. */
          try {
@@ -662,6 +688,7 @@ export class DawnIngest implements Ingest {
       ws.onclose = (ev: CloseEvent): void => {
          this.ws = null;
          this.capsSynced = false; // a new session must re-confirm before Opus is safe again
+         this.stopHeartbeat(); // the socket is gone; the session-frame restarts it on reconnect
          /* Stop TTS from the dead connection: its buffered tail has nothing to salvage, and
             leaving it playing would echo into a re-armed mic (and double-drive the reactor)
             after the reconnect. disconnect() already does this; the drop path must too. */
@@ -718,6 +745,100 @@ export class DawnIngest implements Ingest {
       }, delay);
    }
 
+   /* --- Liveness heartbeat (see the PING_* constants) --------------------- */
+
+   private startHeartbeat(): void {
+      this.stopHeartbeat();
+      this.lastInboundAt = performance.now();
+      this.missedPongs = 0;
+      this.pendingPingSeq = 0;
+      this.heartbeatTimer = window.setInterval(() => this.heartbeatTick(), PING_INTERVAL_MS);
+      /* Probe once now, regardless of idle, so `pongSupported` is established while the link
+         is healthy. Otherwise a connection that always carries traffic <PING_IDLE_MS apart
+         (e.g. music_position ticks) would never fire the idle-gated ping - so the watchdog
+         would never arm, and a LATER half-open (traffic stops) would be misread as an older
+         DAWN that ignores ping (the unsupported path) instead of a dead link to reconnect. */
+      this.sendPing();
+   }
+
+   private stopHeartbeat(): void {
+      window.clearInterval(this.heartbeatTimer);
+      window.clearTimeout(this.pongTimer);
+      this.heartbeatTimer = 0;
+      this.pongTimer = 0;
+      this.pendingPingSeq = 0;
+   }
+
+   private heartbeatTick(): void {
+      if (this.pendingPingSeq !== 0) return; // still waiting on a pong; the timeout owns that
+      if (performance.now() - this.lastInboundAt < PING_IDLE_MS) return; // recent traffic proves life
+      this.sendPing();
+   }
+
+   private sendPing(): void {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      this.pendingPingSeq = ++this.pingSeq;
+      this.send({ type: "ping", payload: { seq: this.pendingPingSeq } });
+      window.clearTimeout(this.pongTimer);
+      this.pongTimer = window.setTimeout(() => this.onPongTimeout(this.pendingPingSeq), PONG_TIMEOUT_MS);
+   }
+
+   private onPong(seq: number): void {
+      if (seq !== this.pendingPingSeq) return; // stale/duplicate
+      this.pongSupported = true; // the watchdog's feature gate: DAWN answers pings
+      this.unsupportedProbes = 0;
+      this.missedPongs = 0;
+      this.pendingPingSeq = 0;
+      window.clearTimeout(this.pongTimer);
+   }
+
+   private onPongTimeout(seq: number): void {
+      if (seq !== this.pendingPingSeq) return; // already answered by a later frame
+      this.pendingPingSeq = 0;
+      if (!this.pongSupported) {
+         /* Never got a pong: likely an older DAWN that ignores `ping`. Stop probing after
+            a few tries and fall back to onclose-only liveness, rather than a false-dead loop. */
+         if (++this.unsupportedProbes >= MAX_UNSUPPORTED_PROBES) this.stopHeartbeat();
+         return;
+      }
+      if (++this.missedPongs >= MAX_MISSED_PONGS) this.deadLink();
+   }
+
+   private deadLink(): void {
+      /* The socket is half-open: DAWN stopped answering though readyState is OPEN. Force it
+         closed so onclose runs the normal reconnect+backoff (self-heal) and the status chip
+         stops falsely reading "Linked". */
+      console.warn("[dawn] link watchdog: no pong, forcing reconnect");
+      this.stopHeartbeat();
+      this.ws?.close(); // -> onclose -> scheduleMainReconnect (wantConnected is still true)
+   }
+
+   /* True only when the link is confirmed usable right now: the socket is open, the handshake
+      synced, and no heartbeat ping is currently overdue. User-initiated writes gate on this so
+      they surface a notice instead of vanishing into a dead/half-open socket. */
+   isLinkLive(): boolean {
+      if (this.ws?.readyState !== WebSocket.OPEN || !this.capsSynced) return false;
+      if (this.pongSupported && this.missedPongs >= 1) return false; // a ping went unanswered: suspect
+      return true;
+   }
+
+   /* Surface a transient user-facing notice through the notification layer. */
+   notifyUser(message: string): void {
+      this.spikeNotice("link-notice", "notice", message, { tone: "attention", hold: 6, x: 0, y: -0.55 });
+   }
+
+   /* Session revoked/expired server-side (force_logout, or an UNAUTHORIZED reply to any authed
+      verb incl. the heartbeat). Drop the dead token, stop wanting to be connected so the
+      auto-reconnect does NOT silently mint a fresh session behind the revocation, cancel any
+      pending retry and the heartbeat, and surface the login card with the reason. */
+   private revokeSession(reason?: string): void {
+      localStorage.removeItem(TOKEN_KEY);
+      this.wantConnected = false;
+      window.clearTimeout(this.wsReconnectTimer);
+      this.stopHeartbeat();
+      this.emit("error", reason);
+   }
+
    private onFrame(raw: string): void {
       let msg: { type?: string; payload?: unknown };
       try {
@@ -742,6 +863,8 @@ export class DawnIngest implements Ingest {
             /* DAWN has processed our handshake (and its audio_codecs): use_opus is set, so
                shipping Opus is now safe. */
             this.capsSynced = true;
+            /* Connection confirmed live: (re)start the liveness heartbeat. */
+            this.startHeartbeat();
             /* Re-establish continuous listening after a reconnect: DAWN destroyed the
                always-on context on the drop, so re-enable from HERE (never before the
                handshake, or the enable targets the throwaway connection and is lost). */
@@ -771,16 +894,14 @@ export class DawnIngest implements Ingest {
             if (typeof p.version === "string") this.dawnVersion = p.version;
             break;
 
+         case "pong":
+            /* Heartbeat reply (a live, authed session). Confirms the link. */
+            this.onPong(typeof p.seq === "number" ? p.seq : 0);
+            break;
+
          case "force_logout":
-            /* Session revoked server-side: the stored token is dead, drop it so we
-               do not keep trying to resume a session that no longer exists. Stop
-               wanting to be connected so the auto-reconnect does NOT silently mint a
-               fresh session behind the revocation, cancel any pending retry, and
-               surface the login card with the reason. */
-            localStorage.removeItem(TOKEN_KEY);
-            this.wantConnected = false;
-            window.clearTimeout(this.wsReconnectTimer);
-            this.emit("error", typeof p.reason === "string" ? p.reason : undefined);
+            /* Session revoked server-side: drop the dead token and surface the login card. */
+            this.revokeSession(typeof p.reason === "string" ? p.reason : undefined);
             break;
 
          case "get_config_response": {
@@ -1108,6 +1229,14 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why (e.g. the thinking toggle held on). */
             const code = typeof p.code === "string" ? p.code : "";
+            /* The session was revoked/expired server-side (DAWN re-validates the token
+               against the DB on every authed verb, including our heartbeat ping, and
+               answers a dead session with UNAUTHORIZED instead of a pong). Treat it like
+               force_logout: stop resuming a session that no longer exists, surface login. */
+            if (code === "UNAUTHORIZED") {
+               this.revokeSession(typeof p.message === "string" ? p.message : undefined);
+               break;
+            }
             /* Always-on enable failures arrive as ordinary error frames (there is no
                always_on_error). Clear the latch and don't flash the reactor red - a second
                tab (ALREADY_ACTIVE), a mid-PTT enable (PTT_ACTIVE), or an init failure just
@@ -2206,7 +2335,12 @@ export class DawnIngest implements Ingest {
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
    submit(text: string): void {
-      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      /* Don't let a message vanish into a dead/half-open link: tell the user instead of
+         silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
+      if (!this.isLinkLive()) {
+         this.notifyUser("Not connected to DAWN - message not sent.");
+         return;
+      }
       /* No active conversation (fresh start after a reset): open one BEFORE the text
          so the daemon tags this turn with the new id and preserves the old thread.
          new_conversation_response sets convId for the assistant-save. */
@@ -2260,6 +2394,7 @@ export class DawnIngest implements Ingest {
       window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
       this.wsFails = 0;
       this.stopMetrics();
+      this.stopHeartbeat();
       this.closeMusicStream();
       this.tts?.stop();
       window.clearTimeout(this.micMuteCooldown);

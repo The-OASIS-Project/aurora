@@ -172,7 +172,11 @@ const calendarPanel = mountCalendarPanel(stage);
    signal-map §9.4). */
 const haPanel = mountHAPanel(stage, {
    onRefresh: () => ingest.refreshHA(),
-   onControl: (call) => ingest.haControl(call)
+   onControl: (call) => ingest.haControl(call),
+   /* A control fired at a dead/half-open link would silently vanish, so gate the widgets
+      on the ingest's heartbeat-backed liveness: block + notify instead of a lying flip. */
+   isLive: () => dawn.isLinkLive(),
+   notify: (m) => dawn.notifyUser(m)
 });
 
 /* The Library panel: a standalone movable view listing DAWN's notes + documents, opening

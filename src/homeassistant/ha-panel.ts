@@ -40,6 +40,12 @@ export interface HAPanelOpts {
    /* A widget control intent (toggle/slider/dropdown). Sent live to DAWN's
       ha_call_service; the board reconciles from the server's follow-up entity broadcast. */
    onControl(call: HAServiceCall): void;
+   /* Is the DAWN link confirmed usable right now? When it isn't, a control is neither sent
+      nor optimistically flipped (a flip would lie), and `notify` surfaces why. Optional so
+      the board still works if a host doesn't wire liveness (treated as always-live). */
+   isLive?(): boolean;
+   /* Surface a transient user-facing notice (e.g. "control not sent"). */
+   notify?(message: string): void;
 }
 
 /* Domains rendered as a simple on/off toggle (state is "on"/"off"). */
@@ -207,7 +213,17 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
 
    /* --- widgets ----------------------------------------------------------- */
 
+   /* Is the DAWN link usable right now? A host that doesn't wire it is treated as live. */
+   const live = (): boolean => !opts.isLive || opts.isLive();
+
    const callService = (ev: HAEntity, service: string, data?: Record<string, unknown>): void => {
+      /* Don't fire a control into a dead/half-open link where it would silently vanish;
+         tell the user instead. optimistic() below also bails, so the widget doesn't flip a
+         state that never took (the exact "toggled and nothing happened" gap). */
+      if (!live()) {
+         opts.notify?.("Not connected to DAWN - control not sent.");
+         return;
+      }
       opts.onControl({ entityId: ev.entityId, domain: ev.domain, service, data });
    };
 
@@ -215,6 +231,7 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       the true state (a fresh ha_entities_response after DAWN re-polls HA). On a rejected
       call the ingest re-polls to revert this flip and surfaces the error. */
    const optimistic = (entityId: string, newState: string, attrPatch?: Partial<HAAttributes>): void => {
+      if (!live()) return; // link down: callService already declined + notified; don't flip a lie
       const e = entities.find((x) => x.entityId === entityId);
       if (!e) return;
       e.state = newState;
