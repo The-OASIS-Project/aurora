@@ -81,6 +81,7 @@ const MAX_MISSED_PONGS = 2; // consecutive misses -> the link is dead, force a r
 const MAX_UNSUPPORTED_PROBES = 3; // no pong EVER -> assume an older DAWN, stop probing (no false dead)
 const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
 const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
+const REANCHOR_FALLBACK_MS = 3000; // no set_active_conversation_response in this long -> older DAWN, fall back to load_conversation
 const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
@@ -380,7 +381,9 @@ export class DawnIngest implements Ingest {
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
-   private reanchoring = false; // a reconnect re-anchor load (restore server active-conv, do NOT re-render the transcript)
+   private reanchoring = false; // a reconnect re-anchor in flight (restore server active-conv, do NOT re-render the transcript)
+   private reanchorVerbSupported = false; // DAWN answered set_active_conversation at least once (skip the fallback after)
+   private reanchorFallbackTimer = 0; // no response -> fall back to the load_conversation re-anchor (older DAWN)
    /* Liveness heartbeat state (see the PING_* constants). */
    private heartbeatTimer = 0;
    private pongTimer = 0;
@@ -614,12 +617,10 @@ export class DawnIngest implements Ingest {
             turn can't, so we heal the server's active id here, once, at the seam.
             convId is only >0 on a RECONNECT (a fresh page load starts at 0 and the
             initial resume path in list_conversations_response handles that), so this
-            targets exactly the reconnect case. `reanchoring` suppresses the transcript
-            re-render in load_conversation_response - we want the server-side heal, not
-            a reload of what is already on screen. */
+            targets exactly the reconnect case. */
          if (this.convId > 0) {
             this.reanchoring = true;
-            this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+            this.reanchorActiveConversation();
          }
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
@@ -690,6 +691,10 @@ export class DawnIngest implements Ingest {
          this.ws = null;
          this.capsSynced = false; // a new session must re-confirm before Opus is safe again
          this.stopHeartbeat(); // the socket is gone; the session-frame restarts it on reconnect
+         /* Drop any in-flight re-anchor: the fresh reconnect issues its own, so a stale
+            fallback timer must not fire a load_conversation for a now-old id. */
+         window.clearTimeout(this.reanchorFallbackTimer);
+         this.reanchoring = false;
          /* Stop TTS from the dead connection: its buffered tail has nothing to salvage, and
             leaving it playing would echo into a re-armed mic (and double-drive the reactor)
             after the reconnect. disconnect() already does this; the drop path must too. */
@@ -744,6 +749,24 @@ export class DawnIngest implements Ingest {
       this.wsReconnectTimer = window.setTimeout(() => {
          if (this.wantConnected) this.openSocket();
       }, delay);
+   }
+
+   /* Restore DAWN's per-connection active conversation after a reconnect. Prefers the
+      lightweight `set_active_conversation` verb (sets the id server-side, no history replay);
+      feature-detected, so if the running daemon doesn't answer it we fall back to the
+      `load_conversation` re-anchor (heavier - it replays the transcript - but works
+      everywhere). Once support is seen, the fallback timer is skipped. Both responses run the
+      re-anchor branch that suppresses the transcript re-render (`reanchoring`). */
+   private reanchorActiveConversation(): void {
+      const id = this.convId;
+      this.send({ type: "set_active_conversation", payload: { conversation_id: id } });
+      if (this.reanchorVerbSupported) return; // trusted: no fallback needed
+      window.clearTimeout(this.reanchorFallbackTimer);
+      this.reanchorFallbackTimer = window.setTimeout(() => {
+         /* No set_active_conversation_response arrived: assume an older DAWN and use the
+            load_conversation re-anchor instead (its response has the same reanchoring branch). */
+         if (this.reanchoring) this.send({ type: "load_conversation", payload: { conversation_id: id } });
+      }, REANCHOR_FALLBACK_MS);
    }
 
    /* --- Liveness heartbeat (see the PING_* constants) --------------------- */
@@ -1115,6 +1138,31 @@ export class DawnIngest implements Ingest {
             this.sinks.conversationList.setActive(cid);
             /* Reflect the conversation's server-side privacy so the toggle survives a
                reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
+            this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+            this.notifyLlm();
+            break;
+         }
+
+         case "set_active_conversation_response": {
+            /* The lightweight reconnect re-anchor's reply (no history replay). Any response
+               proves the verb exists, so cancel the load_conversation fallback and trust it
+               on future reconnects. Then run the same re-anchor reconcile as the
+               load_conversation path: on success set the active bits without touching the
+               transcript; on failure the stored conversation is gone, drop to a fresh chat. */
+            window.clearTimeout(this.reanchorFallbackTimer);
+            this.reanchorVerbSupported = true;
+            if (!this.reanchoring) break; // not our in-flight re-anchor
+            this.reanchoring = false;
+            if ((p as { success?: boolean }).success === false) {
+               this.convId = 0;
+               localStorage.removeItem(CONV_KEY);
+               this.sinks.conversationList.setActive(0);
+               break;
+            }
+            const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+            this.convId = cid;
+            localStorage.setItem(CONV_KEY, String(cid));
+            this.sinks.conversationList.setActive(cid);
             this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
             this.notifyLlm();
             break;
