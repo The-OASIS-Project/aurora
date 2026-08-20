@@ -50,6 +50,11 @@ export interface HAPanelOpts {
 
 /* Domains rendered as a simple on/off toggle (state is "on"/"off"). */
 const TOGGLE_DOMAINS = new Set(["light", "switch", "fan", "input_boolean"]);
+/* How long an optimistic flip waits for the server's reconcile (a fresh ha_entities_response
+   after DAWN re-polls HA, on success OR failure) before assuming the control was lost and
+   reverting. Catches the transient half-open window where the link looks live but the write
+   vanished - the fully-dead case is already blocked up front by isLive(). */
+const HA_ACK_TIMEOUT_MS = 5000;
 /* Fallback climate modes when DAWN hasn't sent the entity's `hvac_modes` list yet. */
 const DEFAULT_HVAC_MODES = ["off", "heat", "cool", "auto"];
 
@@ -227,13 +232,45 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       opts.onControl({ entityId: ev.entityId, domain: ev.domain, service, data });
    };
 
+   /* Pending optimistic flips awaiting the server's reconcile, keyed by entity. If none
+      arrives within HA_ACK_TIMEOUT_MS the flip is reverted (the write was lost into a
+      half-open link that still read "live"). Any setEntities cancels all of these - a
+      server entity broadcast IS the reconcile, and its truth supersedes every flip. */
+   const pendingReverts = new Map<string, { state: string; attributes?: HAAttributes; timer: number }>();
+
+   const cancelReverts = (): void => {
+      for (const p of pendingReverts.values()) window.clearTimeout(p.timer);
+      pendingReverts.clear();
+   };
+
+   const revertControl = (entityId: string): void => {
+      const p = pendingReverts.get(entityId);
+      if (!p) return;
+      pendingReverts.delete(entityId);
+      const e = entities.find((x) => x.entityId === entityId);
+      if (e) {
+         e.state = p.state;
+         e.attributes = p.attributes;
+         render();
+      }
+      opts.notify?.(`No response from DAWN - ${e?.name ?? entityId} reverted.`);
+   };
+
    /* Reflect a user action immediately, then let the server's reconcile broadcast settle
       the true state (a fresh ha_entities_response after DAWN re-polls HA). On a rejected
-      call the ingest re-polls to revert this flip and surfaces the error. */
+      call the ingest re-polls to revert this flip and surfaces the error; a lost call (no
+      response at all) is caught by the revert timer below. */
    const optimistic = (entityId: string, newState: string, attrPatch?: Partial<HAAttributes>): void => {
       if (!live()) return; // link down: callService already declined + notified; don't flip a lie
       const e = entities.find((x) => x.entityId === entityId);
       if (!e) return;
+      /* Capture the pre-flip state for a possible revert - but only the FIRST time, so
+         rapid re-toggles still roll back to the real server state, not an interim flip. */
+      const existing = pendingReverts.get(entityId);
+      const prev = existing ?? { state: e.state, attributes: e.attributes, timer: 0 };
+      window.clearTimeout(prev.timer);
+      prev.timer = window.setTimeout(() => revertControl(entityId), HA_ACK_TIMEOUT_MS);
+      pendingReverts.set(entityId, prev);
       e.state = newState;
       if (attrPatch) e.attributes = { ...(e.attributes ?? {}), ...attrPatch };
       render();
@@ -536,6 +573,10 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
 
    const controller: HAPanelController = {
       setEntities: (evs) => {
+         /* A server entity broadcast is the authoritative reconcile: it supersedes any
+            optimistic flip, so drop all pending revert timers (success or failure, the
+            fresh state is about to render). */
+         cancelReverts();
          /* Diff against the last snapshot to find changed rows (skip the first load,
             so we don't flash the whole house on connect). */
          const next = new Set<string>();
@@ -559,6 +600,7 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       isVisible: vis.isVisible,
       setVisible: vis.setVisible,
       destroy: () => {
+         cancelReverts();
          refreshBtn.removeEventListener("click", onRefreshClick);
          card.destroy();
          disposeMovable();
