@@ -115,6 +115,7 @@ export type LinkStatus =
    | "connecting"
    | "connected"
    | "stale" // socket open but a heartbeat ping went unanswered — link unstable, not yet dead
+   | "superseded" // another tab took over this session (WS close 4001); we backed off, awaiting reclaim
    | "disconnected"
    | "error";
 
@@ -415,6 +416,8 @@ export class DawnIngest implements Ingest {
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
+   private superseded = false; // another tab took over (WS close 4001); we backed off, awaiting a reclaim() gesture
+   private reclaiming = false; // this reconnect is a reclaim() takeover -> full reload so the display catches up
    private reanchoring = false; // a reconnect re-anchor in flight (restore server active-conv, do NOT re-render the transcript)
    private reanchorVerbSupported = false; // DAWN answered set_active_conversation at least once (skip the fallback after)
    private reanchorFallbackTimer = 0; // no response -> fall back to the load_conversation re-anchor (older DAWN)
@@ -649,18 +652,10 @@ export class DawnIngest implements Ingest {
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
          else this.send({ type: "init", payload: caps });
-         /* Re-anchor the active conversation after a reconnect. DAWN's active
-            conversation is per-CONNECTION and resets to 0 on a new socket, so the
-            next turn - typed OR voice - would run orphaned (conv=0) until something
-            re-asserts it. Typed turns now carry the id inline (submit), but a voice
-            turn can't, so we heal the server's active id here, once, at the seam.
-            convId is only >0 on a RECONNECT (a fresh page load starts at 0 and the
-            initial resume path in list_conversations_response handles that), so this
-            targets exactly the reconnect case. */
-         if (this.convId > 0) {
-            this.reanchoring = true;
-            this.reanchorActiveConversation();
-         }
+         /* The active-conversation re-anchor is deferred to the `session` frame handler:
+            only there do we learn `reconnected` (did we land on our OWN session, history
+            intact, or a FRESH one that needs a full restore). Doing it here would fire
+            before we know, and pick the lightweight re-anchor even on a fresh session. */
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
          ws.send(JSON.stringify({ type: "get_config" }));
@@ -727,6 +722,15 @@ export class DawnIngest implements Ingest {
       };
 
       ws.onclose = (ev: CloseEvent): void => {
+         /* Stale-socket guard. On a fast reconnect the server can 4001-evict the OLD socket
+            AFTER a newer socket has already opened - the old socket's late close then arrives
+            with `this.ws` already pointing at the healthy new one. Acting on it would wipe
+            `this.ws` and latch `superseded` on the connection that actually owns the session
+            (stuck "another tab active" on the live tab). Only the CURRENT socket's close acts;
+            any older socket's close is ignored. Only skip when a DIFFERENT socket is currently
+            live (the race); when `this.ws` is null (a deliberate disconnect() that pre-nulled
+            it) the cleanup below must still run - so guard on `this.ws && this.ws !== ws`. */
+         if (this.ws && this.ws !== ws) return;
          this.ws = null;
          this.capsSynced = false; // a new session must re-confirm before Opus is safe again
          this.stopHeartbeat(); // the socket is gone; the session-frame restarts it on reconnect
@@ -756,6 +760,21 @@ export class DawnIngest implements Ingest {
          this.conversationsLoading = false;
          this.pendingListAppend = false;
          this.sinks.reactor.setState("idle");
+         /* Superseded: another connection deliberately took over this session server-side. Do
+            NOT auto-reconnect - re-stealing it would restart the very fight the eviction exists
+            to end. Back off, stop wanting the link, surface the takeover; the user reclaims
+            with a gesture (reclaim()). We recognize it two ways: the WS close code `4001` (only
+            when it survives - it does NOT through the Vite dev proxy, which delivers 1006), AND
+            an already-set `superseded` flag from the `session_superseded` data frame the server
+            sends just before the close (frames DO survive the proxy). So the frame is the
+            reliable signal; the close code is the same-origin/prod belt-and-suspenders. */
+         if (ev.code === 4001 || this.superseded) {
+            this.wantConnected = false;
+            this.superseded = true;
+            window.clearTimeout(this.wsReconnectTimer);
+            this.emit("superseded", ev.reason || undefined);
+            return;
+         }
          if (this.wantConnected) {
             /* An unexpected drop while we still want to be connected: auto-reconnect
                with backoff. An always-on dashboard has to heal itself after a network
@@ -942,6 +961,35 @@ export class DawnIngest implements Ingest {
                always-on context on the drop, so re-enable from HERE (never before the
                handshake, or the enable targets the throwaway connection and is lost). */
             if (this.resumeContinuous && !this.continuousOn) this.startContinuous();
+            /* Re-anchor the active conversation. convId is only >0 on a RECONNECT (a fresh
+               page load starts at 0 and list_conversations_response resumes via a full
+               load_conversation). `reconnected` (added to the session frame server-side) tells
+               us which session we landed on:
+                 - false -> a FRESH session (daemon restart wiped it, idle-expiry, OR an
+                   eviction landed us on a throwaway): its LLM history is EMPTY, so the
+                   lightweight set_active only sets a pointer and the model loses the whole
+                   conversation (images included). Do a full load_conversation, which rebuilds
+                   the server-side session history (webui_restore_conversation_context).
+                 - true / absent (older DAWN) -> we reconnected to our OWN session, history
+                   intact, so the lightweight re-anchor is correct.
+               reanchoring suppresses the transcript re-render either way (we already show it).
+               EXCEPT a reclaim (takeover): the other tab may have advanced this conversation
+               while we were backed off, so do a FULL load_conversation with reanchoring LEFT
+               FALSE - it restores the server context AND re-renders the transcript (loadHistory)
+               so the display catches up to the latest turns, not stuck on a stale view. */
+            if (this.convId > 0) {
+               if (this.reclaiming) {
+                  this.reclaiming = false;
+                  this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+               } else {
+                  this.reanchoring = true;
+                  if ((p as { reconnected?: boolean }).reconnected === false) {
+                     this.send({ type: "load_conversation", payload: { conversation_id: this.convId } });
+                  } else {
+                     this.reanchorActiveConversation();
+                  }
+               }
+            }
             break;
 
          case "config": {
@@ -975,6 +1023,19 @@ export class DawnIngest implements Ingest {
          case "force_logout":
             /* Session revoked server-side: drop the dead token and surface the login card. */
             this.revokeSession(typeof p.reason === "string" ? p.reason : undefined);
+            break;
+
+         case "session_superseded":
+            /* Another tab took over this session (Tier-1). The server sends this frame just
+               before the eviction close because the `4001` close code does NOT survive the
+               dev proxy (browser sees 1006). Back off HERE - stop wanting the link so the
+               following close doesn't auto-reconnect - and show the takeover; onclose then
+               sees `superseded` and confirms the state instead of reconnecting. The user
+               reclaims with a gesture (reclaim()). */
+            this.superseded = true;
+            this.wantConnected = false;
+            window.clearTimeout(this.wsReconnectTimer);
+            this.emit("superseded", typeof p.reason === "string" ? p.reason : undefined);
             break;
 
          case "get_config_response": {
@@ -2619,6 +2680,24 @@ export class DawnIngest implements Ingest {
       this.ws?.close();
       this.ws = null;
       this.emit("disconnected");
+   }
+
+   /* Reclaim the session for THIS tab after being superseded by another one. A deliberate
+      user gesture (the "Use DAWN here" button): re-open the socket, which reconnects to our
+      session and cleanly evicts whatever tab currently holds it (server-side reconnect-
+      eviction, which sends IT a 4001 in turn). Only valid while superseded, so an errant call
+      can't fight a healthy link. */
+   reclaim(): void {
+      if (!this.superseded) return;
+      this.superseded = false;
+      /* A takeover: the other tab may have advanced this conversation while we were backed
+         off, so the next session frame does a FULL reload (not the lightweight re-anchor) to
+         catch the display up to the latest turns. */
+      this.reclaiming = true;
+      this.wantConnected = true;
+      this.wsFails = 0;
+      window.clearTimeout(this.wsReconnectTimer);
+      this.openSocket();
    }
 
    stop(): void {

@@ -13,6 +13,9 @@ import type { LinkStatus } from "../ingest/dawn-ws.ts";
 export interface LoginOptions {
    onConnect: (username: string, password: string) => Promise<void>;
    onDisconnect: () => void;
+   /* User gesture to reclaim the session after another tab took it over (the "superseded"
+      takeover card's button). Omit -> the card shows without a reclaim control. */
+   onReclaim?: () => void;
 }
 
 export interface LoginController {
@@ -27,6 +30,7 @@ const STATUS_TEXT: Record<LinkStatus, string> = {
    connecting: "Opening channel…",
    connected: "Linked",
    stale: "Link unstable…",
+   superseded: "Active in another tab",
    disconnected: "Disconnected",
    error: "Link failed"
 };
@@ -54,6 +58,24 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       <div class="login-status" role="status"></div>
    `;
    overlay.appendChild(card);
+
+   /* Takeover card, shown ONLY when another tab superseded this one (WS close 4001). Not the
+      credential form - the user is already authenticated; they just have to choose which tab
+      is live. "Use DAWN here" reclaims the session for this tab (evicting the other). */
+   const takeover = document.createElement("div");
+   takeover.id = "takeover-card";
+   takeover.hidden = true;
+   takeover.innerHTML = `
+      <div class="login-brand">D.A.W.N.</div>
+      <div class="login-sub">Active in another tab</div>
+      <div class="takeover-msg">DAWN is open in another tab or window. Only one can be live at a time.</div>
+      <button type="button" class="takeover-reclaim">Use DAWN here</button>
+   `;
+   overlay.appendChild(takeover);
+   const reclaimBtn = takeover.querySelector<HTMLButtonElement>(".takeover-reclaim")!;
+   const onReclaimClick = (): void => opts.onReclaim?.();
+   reclaimBtn.addEventListener("click", onReclaimClick);
+   if (!opts.onReclaim) reclaimBtn.hidden = true;
 
    /* The corner chip shown once linked. Click to disconnect. */
    const chip = document.createElement("button");
@@ -104,12 +126,17 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
          which is still a live socket, just probing. It must NOT drop to the login card. */
       const chipVisible = linked || status === "stale";
       if (chipVisible) manual = false;
+      /* Superseded: show the takeover card instead of the credential form (the user is
+         authenticated; they only choose which tab is live). It owns the overlay in that state. */
+      const takenOver = status === "superseded";
+      takeover.hidden = !takenOver;
+      card.hidden = takenOver;
       /* Show the card only when the user is actually needed (enter creds) or while
          a manual login is running. `checking` and a silent auto-resume's
          connecting phase keep it hidden — no blip on a successful F5 resume. */
       const needsUser = status === "idle" || status === "disconnected" || status === "error";
       const manualProgress = manual && (status === "authenticating" || status === "connecting");
-      overlay.hidden = chipVisible || !(needsUser || manualProgress);
+      overlay.hidden = chipVisible || !(takenOver || needsUser || manualProgress);
 
       chip.hidden = !chipVisible;
       chip.dataset.state = status;
@@ -123,6 +150,7 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       destroy: () => {
          card.removeEventListener("submit", onSubmit);
          chip.removeEventListener("click", onChipClick);
+         reclaimBtn.removeEventListener("click", onReclaimClick);
          overlay.remove();
          chip.remove();
       }

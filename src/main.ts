@@ -481,7 +481,9 @@ paintMic();
    talks to DAWN until the operator logs in. */
 const login = mountLogin(stage, {
    onConnect: (username, password) => dawn.connect(username, password),
-   onDisconnect: () => dawn.disconnect()
+   onDisconnect: () => dawn.disconnect(),
+   /* Reclaim the session for this tab after another tab superseded it (Tier-1 takeover). */
+   onReclaim: () => dawn.reclaim()
 });
 dawn.onStatus((status, detail) => login.setStatus(status, detail));
 

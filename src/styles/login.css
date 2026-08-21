@@ -204,3 +204,57 @@
       animation: none;
    }
 }
+
+/* The credential card can now be toggled hidden (superseded shows the takeover instead);
+   #login-card sets display:flex, which would otherwise override the [hidden] attribute. */
+#login-card[hidden] {
+   display: none;
+}
+
+/* Takeover card: shown when another tab superseded this one (Tier-1). Same observatory card
+   language as the login; a message + the "Use DAWN here" reclaim button. */
+#takeover-card {
+   display: flex;
+   flex-direction: column;
+   gap: 0.9rem;
+   width: min(22rem, 84vw);
+   padding: 1.9rem 1.7rem 1.6rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 46%, transparent) 88%
+   );
+   backdrop-filter: blur(8px);
+   -webkit-backdrop-filter: blur(8px);
+   box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
+      0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+#takeover-card[hidden] {
+   display: none;
+}
+.takeover-msg {
+   font-size: var(--fs-body);
+   line-height: 1.5;
+   color: var(--text-dim);
+}
+.takeover-reclaim {
+   margin-top: 0.3rem;
+   padding: 0.55rem;
+   font-family: "IBM Plex Mono", ui-monospace, monospace;
+   font-size: var(--fs-body);
+   letter-spacing: 0.2em;
+   text-transform: uppercase;
+   color: var(--ground);
+   background: var(--accent);
+   border: none;
+   border-radius: 2px;
+   cursor: pointer;
+   transition: background 120ms ease, box-shadow 120ms ease;
+}
+.takeover-reclaim:hover {
+   background: var(--accent-glow);
+   box-shadow: 0 0 16px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+}
