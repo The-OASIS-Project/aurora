@@ -20,6 +20,14 @@ import { addCorners } from "../render/corners.ts";
 import { renderMarkdown } from "./format.ts";
 import { emojify } from "../util/emoji.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
+import {
+   docTypeLabel,
+   formatBytes,
+   isSafeImageDataUri,
+   parseAttachments,
+   type ParsedDoc,
+   type ParsedImage
+} from "./attachments.ts";
 
 export interface ConversationController {
    setThinking(thinking: boolean): void;
@@ -39,6 +47,12 @@ export interface ConversationController {
 export interface ConversationOptions {
    onSubmit?: (text: string) => void;
    onEngage?: (engaged: boolean) => void;
+   /* Fetch an attached image's bytes (routed through ingest -> /api/images/<id>). The view
+      object-URLs the blob into a thumbnail. Absent -> images render as a failed placeholder. */
+   fetchImage?: (id: string) => Promise<{ blob: Blob; contentType: string }>;
+   /* Fetch a document's original file for the download affordance on a doc chip that has a
+      stored original (ingest -> /api/documents/original/<blobId>). */
+   fetchDocument?: (blobId: string) => Promise<{ blob: Blob; contentType: string }>;
 }
 
 interface Msg {
@@ -94,6 +108,12 @@ export function mountConversation(
    let shortTimer = 0;
    let longTimer = 0;
    let raf = 0;
+   /* Attachment plumbing: object URLs minted for fetched images (revoked on clear /
+      loadHistory / destroy so a long session doesn't leak them), plus the one open
+      image-lightbox / doc-viewer overlay. */
+   const objectUrls: string[] = [];
+   let overlay: HTMLElement | null = null;
+   let overlayKey: ((e: KeyboardEvent) => void) | null = null;
 
    /* Instant by default (token streaming pins to the bottom every frame; smooth there
       would lag). Pass smooth for the discrete settles - raising from receded, a finished
@@ -103,7 +123,153 @@ export function mountConversation(
       win.scrollTo({ top: win.scrollHeight, behavior: smooth ? "smooth" : "auto" });
    };
 
-   const appendMsg = (role: "user" | "assistant", text: string): Msg => {
+   /* --- attachments (inline images + document chips) ----------------------- */
+
+   const revokeObjectUrls = (): void => {
+      for (const u of objectUrls) URL.revokeObjectURL(u);
+      objectUrls.length = 0;
+   };
+   const closeOverlay = (): void => {
+      if (!overlay) return;
+      overlay.remove();
+      overlay = null;
+      if (overlayKey) document.removeEventListener("keydown", overlayKey);
+      overlayKey = null;
+   };
+   /* A centered modal over a dimmed dashboard (image lightbox / doc-text viewer). Backdrop
+      click or Escape closes; only one open at a time. */
+   const openOverlay = (content: HTMLElement, label: string): void => {
+      closeOverlay();
+      const ov = document.createElement("div");
+      ov.className = "convo-overlay";
+      ov.setAttribute("role", "dialog");
+      ov.setAttribute("aria-modal", "true");
+      ov.setAttribute("aria-label", label);
+      ov.appendChild(content);
+      ov.addEventListener("click", (e) => {
+         if (e.target === ov) closeOverlay(); // backdrop only, not the content
+      });
+      overlayKey = (e: KeyboardEvent): void => {
+         if (e.key === "Escape") {
+            e.preventDefault();
+            closeOverlay();
+         }
+      };
+      document.addEventListener("keydown", overlayKey);
+      document.body.appendChild(ov);
+      overlay = ov;
+   };
+   const openImageLightbox = (src: string): void => {
+      const big = document.createElement("img");
+      big.className = "convo-lightbox-img";
+      big.src = src; // a blob:/data: URL we already produced + validated
+      big.alt = "Attached image";
+      openOverlay(big, "Image");
+   };
+   const openDocViewer = (d: ParsedDoc): void => {
+      const card = document.createElement("div");
+      card.className = "convo-doc-viewer";
+      addCorners(card);
+      const h = document.createElement("div");
+      h.className = "convo-doc-viewer-head";
+      h.textContent = d.filename || "Document"; // DAWN-sourced -> textContent
+      const pre = document.createElement("pre");
+      pre.className = "convo-doc-viewer-body";
+      pre.textContent = d.content; // untrusted extracted text -> textContent, never HTML
+      card.append(h, pre);
+      openOverlay(card, d.filename || "Document");
+   };
+
+   const buildImage = (im: ParsedImage): HTMLElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "convo-image";
+      btn.setAttribute("aria-label", "Open image");
+      const img = document.createElement("img");
+      img.className = "convo-image-thumb";
+      img.alt = "Attached image";
+      img.loading = "lazy";
+      btn.appendChild(img);
+      btn.addEventListener("click", () => {
+         if (img.src) openImageLightbox(img.src);
+      });
+      if (im.isDataUri) {
+         /* Legacy inline data URI: only a validated raster type reaches the src. */
+         if (isSafeImageDataUri(im.ref)) img.src = im.ref;
+         else btn.classList.add("failed");
+      } else if (opts.fetchImage) {
+         opts
+            .fetchImage(im.ref)
+            .then(({ blob }) => {
+               const url = URL.createObjectURL(blob); // our own blob: URL -> safe src
+               objectUrls.push(url);
+               img.src = url;
+            })
+            .catch(() => btn.classList.add("failed"));
+      } else {
+         btn.classList.add("failed");
+      }
+      return btn;
+   };
+
+   const downloadDoc = (d: ParsedDoc): void => {
+      if (!d.blobId || !opts.fetchDocument) return;
+      opts
+         .fetchDocument(d.blobId)
+         .then(({ blob }) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            /* filename is DAWN-sourced: strip path separators + control chars first. */
+            a.download = (d.filename || "document").replace(/[^A-Za-z0-9._() -]+/g, "_");
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 0); // sync revoke can cancel the download
+         })
+         .catch(() => {});
+   };
+
+   const buildDocChip = (d: ParsedDoc): HTMLElement => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "convo-doc-chip";
+      const badge = document.createElement("span");
+      badge.className = "convo-doc-type";
+      badge.textContent = docTypeLabel(d.filename);
+      const name = document.createElement("span");
+      name.className = "convo-doc-name";
+      name.textContent = d.filename || "document"; // DAWN text -> textContent
+      chip.append(badge, name);
+      const size = formatBytes(d.size);
+      if (size) {
+         const s = document.createElement("span");
+         s.className = "convo-doc-size";
+         s.textContent = size;
+         chip.append(s);
+      }
+      /* A stored original downloads; otherwise the chip opens the extracted text inline. */
+      const downloadable = Boolean(d.blobId && opts.fetchDocument);
+      chip.title = downloadable ? "Download original" : "View extracted text";
+      chip.addEventListener("click", () => (downloadable ? downloadDoc(d) : openDocViewer(d)));
+      return chip;
+   };
+
+   const renderAttachments = (images: ParsedImage[], docs: ParsedDoc[]): HTMLElement | null => {
+      if (images.length === 0 && docs.length === 0) return null;
+      const wrap = document.createElement("div");
+      wrap.className = "convo-attach";
+      if (images.length) {
+         const row = document.createElement("div");
+         row.className = "convo-images";
+         for (const im of images) row.appendChild(buildImage(im));
+         wrap.appendChild(row);
+      }
+      for (const d of docs) wrap.appendChild(buildDocChip(d));
+      return wrap;
+   };
+
+   const appendMsg = (role: "user" | "assistant", rawText: string): Msg => {
       win.classList.remove("empty");
       const el = document.createElement("div");
       el.className = `convo-msg ${role}`;
@@ -112,10 +278,17 @@ export function mountConversation(
       roleEl.className = "convo-role";
       roleEl.textContent = role === "user" ? "USER" : assistantName;
 
+      /* Split inline attachment markers ([IMAGE:...] / [ATTACHED DOCUMENT:...]) out of the
+         text; render the remaining prose, then the thumbnails/chips below it. Markers only
+         appear in complete/replayed text (history, showReply/showUser), never mid-stream. */
+      const { text, images, docs } = parseAttachments(rawText);
+
       const body = document.createElement("div");
       body.className = "convo-body";
       if (role === "user") body.textContent = text;
       else body.innerHTML = renderMarkdown(text);
+      const attach = renderAttachments(images, docs);
+      if (attach) body.appendChild(attach);
 
       el.append(roleEl, body);
       scroll.appendChild(el);
@@ -175,7 +348,7 @@ export function mountConversation(
    const recede = (): void => {
       if (!active || messages.length === 0) return;
       active = false;
-      win.classList.add("receded"); // leans back slowly, dims, edges fade — persists
+      win.classList.add("receded"); // leans back slowly, dims, edges fade - persists
    };
 
    /* Two countdowns: the short one recedes once the pointer is off the window;
@@ -274,6 +447,8 @@ export function mountConversation(
       streaming = null;
       thinking = false;
       active = false;
+      closeOverlay();
+      revokeObjectUrls();
       scroll.replaceChildren();
       messages.length = 0;
       win.classList.remove("thinking", "receded");
@@ -289,9 +464,11 @@ export function mountConversation(
          raf = 0;
       }
       streaming = null;
+      closeOverlay();
+      revokeObjectUrls(); // the outgoing transcript's image URLs are about to be dropped
       scroll.replaceChildren();
       messages.length = 0;
-      /* A turn can carry text, a tool chip, or both (spoke then called a tool) — render
+      /* A turn can carry text, a tool chip, or both (spoke then called a tool) - render
          the text first, then its tool chips, preserving transcript order. */
       for (const it of items) {
          if (it.text) appendMsg(it.role, it.text);
@@ -376,6 +553,8 @@ export function mountConversation(
          input.removeEventListener("focus", engage);
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
+         closeOverlay();
+         revokeObjectUrls();
          emojiPicker.destroy();
          win.remove();
          chip.remove();

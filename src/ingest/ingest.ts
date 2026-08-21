@@ -409,6 +409,11 @@ export interface Ingest {
       touches the DAWN HTTP boundary directly. Returns the raw bytes + content type - the
       view decodes text itself and object-URLs binaries for download. Rejects on failure. */
    fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }>;
+   /* Fetch an attached image's bytes over the same-origin /api proxy (GET /api/images/<id>),
+      the cookie riding it - mirrors fetchDocumentOriginal. The conversation view object-URLs
+      the blob into an <img>. A read; routed through ingest so the view never touches the
+      DAWN HTTP boundary directly. Rejects on failure. */
+   fetchImage(id: string): Promise<{ blob: Blob; contentType: string }>;
    /* Fetch a document's reassembled full text (doc_library_get) - the readable body of a
       document with no uploaded original (e.g. a generated research report), or the
       extracted text of one that has. Resolves with the text + metadata, or null when

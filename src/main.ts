@@ -493,6 +493,10 @@ void dawn.tryResume();
    to it. Focus also recedes the ambient field + dims the chrome (S3.3). */
 const conversation = mountConversation(stage, {
    onSubmit: (text) => ingest.submit(text),
+   /* Inline attachment display: images + doc originals are fetched through the ingest
+      boundary (never a direct DAWN call from the view). */
+   fetchImage: (id) => ingest.fetchImage(id),
+   fetchDocument: (blobId) => ingest.fetchDocumentOriginal(blobId),
    onEngage: (engaged) => {
       choreographer.setEngaged(engaged);
       notifications.setEngaged(engaged);

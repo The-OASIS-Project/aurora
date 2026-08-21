@@ -1997,6 +1997,17 @@ export class DawnIngest implements Ingest {
       return { blob, contentType: res.headers.get("content-type") ?? "" };
    }
 
+   /* Fetch an attached image's bytes over the same-origin /api proxy (the cookie rides it).
+      A GET read; the conversation view object-URLs the blob into an <img> thumbnail. */
+   async fetchImage(id: string): Promise<{ blob: Blob; contentType: string }> {
+      const res = await fetch(`/api/images/${encodeURIComponent(id)}`, {
+         credentials: "same-origin"
+      });
+      if (!res.ok) throw new Error(`image fetch failed: ${res.status}`);
+      const blob = await res.blob();
+      return { blob, contentType: res.headers.get("content-type") ?? "" };
+   }
+
    /* doc_library_get over the WS, promise-correlated by id. Resolves null on an error
       response, a superseding request for the same id, or a 15s timeout (a dropped
       response must not leak the promise). */

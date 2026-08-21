@@ -143,6 +143,10 @@ export class StubIngest implements Ingest {
       const text = "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
       return { blob: new Blob([text], { type: "text/markdown" }), contentType: "text/markdown" };
    }
+   /* No real images behind the stub. */
+   async fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
+      return { blob: new Blob(), contentType: "" };
+   }
    /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
    async getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {
       const item = this.libraryItems.find((i) => i.id === id);

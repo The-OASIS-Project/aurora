@@ -351,3 +351,191 @@
       opacity: 0.9;
    }
 }
+
+/* ---------------------------------------------------------------------------
+ * Conversation attachments: inline images (thumbnails -> lightbox) and document
+ * chips (download original / view extracted text). Parsed from the message's inline
+ * [IMAGE:...] / [ATTACHED DOCUMENT:...] markers (src/conversation/attachments.ts).
+ * Phosphor tokens only; no color literals.
+ * ------------------------------------------------------------------------- */
+
+.convo-attach {
+   display: flex;
+   flex-direction: column;
+   gap: 0.5rem;
+   margin-top: 0.55rem;
+}
+
+/* Image thumbnails: a wrapping row of small tappable tiles. */
+.convo-images {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 0.5rem;
+}
+.convo-image {
+   padding: 0;
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 3px;
+   background: color-mix(in srgb, var(--ground-raise) 40%, transparent);
+   cursor: pointer;
+   line-height: 0;
+   overflow: hidden;
+}
+.convo-image:hover,
+.convo-image:focus-visible {
+   outline: none;
+   border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+.convo-image-thumb {
+   display: block;
+   width: 8.5rem;
+   height: 8.5rem;
+   object-fit: cover;
+}
+/* Fetch failed / unsupported: a quiet placeholder tile instead of a broken image. */
+.convo-image.failed {
+   width: 8.5rem;
+   height: 8.5rem;
+   position: relative;
+}
+.convo-image.failed::after {
+   content: "image unavailable";
+   position: absolute;
+   inset: 0;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+}
+
+/* Document chip: a small phosphor pill, type badge + name + size. */
+.convo-doc-chip {
+   display: inline-flex;
+   align-items: baseline;
+   gap: 0.5rem;
+   align-self: flex-start;
+   max-width: 100%;
+   padding: 0.35rem 0.6rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 3px;
+   background: color-mix(in srgb, var(--accent) 7%, transparent);
+   cursor: pointer;
+   text-align: left;
+}
+.convo-doc-chip:hover,
+.convo-doc-chip:focus-visible {
+   outline: none;
+   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.convo-doc-type {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   color: var(--cool);
+   border: 1px solid color-mix(in srgb, var(--cool) 45%, transparent);
+   border-radius: 2px;
+   padding: 0.05rem 0.3rem;
+   white-space: nowrap;
+}
+.convo-doc-name {
+   font-size: var(--fs-data);
+   color: var(--text);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+   min-width: 0;
+}
+.convo-doc-size {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+
+/* Lightbox / doc-viewer overlay: a centered surface over a dimmed dashboard. */
+.convo-overlay {
+   position: fixed;
+   inset: 0;
+   z-index: 1100;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   padding: 4vh 3vw;
+   background: color-mix(in srgb, var(--ground) 72%, transparent);
+   backdrop-filter: blur(6px);
+   -webkit-backdrop-filter: blur(6px);
+   animation: convo-overlay-in 160ms ease;
+}
+.convo-lightbox-img {
+   max-width: min(92vw, 1100px);
+   max-height: 90vh;
+   object-fit: contain;
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   box-shadow: 0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+.convo-doc-viewer {
+   position: relative;
+   display: flex;
+   flex-direction: column;
+   width: min(52rem, 92vw);
+   max-height: 86vh;
+   padding: 1.35rem 1.5rem 1.4rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 54%, transparent) 88%
+   );
+   backdrop-filter: blur(9px);
+   -webkit-backdrop-filter: blur(9px);
+   box-shadow: 0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+.convo-doc-viewer .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.convo-doc-viewer-head {
+   font-size: var(--fs-lead);
+   color: var(--text);
+   padding-bottom: 0.7rem;
+   margin-bottom: 0.7rem;
+   border-bottom: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+   overflow-wrap: anywhere;
+}
+.convo-doc-viewer-body {
+   margin: 0;
+   overflow-y: auto;
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   line-height: 1.55;
+   color: var(--text);
+   white-space: pre-wrap;
+   overflow-wrap: anywhere;
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.convo-doc-viewer-body::-webkit-scrollbar {
+   width: 8px;
+}
+.convo-doc-viewer-body::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
+}
+
+@keyframes convo-overlay-in {
+   from {
+      opacity: 0;
+   }
+   to {
+      opacity: 1;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .convo-overlay {
+      animation: none;
+   }
+}
