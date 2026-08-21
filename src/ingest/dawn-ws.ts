@@ -37,7 +37,9 @@ import type {
    LibraryItem,
    MusicState,
    MusicTrack,
-   UploadedDoc
+   OutImage,
+   UploadedDoc,
+   UploadedImage
 } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { TtsPlayback } from "../audio/tts.ts";
@@ -429,6 +431,11 @@ export class DawnIngest implements Ingest {
    private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
    private convId = 0; // active conversation; save_message targets persist to it
+   /* Vision capability, per provider-type, from get_config (llm.cloud/local.vision_enabled).
+      isVisionCapable() picks by the active mode, so it tracks a cloud<->local switch. Gates
+      the composer's image attach - images only go to a model that can see them. */
+   private cloudVision = false;
+   private localVision = false;
    private replyBuf = ""; // final assistant answer, accumulated to persist on idle
    /* Texts submitted from the composer, awaiting DAWN's user-transcript echo. DAWN echoes
       every user turn (typed AND voice); we append typed turns locally on submit, so these
@@ -980,7 +987,9 @@ export class DawnIngest implements Ingest {
                      openai_models?: string[];
                      claude_models?: string[];
                      gemini_models?: string[];
+                     vision_enabled?: boolean;
                   };
+                  local?: { vision_enabled?: boolean };
                   thinking?: { mode?: string; reasoning_effort?: string };
                };
             };
@@ -996,6 +1005,10 @@ export class DawnIngest implements Ingest {
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
             }
+            /* Vision capability per provider-type (config flags). isVisionCapable() resolves
+               these against the active mode, so it follows a later cloud<->local switch. */
+            this.cloudVision = cfg.llm?.cloud?.vision_enabled === true;
+            this.localVision = cfg.llm?.local?.vision_enabled === true;
             /* CURRENT session state: llm_runtime (payload level, resolved for this
                session) — the reliable source, since llm_state_update only fires on a
                switch_llm tool call, never on connect. Provider is capitalized here.
@@ -2019,6 +2032,26 @@ export class DawnIngest implements Ingest {
       };
    }
 
+   /* Upload a (client-compressed) image (POST /api/images, multipart field "image") over the
+      same-origin /api proxy - a sanctioned conversation-input write. Returns the server id
+      used both to attach the image to the turn (image_ids) and to rehydrate it on reload. */
+   async uploadImage(image: Blob): Promise<UploadedImage> {
+      const fd = new FormData();
+      fd.append("image", image, "image.jpg");
+      const res = await fetch("/api/images", { method: "POST", credentials: "same-origin", body: fd });
+      if (!res.ok) throw new Error(`image upload failed: ${res.status}`);
+      const j = (await res.json()) as Record<string, unknown>;
+      const id = typeof j.id === "string" ? j.id : "";
+      if (!id) throw new Error("image upload returned no id");
+      return { id, mimeType: String(j.mime_type ?? "image/jpeg"), size: Number(j.size ?? 0) };
+   }
+
+   /* Whether the active model can see images (resolved from get_config's cloud/local
+      vision_enabled against the current mode, so it follows a cloud<->local switch). */
+   isVisionCapable(): boolean {
+      return this.llm.mode === "local" ? this.localVision : this.cloudVision;
+   }
+
    /* Fetch an attached image's bytes over the same-origin /api proxy (the cookie rides it).
       A GET read; the conversation view object-URLs the blob into an <img> thumbnail. */
    async fetchImage(id: string): Promise<{ blob: Blob; contentType: string }> {
@@ -2500,7 +2533,7 @@ export class DawnIngest implements Ingest {
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
-   submit(text: string): void {
+   submit(text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }): void {
       /* Don't let a message vanish into a dead/half-open link: tell the user instead of
          silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
       if (!this.isLinkLive()) {
@@ -2527,8 +2560,21 @@ export class DawnIngest implements Ingest {
          handler validates ownership and heals its active id from this field (the
          reconnect/multi-tab path it was built for). Omit it while convId is 0: the
          new_conversation above will mint and back-fill the id server-side. */
-      const payload: { text: string; conversation_id?: number } = { text };
+      const payload: {
+         text: string;
+         conversation_id?: number;
+         images?: OutImage[];
+         image_ids?: string[];
+      } = { text };
       if (this.convId > 0) payload.conversation_id = this.convId;
+      /* Image attachments: base64 for the live LLM call, plus the MANDATORY image_ids (the
+         /api/images upload ids, order-matched) the daemon persists as [IMAGE:<id>] markers so
+         they rehydrate on reload. Hard cut-over: an image turn without ids persists text-only,
+         so the composer always sends both together (built from the same pending list). */
+      if (attachments?.images?.length) {
+         payload.images = attachments.images;
+         payload.image_ids = attachments.imageIds ?? [];
+      }
       this.send({ type: "text", payload });
       /* DAWN will echo this as a user `transcript` (it drives its own WebUI's typed
          bubble). We already showed it locally, so remember it to dedupe that echo; a

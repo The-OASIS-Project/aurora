@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, UploadedDoc } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -59,7 +59,7 @@ export class StubIngest implements Ingest {
    }
 
    /* User submitted text: DAWN would think, then speak a reply. Here, canned. */
-   submit(_text: string): void {
+   submit(_text: string, _attachments?: { images?: OutImage[]; imageIds?: string[] }): void {
       this.responding = true;
       this.sinks.reactor.setState("thinking");
       this.sinks.conversation.setThinking(true);
@@ -155,6 +155,14 @@ export class StubIngest implements Ingest {
          size: file.size,
          type: (file.name.split(".").pop() ?? "").toLowerCase()
       };
+   }
+   /* Fake an image upload. */
+   async uploadImage(_image: Blob): Promise<UploadedImage> {
+      return { id: "img_stubstub0001", mimeType: "image/jpeg", size: 0 };
+   }
+   /* The stub pretends to be vision-capable so the attach path can be exercised offline. */
+   isVisionCapable(): boolean {
+      return true;
    }
    /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
    async getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {

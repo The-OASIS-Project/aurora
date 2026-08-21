@@ -15,10 +15,11 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus, ConversationItem, UploadedDoc } from "../ingest/ingest.ts";
+import type { ActivityStatus, ConversationItem, OutImage, UploadedDoc } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
 import { renderMarkdown } from "./format.ts";
 import { emojify } from "../util/emoji.ts";
+import { compressImage } from "../util/image.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
 import {
    buildDocMarker,
@@ -46,8 +47,14 @@ export interface ConversationController {
 }
 
 export interface ConversationOptions {
-   onSubmit?: (text: string) => void;
+   /* `attachments.images` (base64) + order-matched `imageIds` ride the turn for images; the
+      view inlines documents into `text` itself, so those need nothing here. */
+   onSubmit?: (text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }) => void;
    onEngage?: (engaged: boolean) => void;
+   /* Upload a client-compressed image (ingest -> POST /api/images); returns the server id. */
+   uploadImage?: (image: Blob) => Promise<{ id: string; mimeType: string; size: number }>;
+   /* Whether the active model can see images (gates the image half of the attach control). */
+   isVisionCapable?: () => boolean;
    /* Fetch an attached image's bytes (routed through ingest -> /api/images/<id>). The view
       object-URLs the blob into a thumbnail. Absent -> images render as a failed placeholder. */
    fetchImage?: (id: string) => Promise<{ blob: Blob; contentType: string }>;
@@ -489,14 +496,47 @@ export function mountConversation(
       persists and the LLM reads). Gated on opts.uploadDocument - no upload path, no control.
       A hidden file input + a pending-attachment row above the composer are created here. */
    const attachBtn = root.querySelector<HTMLButtonElement>("#composer-attach");
+   /* A compressed+uploaded image held pending on the composer: the (base64, id) pair kept
+      TOGETHER (the send maps ids straight off this, never a display-only view), plus a local
+      preview URL for the thumbnail. */
+   interface PendingImage {
+      id: string;
+      base64: string;
+      mimeType: string;
+      previewUrl: string;
+   }
    let pendingDocs: UploadedDoc[] = [];
+   let pendingImages: PendingImage[] = [];
    let fileInput: HTMLInputElement | null = null;
    let pendingRow: HTMLElement | null = null;
+   const revokePreviews = (): void => {
+      for (const im of pendingImages) URL.revokeObjectURL(im.previewUrl);
+   };
 
    const renderPending = (): void => {
       if (!pendingRow) return;
       pendingRow.replaceChildren();
-      pendingRow.classList.toggle("shown", pendingDocs.length > 0);
+      pendingRow.classList.toggle("shown", pendingDocs.length + pendingImages.length > 0);
+      pendingImages.forEach((im, i) => {
+         const c = document.createElement("span");
+         c.className = "composer-pending-image";
+         const thumb = document.createElement("img");
+         thumb.className = "composer-pending-thumb";
+         thumb.src = im.previewUrl; // our own object URL
+         thumb.alt = "Attached image";
+         const rm = document.createElement("button");
+         rm.type = "button";
+         rm.className = "composer-pending-remove";
+         rm.setAttribute("aria-label", "Remove image");
+         rm.textContent = "×"; // ×
+         rm.addEventListener("click", () => {
+            URL.revokeObjectURL(im.previewUrl);
+            pendingImages.splice(i, 1);
+            renderPending();
+         });
+         c.append(thumb, rm);
+         pendingRow!.appendChild(c);
+      });
       pendingDocs.forEach((d, i) => {
          const c = document.createElement("span");
          c.className = "composer-pending-chip";
@@ -520,24 +560,61 @@ export function mountConversation(
       });
    };
 
-   /* Accepted document types (images are excluded until the vision-upload contract lands).
-      One source for both the picker's `accept` and the drag-drop filter. */
+   /* Accepted file types. Documents always; images only when the model can see them (vision
+      gate). One source for both the picker's `accept` and the drag-drop filter. */
    const DOC_EXTS = ["pdf", "txt", "md", "markdown", "doc", "docx", "csv", "json", "log", "rtf", "odt", "html", "xml"];
+   const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
    const DOC_EXT_SET = new Set(DOC_EXTS);
-   const isDoc = (f: File): boolean => DOC_EXT_SET.has((f.name.split(".").pop() ?? "").toLowerCase());
+   const IMAGE_EXT_SET = new Set(IMAGE_EXTS);
+   const extOf = (f: File): string => (f.name.split(".").pop() ?? "").toLowerCase();
+   const isDoc = (f: File): boolean => DOC_EXT_SET.has(extOf(f));
+   const isImage = (f: File): boolean => IMAGE_EXT_SET.has(extOf(f));
+   const visionOk = (): boolean => !!opts.uploadImage && (opts.isVisionCapable?.() ?? false);
 
+   const uploadDocs = (files: File[]): Promise<void> => {
+      if (!opts.uploadDocument || files.length === 0) return Promise.resolve();
+      const up = opts.uploadDocument;
+      return Promise.allSettled(files.map((f) => up(f))).then((results) => {
+         for (const r of results) if (r.status === "fulfilled") pendingDocs.push(r.value);
+      });
+   };
+   const uploadImages = (files: File[]): Promise<void> => {
+      if (!opts.uploadImage || files.length === 0) return Promise.resolve();
+      const up = opts.uploadImage;
+      /* Compress (bound size + JPEG) -> upload -> hold the (base64, id) pair TOGETHER plus a
+         preview URL. The id never comes from a display-only view, so the send can't serialize
+         it as null (the failure mode that persists images as [null, null]). */
+      return Promise.allSettled(
+         files.map(async (f) => {
+            const c = await compressImage(f);
+            const { id } = await up(c.blob);
+            return { id, base64: c.base64, mimeType: c.mimeType, previewUrl: URL.createObjectURL(c.blob) };
+         })
+      ).then((results) => {
+         for (const r of results) if (r.status === "fulfilled") pendingImages.push(r.value);
+      });
+   };
    const onFilesPicked = (files: File[]): void => {
-      if (!opts.uploadDocument || files.length === 0) return;
+      const imgs = visionOk() ? files.filter(isImage) : [];
+      const docs = files.filter(isDoc);
+      if (imgs.length === 0 && docs.length === 0) return;
       attachBtn?.classList.add("busy");
-      Promise.allSettled(files.map((f) => opts.uploadDocument!(f)))
-         .then((results) => {
-            for (const r of results) if (r.status === "fulfilled") pendingDocs.push(r.value);
+      Promise.all([uploadImages(imgs), uploadDocs(docs)])
+         .then(() => {
             renderPending();
             summon();
          })
          .finally(() => attachBtn?.classList.remove("busy"));
    };
-   const onAttachClick = (): void => fileInput?.click();
+   const onAttachClick = (): void => {
+      /* Set `accept` at click time so it follows a cloud<->local (vision) switch. */
+      if (fileInput) {
+         const exts = DOC_EXTS.map((e) => `.${e}`);
+         if (visionOk()) exts.push(...IMAGE_EXTS.map((e) => `.${e}`));
+         fileInput.accept = exts.join(",");
+      }
+      fileInput?.click();
+   };
    const onFileChange = (): void => {
       if (fileInput?.files) onFilesPicked(Array.from(fileInput.files));
       if (fileInput) fileInput.value = ""; // let the same file be picked again after removal
@@ -573,14 +650,14 @@ export function mountConversation(
       dropHint?.classList.remove("shown");
       if (!hasFiles(e)) return;
       e.preventDefault();
-      onFilesPicked(Array.from(e.dataTransfer!.files).filter(isDoc));
+      onFilesPicked(Array.from(e.dataTransfer!.files)); // onFilesPicked routes docs vs images (+vision)
    };
 
-   if (attachBtn && opts.uploadDocument) {
+   if (attachBtn && (opts.uploadDocument || opts.uploadImage)) {
       fileInput = document.createElement("input");
       fileInput.type = "file";
       fileInput.multiple = true;
-      fileInput.accept = DOC_EXTS.map((e) => `.${e}`).join(",");
+      fileInput.accept = DOC_EXTS.map((e) => `.${e}`).join(","); // default; onAttachClick refines by vision
       fileInput.hidden = true;
       form.appendChild(fileInput);
       pendingRow = document.createElement("div");
@@ -608,18 +685,26 @@ export function mountConversation(
       /* Expand any typed-but-not-picked `:shortcode:` so the user's bubble and the
          text DAWN receives both carry the real glyph. */
       const typed = emojify(input.value.trim());
-      if (!typed && pendingDocs.length === 0) return;
-      /* Inline each attached doc as an [ATTACHED DOCUMENT] marker, then the typed text - the
-         same shape DAWN persists + the LLM reads. The user's bubble renders it back as a chip
-         via parseAttachments; the daemon persists the whole text (no images -> server save). */
-      const markers = pendingDocs.map(buildDocMarker).join("\n");
-      const outgoing = markers ? (typed ? `${markers}\n\n${typed}` : markers) : typed;
+      if (!typed && pendingDocs.length === 0 && pendingImages.length === 0) return;
+      /* Documents inline into the turn TEXT as [ATTACHED DOCUMENT] markers (daemon persists
+         the text verbatim). Images ride SEPARATELY as base64 + order-matched ids; the daemon
+         appends the [IMAGE:id] markers server-side. The local bubble adds those image markers
+         too (displayedText) so it matches exactly what a reload will render - but the SENT text
+         omits them (the daemon owns them), which is also what DAWN echoes, so the typed-echo
+         dedup still matches. */
+      const docMarkers = pendingDocs.map(buildDocMarker).join("\n");
+      const sentText = docMarkers ? (typed ? `${docMarkers}\n\n${typed}` : docMarkers) : typed;
+      const displayedText = sentText + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
+      const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
+      const imageIds = pendingImages.map((im) => im.id);
       input.value = "";
+      revokePreviews();
       pendingDocs = [];
+      pendingImages = [];
       renderPending();
-      appendMsg("user", outgoing);
+      appendMsg("user", displayedText);
       summon();
-      opts.onSubmit?.(outgoing);
+      opts.onSubmit?.(sentText, images.length ? { images, imageIds } : undefined);
    };
    const onInput = (): void => summon(); // typing counts as activity
    const engage = (): void => {
@@ -692,6 +777,7 @@ export function mountConversation(
          window.removeEventListener("drop", onWinDrop);
          pendingRow?.remove();
          dropHint?.remove();
+         revokePreviews();
          closeOverlay();
          revokeObjectUrls();
          emojiPicker.destroy();

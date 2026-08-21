@@ -661,3 +661,37 @@
    color: var(--accent);
    text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
 }
+
+/* Pending IMAGE attachment: a small thumbnail with a corner remove control. */
+.composer-pending-image {
+   position: relative;
+   display: inline-flex;
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 3px;
+   overflow: hidden;
+   background: color-mix(in srgb, var(--ground-raise) 45%, transparent);
+   line-height: 0;
+}
+.composer-pending-thumb {
+   display: block;
+   width: 3rem;
+   height: 3rem;
+   object-fit: cover;
+}
+.composer-pending-image .composer-pending-remove {
+   position: absolute;
+   top: 2px;
+   right: 2px;
+   width: 1.05rem;
+   height: 1.05rem;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   background: color-mix(in srgb, var(--ground) 66%, transparent);
+   border-radius: 2px;
+   color: var(--text);
+}
+.composer-pending-image .composer-pending-remove:hover {
+   color: var(--accent);
+   background: color-mix(in srgb, var(--ground) 80%, transparent);
+}

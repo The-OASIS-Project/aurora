@@ -373,6 +373,22 @@ export interface UploadedDoc {
    blobId?: string; // present -> the original file is stored and downloadable
 }
 
+/* An image uploaded via POST /api/images (client-compressed first). `id` is the server
+   reference used BOTH to attach the image to a turn (payload.image_ids, which the daemon
+   persists as an [IMAGE:id] marker) and to rehydrate it on reload (/api/images/:id). */
+export interface UploadedImage {
+   id: string;
+   mimeType: string;
+   size: number;
+}
+
+/* One image on an outgoing turn frame: base64 (no data: prefix) for the live LLM call. The
+   paired id rides `image_ids` separately (persistence). Ordered identically. */
+export interface OutImage {
+   data: string;
+   mime_type: string;
+}
+
 /*
  * A source of DAWN data. `start` binds the sinks and begins feeding them; the
  * two inbound-from-user hooks (`submit`, `setEngaged`) let the UI push user
@@ -380,12 +396,22 @@ export interface UploadedDoc {
  */
 export interface Ingest {
    start(sinks: IngestSinks): void;
-   /* User submitted text (later: send to DAWN's conversation path). */
-   submit(text: string): void;
+   /* User submitted a turn. `attachments.images` (base64) rides the frame for the live LLM
+      call; `attachments.imageIds` (from the /api/images upload, order-matched) is MANDATORY
+      whenever images are present - the daemon persists it as [IMAGE:id] markers so images
+      survive a reload (hard cut-over, no fallback). Documents are inlined into `text` by the
+      caller, so they need nothing here. */
+   submit(text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */
    uploadDocument(file: File): Promise<UploadedDoc>;
+   /* Upload a (client-compressed) image to DAWN (POST /api/images, multipart). A sanctioned
+      conversation-input write. Returns the server id used to attach + rehydrate it. */
+   uploadImage(image: Blob): Promise<UploadedImage>;
+   /* Whether the active model can see images (from get_config's llm.cloud/local.vision_enabled,
+      resolved against the current mode). The composer gates image attach on this. */
+   isVisionCapable(): boolean;
    /* User dismissed a transient notice; the source may propagate it to DAWN (e.g.
       a ringing alarm needs scheduler_action{dismiss} to actually stop). */
    dismiss(id: string): void;

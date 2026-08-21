@@ -492,13 +492,16 @@ void dawn.tryResume();
 /* The conversation view emits user intent to ingest; ingest pushes replies back
    to it. Focus also recedes the ambient field + dims the chrome (S3.3). */
 const conversation = mountConversation(stage, {
-   onSubmit: (text) => ingest.submit(text),
+   onSubmit: (text, attachments) => ingest.submit(text, attachments),
    /* Inline attachment display: images + doc originals are fetched through the ingest
       boundary (never a direct DAWN call from the view). */
    fetchImage: (id) => ingest.fetchImage(id),
    fetchDocument: (blobId) => ingest.fetchDocumentOriginal(blobId),
-   /* Composer document upload (a sanctioned conversation-input write, POST /api/documents). */
+   /* Composer uploads (sanctioned conversation-input writes): documents (POST /api/documents)
+      and images (POST /api/images); image attach is gated on the model being vision-capable. */
    uploadDocument: (file) => ingest.uploadDocument(file),
+   uploadImage: (image) => ingest.uploadImage(image),
+   isVisionCapable: () => dawn.isVisionCapable(),
    onEngage: (engaged) => {
       choreographer.setEngaged(engaged);
       notifications.setEngaged(engaged);
