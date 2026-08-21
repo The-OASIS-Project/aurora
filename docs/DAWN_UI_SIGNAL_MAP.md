@@ -102,7 +102,7 @@ thing, briefly, without being asked. It is wired and live in
 |-------|---------|---------|
 | `attention_alert` | `summary` (text), `level` ∈ **alert \| ambient** | The banner channel. `alert` = needs you; `ambient` = ambient FYI. **Maps 1:1 onto the dashboard's importance/tone.** Its own channel so it never triggers the scheduler chime. |
 | `silent_observation` | `ts`, `category`, `note`, `filter_match` | A quieter FYI/peek primitive (surfaced as a low-importance notice card). WebUI-only; satellites never get it. |
-| `context_injection` | `conversation_id`, `turn_id`, `items[]` (each `source_id`, `source_type` ∈ internal \| external \| user-content, `text`, score breakdown) | What DAWN pulled into context for a turn. Rich, for a "why did it say that" surface. |
+| `context_injection` | `conversation_id`, `turn_id`, `items[]` (each `source_id`, **`item_id`**, `source_type` ∈ internal \| external \| user-content, `text`, `score`, `score_breakdown{semantic,recency,importance,source}`) | What DAWN pulled into context for a turn. **Consumed by the Context panel (§9.6); FLAT AT THE ROOT (no `payload` wrapper).** A paired `context_citations` frame lights up the rows the model actually cited. |
 | `memory_extraction_notice` | `level`, `message` | DAWN learned/stored something. |
 | `memory_proposals_changed` | `count` | Pending memory proposals count changed. |
 
@@ -163,11 +163,12 @@ chunks (`0x20`) are a separate concern you can ignore for a display-only panel.
 
 | Frame | Meaning |
 |-------|---------|
-| `session` | Token + auth state. Sent on connect/reconnect. |
-| `config` | WebUI config (`audio_chunk_ms`). Sent after `session`. |
+| `session` | Token + auth state, plus (authenticated frame) **`reconnected: true\|false`** + `session_id`. `reconnected:false` = a FRESH session (restart / idle-expiry / evicted-to-fresh) with an empty LLM history -> issue a full `load_conversation` to rebuild context; `true` = adopted your own live session, a lightweight `set_active_conversation` re-anchor suffices. Sent on connect/reconnect. |
+| `config` | WebUI config (`audio_chunk_ms`, `music_enabled`/`music_port`). Sent after `session`. |
 | `force_logout` | Server revoked your session. Reason in payload. |
+| `session_superseded` | Another connection took over this session (one-connection-per-session). Sent to the evicted connection **just before a WS close code `4001`**; the frame is the reliable signal since the dev proxy strips the `4001` code to `1006`. Back off, show the takeover, reconnect only on a user gesture. See §6 / CLAUDE.md gotcha. |
 | `conversation_reset` | Context was reset via a tool. |
-| `image_url` | A rehydrated image reference in a message (vision). |
+| `image_url` | NOT a browser frame - it is an internal LLM content-part type. Attached images reach the client as inline `[IMAGE:img_id]` markers in a message's text (fetched from `GET /api/images/:id`); documents as `[ATTACHED DOCUMENT: … blob:id]…[END DOCUMENT]` marker blocks. See §9.6. |
 
 ---
 
@@ -664,6 +665,48 @@ original: txt/md render, any-type download). Together they cover both classes.
 
 ---
 
+### 9.6 Consumed this session (Context panel, attachments, session-continuity) — 2026-08-21
+
+Three consumer surfaces wired against DAWN, all verified live.
+
+**a. Context panel (`src/context/`) — the "why did it say that" surface.** Consumes the pushed
+`context_injection` frame (§3.2), which is **FLAT AT THE ROOT** (no `payload` wrapper - the earlier
+doc implied one; verified in `webui_broadcasts.c`). Scoped server-side to the connection's active
+conversation, so it only ever shows the conversation on screen. Each item's unique key is
+**`item_id`** (`"fact:8502"`), NOT `source_id` (that is the adapter's per-CATEGORY static string,
+not unique per row). **Cited-row gold:** a paired **`context_citations`** frame (also flat at root:
+`{conversation_id, turn_id, cited_item_ids[]}`), emitted at turn END, golds the rows the model
+actually cited. Match on **`turn_id` alone** (`last_user_msg_id`, globally unique) - the two frames
+can derive `conversation_id` from different fields and disagree in a ~47ms fresh-chat window.
+DAWN also added: `item_id` on each `context_injection` row, and a `<cited>` streaming leak-fix.
+
+**b. Conversation attachments (upload + display).** No structured attachment field and NO `image_url`
+frame - attachments ride the message text as inline markers.
+- **Documents:** `POST /api/documents` (multipart field `document`) -> `{filename, content
+  (extracted text), size, type, original_blob_id?}`; inline into `payload.text` as
+  `[ATTACHED DOCUMENT: name (N bytes) blob:id]\n<content>\n[END DOCUMENT]`. Daemon persists it as
+  ordinary text (`vision_image_count==0`).
+- **Images:** `POST /api/images` (multipart field `image`, client-compressed to ≤1024px JPEG) ->
+  `{id, mime_type, size}`. On the turn frame send `payload.images[]` (base64, for the live LLM) PLUS
+  the **MANDATORY order-matched `payload.image_ids[]`** (map off the (base64,id) upload pairs, never
+  a display view). Daemon persists `\n[IMAGE:<id>]` markers per id and rehydrates them into the LLM
+  on reload. **Gate image attach on a vision-capable model** (`get_config` `llm.cloud/local.vision_enabled`,
+  resolved by active mode). Fails SAFE-and-silent on a bad id (persists text-only) - the tell is the
+  daemon log `WebUI: ignoring invalid image_id in turn frame`.
+- **Display:** parse `[IMAGE:img_id]` (fetch `GET /api/images/:id`) + `[ATTACHED DOCUMENT: … blob:id]`
+  markers out of message text (`src/conversation/attachments.ts`); images render inline (lightbox),
+  documents as chips (download original or view extracted text). All strings via `textContent`.
+
+**c. Session-continuity (Tier-1 one-connection-per-session).** DAWN binds one live connection per
+session; a second tab evicts the first with a **`session_superseded` frame then WS close `4001`**
+(§3.7). The dev proxy strips the `4001` code to `1006`, so the FRAME is the reliable takeover signal.
+Client: back off on `session_superseded`/`4001` (no auto-reconnect), show "Use DAWN here", reclaim
+only on the gesture; a reclaim does a full re-rendering `load_conversation` to catch the transcript
+up. The `session` frame's **`reconnected`** flag drives fresh-session context restore (§3.7). Daemon
+side: a close-handler ownership guard + clean reconnect-eviction + pong-to-the-pinging-socket.
+
+---
+
 **Original item write-ups (source cites preserved):**
 
 1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.** ✅ Done (§9.1a).
@@ -720,3 +763,8 @@ real-time + hardened. Still deferred: the SAGE *proactive-alert* side of #2/#3 (
 push, which shipped). **Library panel wired 2026-08-13** (§4 + §9.5; consumes the
 undocumented `doc_library_list` — notes read inline, documents list as metadata; **#9
 requested**: add `original_blob_id`/`has_original` so document bodies render/download).*
+**Context panel + cited-gold, conversation attachments (image/document upload + inline
+display), and the Tier-1 one-connection-per-session takeover + fresh-session context restore
+all shipped 2026-08-21 (§9.6; coordinated with the DAWN + in-repo-WebUI changes: `item_id` +
+`context_citations` + `<cited>` leak-fix, `payload.image_ids[]` persistence, and the
+`session_superseded` frame / `reconnected` flag / `4001` eviction).*

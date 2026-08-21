@@ -36,8 +36,15 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   **delete is the one write that permanently destroys DAWN-side data** (it cascade-deletes
   the conversation's images + child background jobs and refuses on a running job), so it is
   gated behind a named, cascade-explicit confirm dialog and only ever reachable from a
-  deliberate user gesture, never a frame handler. If a new feature needs to
-  write to DAWN, flag it and confirm first.
+  deliberate user gesture, never a frame handler. **Conversation attachments** are the same
+  sanctioned conversation-input class as chat submit: the composer uploads a document
+  (`POST /api/documents`, inlined into the turn text as an `[ATTACHED DOCUMENT]` marker) or a
+  client-compressed image (`POST /api/images`, sent as `payload.images[]` base64 plus the
+  MANDATORY order-matched `payload.image_ids[]` so the daemon persists `[IMAGE:id]` markers -
+  image attach is gated on a vision-capable model). The **session-continuity** writes are
+  `set_active_conversation`/`load_conversation` re-anchors on reconnect and the takeover
+  reclaim (see the reconnect gotcha below). If a new feature needs to write to DAWN, flag it
+  and confirm first.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, HA board) and the notification cards (`src/notify/`) are
@@ -105,6 +112,23 @@ stub-only - kept as the render seam and the extension point for future store-bac
 - **Session reuse.** Every `init` mints a new session and DAWN caps at 8. Store the
   `session` frame's token and send `reconnect` (not `init`) on later connects. On page
   load, `GET /api/auth/status`; if authenticated, resume without re-login.
+- **One connection per session, and the takeover is signalled TWO ways.** DAWN binds one
+  live connection per session; a second tab reconnecting evicts the first. Without a
+  client backoff this used to storm (each evicted tab's watchdog re-stole the session). The
+  fix (Tier-1): the daemon sends a **`session_superseded` frame then a WS close code `4001`**;
+  the client backs off (no auto-reconnect) and shows the "Use DAWN here" takeover
+  (`src/auth/login-panel.ts`), reconnecting only on that gesture. **The frame is load-bearing
+  because the Vite dev proxy STRIPS the `4001` close code down to a generic `1006`** - so
+  `onclose` backs off on `ev.code === 4001 || superseded` (the frame set `superseded`). Also:
+  a stale old socket's late close must not act (guard `if (this.ws && this.ws !== ws)`), and a
+  reclaim does a **full re-rendering `load_conversation`** (not the lightweight re-anchor) so
+  the transcript catches up to turns another tab added while this one was backed off.
+- **A fresh session loses the LLM context; the `session` frame's `reconnected` flag tells you.**
+  Sessions are in-memory, so a daemon restart / idle-expiry / eviction lands the client on a
+  FRESH session with an EMPTY LLM history - the lightweight `set_active_conversation` re-anchor
+  only sets a pointer, so the model forgets the conversation (and its images). On
+  `reconnected:false` issue a full `load_conversation` (rebuilds the server-side history via
+  `webui_restore_conversation_context`); on `true` the re-anchor is fine.
 - **The cookie needs a same-origin proxy.** The dev server proxies `/api` and `/ws` to
   DAWN so the HttpOnly `dawn_session` cookie rides the `/ws` handshake. Cross-origin
   does not work; that is why the proxy exists in `vite.config.ts`.

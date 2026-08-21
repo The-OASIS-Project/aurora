@@ -14,7 +14,12 @@ all day.
   show how hard it's working.
 - **Conversation.** Chat with DAWN and watch its reply appear as it's written. Each
   message shows who said it, and the window eases into the background when you're idle,
-  then comes forward when you type.
+  then comes forward when you type. Attach images or documents to a message — drop a file
+  anywhere on the screen or use the paperclip — and images show up inline while documents
+  appear as chips you can open.
+- **Context.** Curious why DAWN answered the way it did? Open the Context view to see what
+  it pulled in to reply — each source, how relevant it was, and which ones it actually used
+  (those light up gold as the answer lands).
 - **Voice.** Talk to DAWN and hear it reply out loud. Hold the mic button to speak a
   single request, or tap it to switch on hands-free listening so you can just say the wake
   word whenever you need it. The reactor's ring moves to your voice as you speak, and you
@@ -29,6 +34,7 @@ all day.
   blinds, thermostats — grouped by room and updating the moment anything changes.
 - **Calendar.** Your day at a glance: today's events, color-coded by calendar, updating as
   your schedule changes.
+- **Library.** Browse your saved notes and documents and open any one to read.
 - **Status readout.** A quiet corner with the live details: which AI model is running, how
   quickly it's replying, how much of the conversation it's holding, how long it's been up,
   and a clock in your local time.
@@ -71,6 +77,11 @@ it at your daemon by editing `DAWN_TARGET` in `vite.config.ts` (default
 
 Log in with your DAWN username and password. Aurora keeps you signed in across refreshes,
 so you won't have to log in again every time you reload.
+
+DAWN lives in one place. If you open Aurora in a second tab or window, that one takes over
+and the first shows a **"Use DAWN here"** button to bring it back — only one is live at a
+time, so your tabs never fight over the connection. Whichever tab you bring live catches up
+to the latest of the conversation automatically.
 
 ## Documentation
 

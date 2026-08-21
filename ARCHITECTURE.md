@@ -32,7 +32,7 @@ ingest  ->  state  ->  choreography  ->  render
 - **ingest** (`src/ingest/`) is the single boundary to DAWN. An `Ingest` implementation
   feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
   HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar,
-  Home Assistant, notifications, conversation list). `StubIngest` (fake data) and
+  Home Assistant, library, context, notifications, conversation list). `StubIngest` (fake data) and
   `DawnIngest` (the real WebSocket client) are interchangeable; swapping DAWN in is one
   line in `main.ts`.
 - **state** (`src/state/`) is the `Store` of `ElementState`: what is true right now
@@ -48,7 +48,8 @@ ingest  ->  state  ->  choreography  ->  render
 
 Not everything flows through this seam. Store-backed ambient elements do (they earn depth
 and front-slot contention from the choreographer). The standalone interactive views - the
-music player, calendar, Home Assistant board, conversation picker, and the **notification
+music player, calendar, Home Assistant board, library, context panel, conversation picker,
+and the **notification
 layer** - are self-owned: ingest feeds each its own sink, and the view owns its DOM and
 position directly (see the notification-layer and conventions sections). In the live DAWN
 path today nothing drives the store - notices and the jobs card moved to the notification
@@ -135,8 +136,11 @@ src/
   choreography/      importance -> depth / presence
   render/            css3d renderer, RenderNode contract, makeMovable, panel drag
   anchor/            the Three.js reactor (the only WebGL)
-  conversation/      the front window, markdown, and the 3D-lean recede
+  conversation/      the front window, markdown, the 3D-lean recede, and attachment
+                     display + the composer's attach/upload (attachments.ts)
   conversation-picker/  the top-band history panel
+  context/           the movable "why did it say that" panel (context_injection + gold)
+  library/           the movable notes + documents viewer
   notify/            the self-owned movable notification cards + importance model
   music/             the movable music player view
   calendar/          the movable calendar card
@@ -144,9 +148,9 @@ src/
   audio/             TTS playback + FFT tap to the reactor
   hud/               clock + telemetry readout
   menu/              top menu: panels, display, model, system
-  auth/              login panel
+  auth/              login panel (+ the "another tab took over" takeover card)
   model/             LLM-selection types + effort rules
-  util/              small shared helpers (time formatting, ...)
+  util/              small shared helpers (time formatting, image compression, ...)
   styles/            CSS (driven by the design tokens via custom properties)
 docs/                the DAWN signal map
 ```
