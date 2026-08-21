@@ -27,6 +27,7 @@ import type {
    ActivityStatus,
    CalendarEvent,
    CalendarInfo,
+   ContextItem,
    ConversationMeta,
    HAAttributes,
    HAEntity,
@@ -278,6 +279,36 @@ function toLibraryItem(d: Record<string, unknown>): LibraryItem {
       originalBlobId: blobId,
       hasOriginal: d.has_original === true || blobId !== undefined
    };
+}
+
+/* Parse one context_injection item (a focus-block candidate). Numbers are read
+   defensively; provenance is omitted server-side when unavailable (conv_id 0), so treat its
+   absence as "not available". Text stays raw here - the panel binds it via textContent. */
+function toContextItem(d: Record<string, unknown>): ContextItem {
+   const b = (d.score_breakdown ?? {}) as Record<string, unknown>;
+   const item: ContextItem = {
+      itemId: String(d.item_id ?? ""), // unique per-row key; "" for non-citeable rows (feature-detected)
+      sourceId: String(d.source_id ?? ""),
+      sourceType: String(d.source_type ?? ""),
+      text: typeof d.text === "string" ? d.text : "",
+      score: Number(d.score ?? 0),
+      breakdown: {
+         semantic: Number(b.semantic ?? 0),
+         recency: Number(b.recency ?? 0),
+         importance: Number(b.importance ?? 0),
+         source: Number(b.source ?? 0)
+      },
+      appliedSourceWeight: Number(d.applied_source_weight ?? 0)
+   };
+   const prov = d.provenance as Record<string, unknown> | undefined;
+   if (prov && typeof prov === "object") {
+      item.provenance = {
+         conversationId: Number(prov.conversation_id ?? 0),
+         msgIdStart: Number(prov.msg_id_start ?? 0),
+         msgIdEnd: Number(prov.msg_id_end ?? 0)
+      };
+   }
+   return item;
 }
 
 /* Parse the optional per-entity `attributes` object (signal-map §9.4 #7). Only present
@@ -1123,6 +1154,9 @@ export class DawnIngest implements Ingest {
                this.notifyLlm();
                break;
             }
+            /* Switching conversations: the shown context trace belonged to the previous
+               one, so clear it now (the next live turn here repopulates it). */
+            this.sinks.context.clear();
             const msgs = (p.messages ?? []) as Array<{ role: string; content: string }>;
             this.sinks.conversation.loadHistory(
                msgs
@@ -1204,6 +1238,7 @@ export class DawnIngest implements Ingest {
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.replyBuf = "";
                this.sinks.conversation.clear();
+               this.sinks.context.clear();
                this.sinks.conversationList.setActive(0);
             }
             this.pendingDeleteId = 0;
@@ -1238,6 +1273,7 @@ export class DawnIngest implements Ingest {
                NEXT message opens a fresh one (mirrors the old WebUI's startNewChat),
                preserving the previous conversation instead of appending to it. */
             this.sinks.conversation.clear();
+            this.sinks.context.clear();
             this.convId = 0;
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
@@ -1245,6 +1281,7 @@ export class DawnIngest implements Ingest {
 
          case "new_conversation_response":
             /* The fresh conversation the daemon just created — persist to it now. */
+            this.sinks.context.clear(); // fresh conversation: no injected context yet
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
@@ -1597,6 +1634,42 @@ export class DawnIngest implements Ingest {
             });
             break;
 
+         case "context_injection": {
+            /* What DAWN pulled into context for this turn (the focus block) - the Context
+               panel's "why did it say that" feed. This frame is FLAT AT THE ROOT (no
+               `payload`; verified in webui_broadcasts.c), and DAWN scopes it server-side to
+               our active conversation, so we just push the latest. All item text is
+               memory/model-sourced -> the panel binds it via textContent. */
+            const root = msg as Record<string, unknown>;
+            const items = (root.items ?? []) as Array<Record<string, unknown>>;
+            const rej = (root.filter_rejections ?? []) as Array<Record<string, unknown>>;
+            this.sinks.context.show({
+               conversationId: Number(root.conversation_id ?? 0),
+               turnId: Number(root.turn_id ?? 0),
+               items: items.map(toContextItem),
+               rejections: rej.map((r) => ({
+                  sourceId: String(r.source_id ?? ""),
+                  count: Number(r.count ?? 0)
+               }))
+            });
+            break;
+         }
+
+         case "context_citations": {
+            /* At turn END, the rows the model actually cited in its answer (validated
+               item_ids). FLAT AT THE ROOT like context_injection. turn_id matches the
+               context_injection turn (both last_user_msg_id), so the panel golds the already-
+               rendered rows scoped by (conversation_id, turn_id). Only ever memory rows. */
+            const root = msg as Record<string, unknown>;
+            const ids = (root.cited_item_ids ?? []) as unknown[];
+            this.sinks.context.applyCitations(
+               Number(root.conversation_id ?? 0),
+               Number(root.turn_id ?? 0),
+               ids.map((v) => String(v)).filter(Boolean)
+            );
+            break;
+         }
+
          case "scheduler_notification": {
             /* Alarms/timers/reminders. Surface an actively firing one; a ringing
                alarm keeps its event id so a dismiss can silence it on DAWN. Any
@@ -1811,6 +1884,7 @@ export class DawnIngest implements Ingest {
       this.replyBuf = "";
       this.sinks.conversation.endReply();
       this.sinks.conversation.clear();
+      this.sinks.context.clear();
       this.sinks.conversationList.setActive(0);
    }
 

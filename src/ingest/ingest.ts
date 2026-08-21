@@ -303,6 +303,49 @@ export interface LibrarySink {
    setItems(items: LibraryItem[], opts: { append: boolean; searching: boolean; hasMore: boolean }): void;
 }
 
+/* One item DAWN pulled into context for a turn (a focus-block candidate). Read off the
+   pushed `context_injection` frame - which is FLAT AT THE ROOT, not under `payload` (the
+   signal map §3.2 implies a payload wrapper; verified against DAWN webui_broadcasts.c that
+   there is none). `text` (and `sourceId`) are memory/model-sourced, so the panel is
+   untrusted-input territory: bind every string via textContent. */
+export interface ContextItem {
+   /* Unique per-row key ("fact:8502"); "" for non-citeable rows (calendar/document/etc).
+      This is what the `context_citations` frame references - NOT sourceId, which is the
+      adapter's per-CATEGORY static string ("memory_fact") and not unique per row. */
+   itemId: string;
+   sourceId: string;
+   sourceType: string; // "internal" | "external" | "user-content"
+   text: string;
+   score: number; // the final blended score
+   breakdown: { semantic: number; recency: number; importance: number; source: number };
+   appliedSourceWeight: number;
+   provenance?: { conversationId: number; msgIdStart: number; msgIdEnd: number };
+}
+
+/* One turn's injected context: what DAWN retrieved (and what it filtered out) to answer.
+   DAWN scopes the frame server-side to the connection's ACTIVE conversation, so the panel
+   only ever sees traces for the conversation on screen - it shows the latest turn. */
+export interface ContextTrace {
+   conversationId: number;
+   turnId: number;
+   items: ContextItem[];
+   rejections: Array<{ sourceId: string; count: number }>;
+}
+
+/* What ingest pushes to the Context panel (a passive, read-only view fed by the pushed
+   `context_injection` frame - no request, the "why did it say that" surface). `show`
+   replaces the panel with the latest turn's trace; `clear` empties it when the conversation
+   changes (new / reset / switch) so a stale trace never lingers. */
+export interface ContextSink {
+   show(trace: ContextTrace): void;
+   clear(): void;
+   /* A turn's citations arrived: the model cited these injected rows (by `item_id`) in its
+      answer. Scoped to (conversationId, turnId) so a stale frame for a different/old turn is
+      ignored. Arrives AFTER show() for the same turn (turn end vs turn start), so the panel
+      treats it as a late gold overlay on already-rendered rows. */
+   applyCitations(conversationId: number, turnId: number, citedItemIds: string[]): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -313,6 +356,7 @@ export interface IngestSinks {
    calendar: CalendarSink;
    ha: HASink;
    library: LibrarySink;
+   context: ContextSink;
    notifications: NotificationsSink;
    conversationList: ConversationListSink;
 }

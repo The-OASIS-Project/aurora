@@ -1,0 +1,360 @@
+/*
+ * Context panel. A standalone movable card (same machined/frosted language as the
+ * calendar / library / HA boards) showing what DAWN pulled into context for the latest
+ * turn: each source's tier, blended score, and its semantic/recency/importance/source
+ * breakdown. Everything is phosphor tokens; no color literals. Pulses on a fresh turn.
+ */
+
+.context {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+}
+/* Operator hid the card from the Panels menu: gone entirely, no pointer capture. */
+.context.context-off {
+   display: none;
+}
+.context .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A fresh turn updated the trace: a brief ring flash so the eye catches the change. */
+.context.context-pulse {
+   animation: context-pulse 800ms ease;
+}
+@keyframes context-pulse {
+   0% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 85%, transparent);
+   }
+   100% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   }
+}
+
+/* Header doubles as the drag handle (rows stay interactive). */
+.context-head {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.6rem;
+   cursor: grab;
+}
+.context.movable-dragging .context-head {
+   cursor: grabbing;
+}
+.context-title {
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.context-head-right {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+}
+.context-sub {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+}
+/* "?" affordance -> the how-to-read popover. */
+.context-help-btn {
+   width: 1.35rem;
+   height: 1.35rem;
+   padding: 0;
+   border: 1px solid color-mix(in srgb, var(--text) 26%, transparent);
+   border-radius: 50%;
+   background: none;
+   color: var(--text-faint);
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   line-height: 1;
+   cursor: pointer;
+}
+.context-help-btn:hover,
+.context-help-btn[aria-expanded="true"] {
+   color: var(--accent);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* The summonable "how to read this panel" popover (anchored under the "?"). */
+.context-help {
+   display: none;
+   position: absolute;
+   top: 2.7rem;
+   right: 0.7rem;
+   z-index: 30;
+   width: min(21rem, calc(100% - 1.4rem));
+   max-height: 70vh;
+   overflow-y: auto;
+   padding: 0.85rem 0.95rem 0.95rem;
+   background: color-mix(in srgb, var(--ground-raise) 82%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   box-shadow: 0 12px 40px color-mix(in srgb, var(--ground) 70%, transparent);
+   backdrop-filter: blur(10px);
+   -webkit-backdrop-filter: blur(10px);
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.context-help.open {
+   display: block;
+}
+.context-help-lead {
+   margin: 0 0 0.5rem;
+   font-size: var(--fs-label);
+   line-height: 1.45;
+   color: var(--text-dim);
+}
+.context-help-h {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.1em;
+   color: var(--text-faint);
+   margin: 0.7rem 0 0.35rem;
+}
+.context-help-row {
+   display: flex;
+   align-items: baseline;
+   gap: 0.55rem;
+   padding: 0.18rem 0;
+}
+.context-help-term {
+   flex: 0 0 4.6rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--accent);
+}
+.context-help-def {
+   flex: 1 1 auto;
+   font-size: var(--fs-label);
+   line-height: 1.4;
+   color: var(--text-dim);
+}
+.context-help-note {
+   margin: 0.7rem 0 0;
+   padding-top: 0.6rem;
+   border-top: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+   font-size: var(--fs-label);
+   line-height: 1.45;
+   color: var(--text-dim);
+}
+
+/* List. Sizing / hover-expand / grip come from the shared .lcard rules (list-card.css);
+   this sets row spacing and a slim visible scrollbar (like the library list). */
+.context-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.55rem;
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.context-list::-webkit-scrollbar {
+   display: block;
+   width: 8px;
+}
+.context-list::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
+}
+.context-list.overflowing {
+   -webkit-mask-image: none;
+   mask-image: none;
+}
+.context-empty {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   padding: 0.4rem 0;
+}
+
+/* One retrieved source. */
+.context-row {
+   display: flex;
+   flex-direction: column;
+   gap: 0.35rem;
+   padding: 0.45rem 0.5rem;
+   border-radius: 2px;
+   background: color-mix(in srgb, var(--accent) 5%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.context-row-head {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 0.6rem;
+}
+.context-row-tags {
+   display: flex;
+   align-items: center;
+   gap: 0.4rem;
+}
+/* Cited: the model referenced this row in its answer. A gold left-bar + faint gold wash +
+   ring, distinct from the (outlined) EXTERNAL tag; the flash "lights it up" when the late
+   citations frame lands at turn end. The resting look matches the flash's end frame so there
+   is no jump when the animation finishes. */
+.context-row.cited {
+   background: color-mix(in srgb, var(--warn) 10%, transparent);
+   box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent),
+      inset 3px 0 0 0 var(--warn);
+   animation: context-cite-in 750ms ease;
+}
+@keyframes context-cite-in {
+   0% {
+      background: color-mix(in srgb, var(--warn) 28%, transparent);
+      box-shadow:
+         inset 0 0 0 1px color-mix(in srgb, var(--warn) 90%, transparent),
+         inset 3px 0 0 0 var(--warn);
+   }
+   100% {
+      background: color-mix(in srgb, var(--warn) 10%, transparent);
+      box-shadow:
+         inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent),
+         inset 3px 0 0 0 var(--warn);
+   }
+}
+/* Filled gold badge (NOT outlined, so it reads differently from the EXTERNAL tier tag). */
+.context-cited-mark {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   color: var(--ground);
+   background: color-mix(in srgb, var(--warn) 88%, transparent);
+   border-radius: 2px;
+   padding: 0.06rem 0.32rem;
+   white-space: nowrap;
+}
+/* Tier tag: a small monospace tag, color-coded by source family. */
+.context-src {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   color: var(--text-faint);
+   border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+   border-radius: 2px;
+   padding: 0.08rem 0.32rem;
+   white-space: nowrap;
+}
+.context-src.family-internal {
+   color: var(--accent);
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.context-src.family-external {
+   color: var(--warn);
+   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.context-src.family-user {
+   color: var(--cool);
+   border-color: color-mix(in srgb, var(--cool) 45%, transparent);
+}
+.context-src.family-other {
+   color: var(--text-dim);
+   border-color: color-mix(in srgb, var(--text) 26%, transparent);
+}
+.context-score {
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.02em;
+}
+
+/* Retrieved text: clamped to two lines, click to expand. */
+.context-text {
+   font-size: var(--fs-data);
+   line-height: 1.4;
+   color: var(--text-dim);
+   overflow: hidden;
+   display: -webkit-box;
+   -webkit-box-orient: vertical;
+   -webkit-line-clamp: 2;
+   cursor: pointer;
+   overflow-wrap: anywhere;
+}
+.context-text.expanded {
+   display: block;
+   -webkit-line-clamp: unset;
+   color: var(--text);
+}
+
+/* Foot: the four score-contribution bars + optional provenance. */
+.context-foot {
+   display: flex;
+   align-items: flex-end;
+   justify-content: space-between;
+   gap: 0.6rem;
+}
+.context-bars {
+   display: flex;
+   align-items: flex-end;
+   gap: 0.4rem;
+}
+.context-bar {
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   gap: 0.15rem;
+}
+.context-bar-track {
+   position: relative;
+   width: 5px;
+   height: 22px;
+   background: color-mix(in srgb, var(--text) 12%, transparent);
+   border-radius: 1px;
+   overflow: hidden;
+}
+.context-bar-fill {
+   position: absolute;
+   bottom: 0;
+   left: 0;
+   width: 100%;
+   background: color-mix(in srgb, var(--accent) 78%, transparent);
+   border-radius: 1px;
+   transition: height 260ms ease;
+}
+.context-bar-cap {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+}
+.context-prov {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   text-align: right;
+}
+.context-rejects {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   padding-top: 0.15rem;
+   overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+   .context.context-pulse {
+      animation: none;
+   }
+   .context-row.cited {
+      animation: none; /* keep the gold, drop the flash */
+   }
+   .context-bar-fill {
+      transition: none;
+   }
+}

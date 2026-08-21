@@ -28,6 +28,7 @@ import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/library.css";
+import "./styles/context.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";
 import "./styles/conversations.css";
@@ -57,6 +58,7 @@ import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
+import { mountContextPanel } from "./context/context-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
 import { Notifications } from "./notify/notifications.ts";
 
@@ -190,6 +192,11 @@ const libraryPanel = mountLibraryPanel(stage, {
    getFullText: (id) => ingest.getDocumentText(id)
 });
 
+/* The Context panel: a standalone movable view showing what DAWN pulled into context for
+   the latest turn (the pushed context_injection frame). Read-only, no controller options -
+   it is a pure sink. Defaults hidden; summoned from the Panels menu. */
+const contextPanel = mountContextPanel(stage);
+
 /* The conversation picker: fixed menu-band chrome (top band, between the clock and the
    center menu) that lists / searches / opens the user's conversations and does the
    sanctioned conversation writes (new, rename, pin, and confirm-gated delete). It reaches
@@ -270,6 +277,7 @@ const menu = mountMenu(stage, {
       { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
+      { id: "context", label: "Context", enabled: contextPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
    ],
    onTogglePanel: (id) => {
@@ -277,6 +285,7 @@ const menu = mountMenu(stage, {
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
+      else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
       else store.toggleEnabled(id);
    },
    displayToggles: [
@@ -504,6 +513,7 @@ ingest.start({
    calendar: calendarPanel,
    ha: haPanel,
    library: libraryPanel,
+   context: contextPanel,
    notifications,
    conversationList: conversationPicker
 });
@@ -592,6 +602,7 @@ function dispose(): void {
    calendarPanel.destroy();
    haPanel.destroy();
    libraryPanel.destroy();
+   contextPanel.destroy();
    conversationPicker.destroy();
    notifications.dispose();
    hud.destroy();
