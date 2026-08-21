@@ -340,10 +340,15 @@ export function mountContextPanel(root: HTMLElement): ContextPanelController {
          citedIds = new Set();
          render();
       },
-      applyCitations: (conversationId, turnId, ids) => {
-         /* Late overlay at turn end: gold the cited rows. Ignore a frame that doesn't match
-            the trace on screen (a stale/older turn, or one we already replaced). */
-         if (!current || current.conversationId !== conversationId || current.turnId !== turnId) return;
+      applyCitations: (_conversationId, turnId, ids) => {
+         /* Late overlay at turn end: gold the cited rows. Match on turn_id ALONE - it's
+            last_user_msg_id, globally unique, so it identifies the turn by itself (and a
+            stale/older frame carries a different turn_id, so it's filtered too). conversation_id
+            is deliberately NOT gated: the two frames derive it from different server fields and
+            can disagree in the ~47ms fresh-chat first-turn window, which would silently drop the
+            gold on that turn. turn_id 0 never matches a real trace, so a malformed frame can't
+            apply. */
+         if (!current || !turnId || current.turnId !== turnId) return;
          citedIds = new Set(ids);
          render(); // rows rebuild with .cited -> the gold "lights up" (a CSS flash, see context.css)
       },
