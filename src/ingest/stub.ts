@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, UploadedDoc } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -146,6 +146,15 @@ export class StubIngest implements Ingest {
    /* No real images behind the stub. */
    async fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
       return { blob: new Blob(), contentType: "" };
+   }
+   /* Fake a document upload: echo the file with a bit of extracted text. */
+   async uploadDocument(file: File): Promise<UploadedDoc> {
+      return {
+         filename: file.name,
+         content: `Stub extracted text for ${file.name}.`,
+         size: file.size,
+         type: (file.name.split(".").pop() ?? "").toLowerCase()
+      };
    }
    /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
    async getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {

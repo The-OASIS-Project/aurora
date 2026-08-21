@@ -497,6 +497,8 @@ const conversation = mountConversation(stage, {
       boundary (never a direct DAWN call from the view). */
    fetchImage: (id) => ingest.fetchImage(id),
    fetchDocument: (blobId) => ingest.fetchDocumentOriginal(blobId),
+   /* Composer document upload (a sanctioned conversation-input write, POST /api/documents). */
+   uploadDocument: (file) => ingest.uploadDocument(file),
    onEngage: (engaged) => {
       choreographer.setEngaged(engaged);
       notifications.setEngaged(engaged);

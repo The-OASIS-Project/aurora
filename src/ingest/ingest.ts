@@ -361,6 +361,18 @@ export interface IngestSinks {
    conversationList: ConversationListSink;
 }
 
+/* A document uploaded via POST /api/documents: DAWN extracts its text server-side and
+   optionally stores the original. The composer holds this as a pending attachment and, on
+   send, inlines it into the outgoing turn's text as an [ATTACHED DOCUMENT] marker (which the
+   daemon persists and the LLM reads - documents ride the message text, not a separate field). */
+export interface UploadedDoc {
+   filename: string;
+   content: string; // extracted text
+   size: number; // original size in bytes
+   type: string; // extension (pdf/txt/md/...)
+   blobId?: string; // present -> the original file is stored and downloadable
+}
+
 /*
  * A source of DAWN data. `start` binds the sinks and begins feeding them; the
  * two inbound-from-user hooks (`submit`, `setEngaged`) let the UI push user
@@ -370,6 +382,10 @@ export interface Ingest {
    start(sinks: IngestSinks): void;
    /* User submitted text (later: send to DAWN's conversation path). */
    submit(text: string): void;
+   /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
+      it to the next turn. A sanctioned conversation-input write, same class as chat submit.
+      Returns the extracted text + metadata; rejects on failure. */
+   uploadDocument(file: File): Promise<UploadedDoc>;
    /* User dismissed a transient notice; the source may propagate it to DAWN (e.g.
       a ringing alarm needs scheduler_action{dismiss} to actually stop). */
    dismiss(id: string): void;

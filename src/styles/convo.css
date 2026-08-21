@@ -539,3 +539,125 @@
       animation: none;
    }
 }
+
+/* ---------------------------------------------------------------------------
+ * Composer attach control (paperclip) + the pending-attachment row above the bar.
+ * ------------------------------------------------------------------------- */
+
+.composer-attach {
+   flex-shrink: 0;
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   width: 1.5rem;
+   height: 1.5rem;
+   padding: 0;
+   margin: 0 0.1rem;
+   border: none;
+   background: none;
+   color: color-mix(in srgb, var(--accent) 72%, transparent);
+   cursor: pointer;
+}
+.composer-attach svg {
+   width: 1.05rem;
+   height: 1.05rem;
+}
+.composer-attach:hover {
+   color: var(--accent);
+}
+.composer-attach:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 3px;
+   border-radius: 3px;
+}
+.composer-attach.busy {
+   animation: composer-attach-pulse 1s ease-in-out infinite;
+   cursor: default;
+}
+@keyframes composer-attach-pulse {
+   0%,
+   100% {
+      opacity: 0.4;
+   }
+   50% {
+      opacity: 0.9;
+   }
+}
+
+/* Pending attachments (above the composer bar); hidden until something is attached. */
+.composer-pending {
+   display: none;
+   flex-wrap: wrap;
+   gap: 0.4rem;
+   padding: 0 0.2rem 0.5rem;
+}
+.composer-pending.shown {
+   display: flex;
+}
+.composer-pending-chip {
+   display: inline-flex;
+   align-items: center;
+   gap: 0.4rem;
+   padding: 0.25rem 0.35rem 0.25rem 0.5rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 3px;
+   background: color-mix(in srgb, var(--ground-raise) 45%, transparent);
+   max-width: 16rem;
+}
+.composer-pending-name {
+   font-size: var(--fs-label);
+   color: var(--text);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+   min-width: 0;
+}
+.composer-pending-remove {
+   flex-shrink: 0;
+   width: 1.1rem;
+   height: 1.1rem;
+   padding: 0;
+   border: none;
+   background: none;
+   color: var(--text-faint);
+   font-size: 1rem;
+   line-height: 1;
+   cursor: pointer;
+}
+.composer-pending-remove:hover {
+   color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+   .composer-attach.busy {
+      animation: none;
+      opacity: 0.6;
+   }
+}
+
+/* Full-window drop hint (drag-and-drop attach). Shown while a file is dragged over the app. */
+.composer-drop-hint {
+   display: none;
+   position: fixed;
+   inset: 0;
+   z-index: 1000;
+   align-items: center;
+   justify-content: center;
+   pointer-events: none;
+   background: color-mix(in srgb, var(--ground) 55%, transparent);
+   backdrop-filter: blur(2px);
+   -webkit-backdrop-filter: blur(2px);
+}
+.composer-drop-hint.shown {
+   display: flex;
+}
+.composer-drop-hint-inner {
+   padding: 1.2rem 2rem;
+   border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+   border-radius: 4px;
+   background: color-mix(in srgb, var(--ground-raise) 60%, transparent);
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   letter-spacing: 0.08em;
+   color: var(--accent);
+   text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+}

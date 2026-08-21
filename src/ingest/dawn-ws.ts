@@ -36,7 +36,8 @@ import type {
    IngestSinks,
    LibraryItem,
    MusicState,
-   MusicTrack
+   MusicTrack,
+   UploadedDoc
 } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { TtsPlayback } from "../audio/tts.ts";
@@ -1995,6 +1996,27 @@ export class DawnIngest implements Ingest {
       if (!res.ok) throw new Error(`document fetch failed: ${res.status}`);
       const blob = await res.blob();
       return { blob, contentType: res.headers.get("content-type") ?? "" };
+   }
+
+   /* Upload a document (POST /api/documents, multipart) over the same-origin /api proxy - a
+      sanctioned conversation-input write. DAWN extracts the text server-side and optionally
+      stores the original; the composer inlines the result as an [ATTACHED DOCUMENT] marker. */
+   async uploadDocument(file: File): Promise<UploadedDoc> {
+      const fd = new FormData();
+      fd.append("document", file);
+      const res = await fetch("/api/documents", { method: "POST", credentials: "same-origin", body: fd });
+      if (!res.ok) throw new Error(`document upload failed: ${res.status}`);
+      const j = (await res.json()) as Record<string, unknown>;
+      if (j.success === false) throw new Error(String(j.error ?? "upload failed"));
+      const blobId =
+         typeof j.original_blob_id === "string" && j.original_blob_id ? j.original_blob_id : undefined;
+      return {
+         filename: String(j.filename ?? file.name),
+         content: typeof j.content === "string" ? j.content : "",
+         size: Number(j.size ?? file.size),
+         type: String(j.type ?? ""),
+         blobId
+      };
    }
 
    /* Fetch an attached image's bytes over the same-origin /api proxy (the cookie rides it).

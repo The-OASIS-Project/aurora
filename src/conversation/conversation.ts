@@ -15,12 +15,13 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus, ConversationItem } from "../ingest/ingest.ts";
+import type { ActivityStatus, ConversationItem, UploadedDoc } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
 import { renderMarkdown } from "./format.ts";
 import { emojify } from "../util/emoji.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
 import {
+   buildDocMarker,
    docTypeLabel,
    formatBytes,
    isSafeImageDataUri,
@@ -53,6 +54,9 @@ export interface ConversationOptions {
    /* Fetch a document's original file for the download affordance on a doc chip that has a
       stored original (ingest -> /api/documents/original/<blobId>). */
    fetchDocument?: (blobId: string) => Promise<{ blob: Blob; contentType: string }>;
+   /* Upload a document the user attached in the composer (ingest -> POST /api/documents).
+      Resolves with the extracted text + metadata; absent -> the attach control is hidden. */
+   uploadDocument?: (file: File) => Promise<UploadedDoc>;
 }
 
 interface Msg {
@@ -479,16 +483,143 @@ export function mountConversation(
 
    /* --- user-facing -------------------------------------------------------- */
 
+   /* --- composer attachments (documents) ----------------------------------- */
+   /* Attaching uploads the doc (DAWN extracts its text) and holds it as pending; on send it
+      is inlined into the turn text as an [ATTACHED DOCUMENT] marker (which the daemon
+      persists and the LLM reads). Gated on opts.uploadDocument - no upload path, no control.
+      A hidden file input + a pending-attachment row above the composer are created here. */
+   const attachBtn = root.querySelector<HTMLButtonElement>("#composer-attach");
+   let pendingDocs: UploadedDoc[] = [];
+   let fileInput: HTMLInputElement | null = null;
+   let pendingRow: HTMLElement | null = null;
+
+   const renderPending = (): void => {
+      if (!pendingRow) return;
+      pendingRow.replaceChildren();
+      pendingRow.classList.toggle("shown", pendingDocs.length > 0);
+      pendingDocs.forEach((d, i) => {
+         const c = document.createElement("span");
+         c.className = "composer-pending-chip";
+         const badge = document.createElement("span");
+         badge.className = "convo-doc-type";
+         badge.textContent = docTypeLabel(d.filename);
+         const name = document.createElement("span");
+         name.className = "composer-pending-name";
+         name.textContent = d.filename; // upload echo of the user's own file -> textContent
+         const rm = document.createElement("button");
+         rm.type = "button";
+         rm.className = "composer-pending-remove";
+         rm.setAttribute("aria-label", `Remove ${d.filename}`);
+         rm.textContent = "×"; // ×
+         rm.addEventListener("click", () => {
+            pendingDocs.splice(i, 1);
+            renderPending();
+         });
+         c.append(badge, name, rm);
+         pendingRow!.appendChild(c);
+      });
+   };
+
+   /* Accepted document types (images are excluded until the vision-upload contract lands).
+      One source for both the picker's `accept` and the drag-drop filter. */
+   const DOC_EXTS = ["pdf", "txt", "md", "markdown", "doc", "docx", "csv", "json", "log", "rtf", "odt", "html", "xml"];
+   const DOC_EXT_SET = new Set(DOC_EXTS);
+   const isDoc = (f: File): boolean => DOC_EXT_SET.has((f.name.split(".").pop() ?? "").toLowerCase());
+
+   const onFilesPicked = (files: File[]): void => {
+      if (!opts.uploadDocument || files.length === 0) return;
+      attachBtn?.classList.add("busy");
+      Promise.allSettled(files.map((f) => opts.uploadDocument!(f)))
+         .then((results) => {
+            for (const r of results) if (r.status === "fulfilled") pendingDocs.push(r.value);
+            renderPending();
+            summon();
+         })
+         .finally(() => attachBtn?.classList.remove("busy"));
+   };
+   const onAttachClick = (): void => fileInput?.click();
+   const onFileChange = (): void => {
+      if (fileInput?.files) onFilesPicked(Array.from(fileInput.files));
+      if (fileInput) fileInput.value = ""; // let the same file be picked again after removal
+   };
+
+   /* Drag-and-drop anywhere in the app as a second attach path. The WINDOW is the drop zone
+      (the #console is pointer-events:none, so it can't receive drag events) with a depth
+      counter to ride out the dragenter/dragleave flicker as the pointer crosses child
+      boundaries. A full-window hint shows while a file is over the page; preventing default on
+      dragover+drop also stops the browser navigating to a misdropped file. Only file drags
+      are intercepted; non-doc files are filtered out on drop. */
+   let dropHint: HTMLElement | null = null;
+   let dragDepth = 0;
+   const hasFiles = (e: DragEvent): boolean =>
+      !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+   const onWinDragEnter = (e: DragEvent): void => {
+      if (!hasFiles(e)) return;
+      dragDepth++;
+      dropHint?.classList.add("shown");
+   };
+   const onWinDragOver = (e: DragEvent): void => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); // allow the drop + block navigation to the file
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+   };
+   const onWinDragLeave = (e: DragEvent): void => {
+      if (!hasFiles(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropHint?.classList.remove("shown");
+   };
+   const onWinDrop = (e: DragEvent): void => {
+      dragDepth = 0;
+      dropHint?.classList.remove("shown");
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      onFilesPicked(Array.from(e.dataTransfer!.files).filter(isDoc));
+   };
+
+   if (attachBtn && opts.uploadDocument) {
+      fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.multiple = true;
+      fileInput.accept = DOC_EXTS.map((e) => `.${e}`).join(",");
+      fileInput.hidden = true;
+      form.appendChild(fileInput);
+      pendingRow = document.createElement("div");
+      pendingRow.className = "composer-pending";
+      composerRow.parentElement?.insertBefore(pendingRow, composerRow);
+      attachBtn.addEventListener("click", onAttachClick);
+      fileInput.addEventListener("change", onFileChange);
+      dropHint = document.createElement("div");
+      dropHint.className = "composer-drop-hint";
+      const hintInner = document.createElement("div");
+      hintInner.className = "composer-drop-hint-inner";
+      hintInner.textContent = "Drop a document to attach";
+      dropHint.appendChild(hintInner);
+      root.appendChild(dropHint); // full-window overlay (root is #stage)
+      window.addEventListener("dragenter", onWinDragEnter);
+      window.addEventListener("dragover", onWinDragOver);
+      window.addEventListener("dragleave", onWinDragLeave);
+      window.addEventListener("drop", onWinDrop);
+   } else if (attachBtn) {
+      attachBtn.hidden = true; // no upload path wired -> hide the control
+   }
+
    const onSubmit = (e: SubmitEvent): void => {
       e.preventDefault();
       /* Expand any typed-but-not-picked `:shortcode:` so the user's bubble and the
          text DAWN receives both carry the real glyph. */
-      const text = emojify(input.value.trim());
-      if (!text) return;
+      const typed = emojify(input.value.trim());
+      if (!typed && pendingDocs.length === 0) return;
+      /* Inline each attached doc as an [ATTACHED DOCUMENT] marker, then the typed text - the
+         same shape DAWN persists + the LLM reads. The user's bubble renders it back as a chip
+         via parseAttachments; the daemon persists the whole text (no images -> server save). */
+      const markers = pendingDocs.map(buildDocMarker).join("\n");
+      const outgoing = markers ? (typed ? `${markers}\n\n${typed}` : markers) : typed;
       input.value = "";
-      appendMsg("user", text);
+      pendingDocs = [];
+      renderPending();
+      appendMsg("user", outgoing);
       summon();
-      opts.onSubmit?.(text);
+      opts.onSubmit?.(outgoing);
    };
    const onInput = (): void => summon(); // typing counts as activity
    const engage = (): void => {
@@ -553,6 +684,14 @@ export function mountConversation(
          input.removeEventListener("focus", engage);
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
+         attachBtn?.removeEventListener("click", onAttachClick);
+         fileInput?.removeEventListener("change", onFileChange);
+         window.removeEventListener("dragenter", onWinDragEnter);
+         window.removeEventListener("dragover", onWinDragOver);
+         window.removeEventListener("dragleave", onWinDragLeave);
+         window.removeEventListener("drop", onWinDrop);
+         pendingRow?.remove();
+         dropHint?.remove();
          closeOverlay();
          revokeObjectUrls();
          emojiPicker.destroy();

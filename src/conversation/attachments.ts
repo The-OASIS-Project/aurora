@@ -76,3 +76,12 @@ export function docTypeLabel(filename: string): string {
    const m = /\.([a-z0-9]+)$/i.exec(filename);
    return (m ? m[1] : "doc").toUpperCase();
 }
+
+/* Build the OUTBOUND [ATTACHED DOCUMENT] marker block for a turn the user is sending -
+   the inverse of the DOC_MARKER parse above, and the same shape the existing WebUI emits.
+   The daemon persists this text verbatim and the LLM reads the extracted content; on reload
+   parseAttachments() turns it back into a chip. `blob:<id>` only when an original is stored. */
+export function buildDocMarker(d: { filename: string; size: number; content: string; blobId?: string }): string {
+   const blob = d.blobId ? ` blob:${d.blobId}` : "";
+   return `[ATTACHED DOCUMENT: ${d.filename} (${d.size} bytes)${blob}]\n${d.content}\n[END DOCUMENT]`;
+}
