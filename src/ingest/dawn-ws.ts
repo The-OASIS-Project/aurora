@@ -88,6 +88,15 @@ const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load 
 const REANCHOR_FALLBACK_MS = 3000; // no set_active_conversation_response in this long -> older DAWN, fall back to load_conversation
 const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
 
+/* Narrow a server-provided provider string to the panel's LlmProvider set. DAWN
+   sends it capitalized in llm_runtime ("OpenRouter") and lowercase in a
+   conversation's llm_settings ("openrouter"), so callers lower-case first. An
+   unknown value is rejected rather than coerced, so the panel never mislabels
+   one provider as another. */
+function isLlmProvider(v: string): v is LlmProvider {
+   return v === "openai" || v === "claude" || v === "gemini" || v === "openrouter";
+}
+
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
    toward recent generations. Persisted so it survives a refresh. */
@@ -545,12 +554,13 @@ export class DawnIngest implements Ingest {
       model: "",
       reasoning: "enabled" as Reasoning,
       effort: "medium",
-      providers: { openai: false, claude: false, gemini: false } as Record<LlmProvider, boolean>
+      providers: { openai: false, claude: false, gemini: false, openrouter: false } as Record<LlmProvider, boolean>
    };
    private readonly cloudModels: Record<LlmProvider, string[]> = {
       openai: [],
       claude: [],
-      gemini: []
+      gemini: [],
+      openrouter: []
    };
    private localModels: string[] = [];
    private isPrivate = false;
@@ -1048,6 +1058,7 @@ export class DawnIngest implements Ingest {
                      openai_models?: string[];
                      claude_models?: string[];
                      gemini_models?: string[];
+                     openrouter_models?: string[];
                      vision_enabled?: boolean;
                   };
                   local?: { vision_enabled?: boolean };
@@ -1065,6 +1076,10 @@ export class DawnIngest implements Ingest {
                this.cloudModels.openai = c.openai_models ?? [];
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
+               /* Forward-compatible: DAWN's get_config does not serialize an
+                  openrouter model list yet (that lands with the full picker, B).
+                  Absent -> [], and modelSelect still shows the live model string. */
+               this.cloudModels.openrouter = c.openrouter_models ?? [];
             }
             /* Vision capability per provider-type (config flags). isVisionCapable() resolves
                these against the active mode, so it follows a later cloud<->local switch. */
@@ -1085,10 +1100,11 @@ export class DawnIngest implements Ingest {
                openai_available?: boolean;
                claude_available?: boolean;
                gemini_available?: boolean;
+               openrouter_available?: boolean;
             };
             if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
             const prov = (rt.provider ?? "").toLowerCase();
-            if (prov === "openai" || prov === "claude" || prov === "gemini") this.llm.provider = prov;
+            if (isLlmProvider(prov)) this.llm.provider = prov;
             if (rt.model) this.llm.model = rt.model;
             /* Reasoning/effort: prefer the session's resolved runtime values; fall
                back to the global config default only for older servers that omit them
@@ -1098,7 +1114,12 @@ export class DawnIngest implements Ingest {
                this.llm.providers = {
                   openai: rt.openai_available === true,
                   claude: rt.claude_available === true,
-                  gemini: rt.gemini_available === true
+                  gemini: rt.gemini_available === true,
+                  /* llm_runtime does not carry an openrouter_available flag yet;
+                     read it if a newer server adds one, else light OpenRouter when
+                     it is the resolved provider (it is plainly configured then), so
+                     the panel never shows the active provider greyed. */
+                  openrouter: rt.openrouter_available === true || this.llm.provider === "openrouter"
                };
             }
             this.notifyLlm();
@@ -1116,12 +1137,30 @@ export class DawnIngest implements Ingest {
 
          case "set_session_llm_response":
             /* Authoritative echo of a set_session_llm change (§9.1d). Reflect the
-               value the SERVER resolved, not the one the user picked: native Claude
-               clamps a mid-conversation thinking-disable back to enabled (§9.2), so
-               the panel must follow the returned thinking_mode/reasoning_effort or it
-               would show a state the session is not actually in. The paired
-               INFO_THINKING_KEPT_ON notice (an `error` frame) explains the why. */
+               value the SERVER resolved, not the one the user picked, across every
+               field the response carries (provider / model / *_available /
+               thinking_mode / reasoning_effort): native Claude clamps a
+               mid-conversation thinking-disable back to enabled (§9.2), and a
+               provider switch resolves a new model + availability set the optimistic
+               local state does not know. Following the echo keeps the panel from
+               showing a state the session is not actually in. The paired
+               INFO_THINKING_KEPT_ON notice (an `error` frame) explains the clamp. */
             if (p.success !== false) {
+               if (typeof p.provider === "string") {
+                  const prov = p.provider.toLowerCase();
+                  if (isLlmProvider(prov)) this.llm.provider = prov;
+               }
+               if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+               /* Availability only when the echo actually carries it (both builders
+                  do as of Phase 1); absent -> leave the current record untouched. */
+               if (p.openai_available !== undefined) {
+                  this.llm.providers = {
+                     openai: p.openai_available === true,
+                     claude: p.claude_available === true,
+                     gemini: p.gemini_available === true,
+                     openrouter: p.openrouter_available === true || this.llm.provider === "openrouter"
+                  };
+               }
                this.applyReasoning(
                   typeof p.thinking_mode === "string" ? p.thinking_mode : undefined,
                   typeof p.reasoning_effort === "string" ? p.reasoning_effort : undefined
@@ -1226,6 +1265,7 @@ export class DawnIngest implements Ingest {
                localStorage.setItem(CONV_KEY, String(cid));
                this.sinks.conversationList.setActive(cid);
                this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+               this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
                this.notifyLlm();
                break;
             }
@@ -1248,6 +1288,9 @@ export class DawnIngest implements Ingest {
             /* Reflect the conversation's server-side privacy so the toggle survives a
                reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
             this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+            /* And its stamped LLM settings, so the MODEL panel shows what this
+               conversation actually runs on rather than the connect-time snapshot. */
+            this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
             this.notifyLlm();
             break;
          }
@@ -2473,12 +2516,16 @@ export class DawnIngest implements Ingest {
       const pl = msg.payload;
       if (!pl) return;
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
-      if (typeof pl.provider === "string") this.llm.provider = pl.provider as LlmProvider;
+      if (typeof pl.provider === "string") {
+         const prov = pl.provider.toLowerCase();
+         if (isLlmProvider(prov)) this.llm.provider = prov;
+      }
       if (typeof pl.model === "string") this.llm.model = pl.model;
       this.llm.providers = {
          openai: pl.openai_available === true,
          claude: pl.claude_available === true,
-         gemini: pl.gemini_available === true
+         gemini: pl.gemini_available === true,
+         openrouter: pl.openrouter_available === true || this.llm.provider === "openrouter"
       };
       this.notifyLlm();
    }
@@ -2487,6 +2534,37 @@ export class DawnIngest implements Ingest {
    private applyLlm(fields: Record<string, string>): void {
       this.send({ type: "set_session_llm", payload: fields });
       this.notifyLlm();
+   }
+
+   /* Reflect a loaded conversation's stamped LLM settings on the MODEL panel.
+      load_conversation_response carries an llm_settings object (DAWN's
+      build_conv_llm_settings_json) with the mode/provider/model/reasoning the
+      daemon actually runs THAT conversation with. Without applying it the panel
+      keeps the connect-time llm_runtime snapshot and lies once a conversation with
+      different settings is opened (e.g. shows native Claude / haiku / Off while the
+      conversation runs on OpenRouter / sonnet-5 / thinking-low). Display only: it
+      issues no set_session_llm (the daemon already resolved these server-side), and
+      reconcileModel is deliberately NOT called - the stamped model is the truth even
+      when it is absent from the active provider's list (as an OpenRouter model is). */
+   private applyConvLlmSettings(settings: unknown): void {
+      if (!settings || typeof settings !== "object") return;
+      const s = settings as {
+         llm_type?: string;
+         cloud_provider?: string;
+         model?: string;
+         thinking_mode?: string;
+         reasoning_effort?: string;
+      };
+      if (s.llm_type) this.llm.mode = s.llm_type === "local" ? "local" : "cloud";
+      const prov = (s.cloud_provider ?? "").toLowerCase();
+      if (isLlmProvider(prov)) {
+         this.llm.provider = prov;
+         /* The conversation demonstrably ran on this provider, so light its panel
+            segment (never grey the active provider). */
+         this.llm.providers = { ...this.llm.providers, [prov]: true };
+      }
+      if (s.model) this.llm.model = s.model;
+      this.applyReasoning(s.thinking_mode, s.reasoning_effort);
    }
 
    /* Set the panel's reasoning/effort from a server-provided (thinking_mode,

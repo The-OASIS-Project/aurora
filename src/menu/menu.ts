@@ -308,7 +308,12 @@ function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void }
          rows.push(
             segmented(
                "Provider",
-               [["openai", "OpenAI"], ["claude", "Claude"], ["gemini", "Gemini"]],
+               [
+                  ["openai", "OpenAI"],
+                  ["claude", "Claude"],
+                  ["gemini", "Gemini"],
+                  ["openrouter", "OpenRouter"]
+               ],
                s.provider,
                (v) => ctrl.setProvider(v as LlmProvider),
                { enabled: (v) => s.providers[v as LlmProvider] }

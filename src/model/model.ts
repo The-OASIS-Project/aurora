@@ -6,7 +6,10 @@
  */
 
 export type LlmMode = "local" | "cloud";
-export type LlmProvider = "openai" | "claude" | "gemini";
+/* DAWN's cloud provider is either a native SDK (OpenAI/Claude/Gemini) or the
+   OpenRouter gateway, which fronts many models under one key. OpenRouter is a
+   peer of the three natives, not a sub-mode. */
+export type LlmProvider = "openai" | "claude" | "gemini" | "openrouter";
 /* Only two live values (legacy "auto" was folded into "enabled" server-side). */
 export type Reasoning = "disabled" | "enabled";
 
