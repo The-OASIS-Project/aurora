@@ -17,6 +17,7 @@
 
 import type { ActivityStatus, ConversationItem, OutImage, UploadedDoc } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
+import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
 import { renderMarkdown } from "./format.ts";
 import { emojify } from "../util/emoji.ts";
 import { compressImage } from "../util/image.ts";
@@ -177,18 +178,30 @@ export function mountConversation(
       big.alt = "Attached image";
       openOverlay(big, "Image");
    };
-   const openDocViewer = (d: ParsedDoc): void => {
-      const card = document.createElement("div");
-      card.className = "convo-doc-viewer";
-      addCorners(card);
-      const h = document.createElement("div");
-      h.className = "convo-doc-viewer-head";
-      h.textContent = d.filename || "Document"; // DAWN-sourced -> textContent
-      const pre = document.createElement("pre");
-      pre.className = "convo-doc-viewer-body";
-      pre.textContent = d.content; // untrusted extracted text -> textContent, never HTML
-      card.append(h, pre);
-      openOverlay(card, d.filename || "Document");
+   /* Open a document chip in the shared reader: preview the inline extracted text (markdown
+      for .md/.markdown, plain otherwise) with a Download button when a stored original exists.
+      Same viewer the Library uses. */
+   const isMarkdownDoc = (name: string): boolean => /\.(md|markdown)$/i.test(name);
+   const openDocChip = (d: ParsedDoc): void => {
+      closeOverlay(); // dismiss an image lightbox if one is somehow up
+      /* A stored original downloads the exact file; otherwise offer the inline extracted
+         text as a file so the chip is always downloadable. */
+      const download =
+         d.blobId && opts.fetchDocument
+            ? { filename: d.filename || "document", fetch: () => opts.fetchDocument!(d.blobId!) }
+            : d.content && d.content.trim()
+              ? textDownload(d.filename || "document", d.content, isMarkdownDoc(d.filename) ? "text/markdown" : "text/plain")
+              : undefined;
+      const subtitle = [docTypeLabel(d.filename), formatBytes(d.size)].filter(Boolean).join(" · ");
+      openDocViewer({
+         title: d.filename || "Document",
+         subtitle,
+         download,
+         populate: (body) => {
+            if (d.content && d.content.trim()) setDocBodyText(body, d.content, isMarkdownDoc(d.filename));
+            else setDocBodyMessage(body, "No extracted text for this document.");
+         }
+      });
    };
 
    const buildImage = (im: ParsedImage): HTMLElement => {
@@ -223,24 +236,6 @@ export function mountConversation(
       return btn;
    };
 
-   const downloadDoc = (d: ParsedDoc): void => {
-      if (!d.blobId || !opts.fetchDocument) return;
-      opts
-         .fetchDocument(d.blobId)
-         .then(({ blob }) => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            /* filename is DAWN-sourced: strip path separators + control chars first. */
-            a.download = (d.filename || "document").replace(/[^A-Za-z0-9._() -]+/g, "_");
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.setTimeout(() => URL.revokeObjectURL(url), 0); // sync revoke can cancel the download
-         })
-         .catch(() => {});
-   };
-
    const buildDocChip = (d: ParsedDoc): HTMLElement => {
       const chip = document.createElement("button");
       chip.type = "button";
@@ -259,10 +254,10 @@ export function mountConversation(
          s.textContent = size;
          chip.append(s);
       }
-      /* A stored original downloads; otherwise the chip opens the extracted text inline. */
-      const downloadable = Boolean(d.blobId && opts.fetchDocument);
-      chip.title = downloadable ? "Download original" : "View extracted text";
-      chip.addEventListener("click", () => (downloadable ? downloadDoc(d) : openDocViewer(d)));
+      /* Click opens the shared reader: a text preview plus a Download button when a stored
+         original exists. */
+      chip.title = "Open document";
+      chip.addEventListener("click", () => openDocChip(d));
       return chip;
    };
 

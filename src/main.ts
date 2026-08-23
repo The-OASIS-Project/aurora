@@ -28,6 +28,7 @@ import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/library.css";
+import "./styles/docview.css";
 import "./styles/context.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";

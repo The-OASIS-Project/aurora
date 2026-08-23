@@ -25,7 +25,15 @@ import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
 import { makeVisibility } from "../render/visibility.ts";
 import { onActivate } from "../render/activate.ts";
-import { renderMarkdown } from "../conversation/format.ts";
+import {
+   openDocViewer,
+   setDocBodyText,
+   setDocBodyMessage,
+   textDownload,
+   ensureExt,
+   type DocViewerHandle,
+   type DocDownload
+} from "../render/doc-viewer.ts";
 import { relativeTime } from "../util/time.ts";
 
 export interface LibraryPanelOptions {
@@ -100,24 +108,6 @@ function fmtDate(epochSec: number): string {
    return new Date(epochSec * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
 }
 
-/* Keep Tab focus inside the open reader (a lightweight trap over the card's focusables). */
-function trapTab(e: KeyboardEvent, container: HTMLElement): void {
-   const focusables = container.querySelectorAll<HTMLElement>(
-      'button, [href], input, [tabindex]:not([tabindex="-1"])'
-   );
-   if (focusables.length === 0) return;
-   const first = focusables[0];
-   const last = focusables[focusables.length - 1];
-   const active = document.activeElement;
-   if (e.shiftKey && active === first) {
-      e.preventDefault();
-      last.focus();
-   } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-   }
-}
-
 export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions): LibraryPanelController {
    const el = document.createElement("div");
    el.id = "library";
@@ -182,200 +172,83 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
    const isSearching = (): boolean => searchInput.value.trim().length > 0;
    const viewItems = (): LibraryItem[] => (isSearching() ? searchItems : listItems);
 
-   /* --- reading overlay --------------------------------------------------- */
-   let readerOverlay: HTMLElement | null = null;
-   let readerPrevFocus: HTMLElement | null = null;
-   let readerKeyHandler: ((e: KeyboardEvent) => void) | null = null;
-   /* Bumped on every open/close so a slow fetchOriginal that resolves after the reader
-      was closed or replaced can't paint into a stale (or wrong) body. */
-   let readerReq = 0;
+   /* --- reading overlay (the shared document viewer) ---------------------- */
+   let reader: DocViewerHandle | null = null;
 
-   const closeReader = (): void => {
-      if (!readerOverlay) return;
-      readerReq++;
-      readerOverlay.remove();
-      readerOverlay = null;
-      if (readerKeyHandler) document.removeEventListener("keydown", readerKeyHandler);
-      readerKeyHandler = null;
-      readerPrevFocus?.focus?.();
-      readerPrevFocus = null;
-   };
-
-   const setBodyText = (body: HTMLElement, text: string, asMarkdown: boolean): void => {
-      if (asMarkdown) {
-         body.classList.add("markdown");
-         body.innerHTML = renderMarkdown(text); // DOMPurify-sanitized
-      } else {
-         body.classList.remove("markdown");
-         const pre = document.createElement("pre");
-         pre.className = "library-plain";
-         pre.textContent = text; // untrusted original -> textContent, never HTML
-         body.replaceChildren(pre);
-      }
-   };
-
-   const downloadButton = (item: LibraryItem): HTMLButtonElement => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "library-download";
-      btn.textContent = "Open original ↗";
-      btn.addEventListener("click", () => {
-         if (!item.originalBlobId) return;
-         btn.disabled = true;
-         opts
-            .fetchOriginal(item.originalBlobId)
-            .then(({ blob }) => {
-               /* Object-URL the bytes and trigger a download from OUR anchor, so the
-                  attachment header on DAWN's endpoint is irrelevant and no DAWN URL
-                  leaks into this view. */
-               const url = URL.createObjectURL(blob);
-               const a = document.createElement("a");
-               a.href = url;
-               /* filename is DAWN-sourced: strip path separators + control chars before it
-                  becomes a download name. */
-               a.download = (item.filename || "document").replace(/[/\\\u0000-\u001f]/g, "_");
-               document.body.append(a);
-               a.click();
-               a.remove();
-               /* Defer the revoke: revoking synchronously right after click() can cancel
-                  the download in some browsers. */
-               window.setTimeout(() => URL.revokeObjectURL(url), 0);
-               btn.disabled = false;
-            })
-            .catch(() => {
-               btn.disabled = false;
-            });
-      });
-      return btn;
-   };
-
-   const setBodyMessage = (body: HTMLElement, msg: string, extra?: HTMLElement): void => {
-      body.classList.remove("markdown");
-      const p = document.createElement("div");
-      p.className = "library-reader-msg";
-      p.textContent = msg;
-      body.replaceChildren(p);
-      if (extra) body.append(extra);
-   };
+   type SetDownload = (dl: DocDownload | null) => void;
 
    /* Reassembled full text (doc_library_get): the readable body of a generated document
-      with no uploaded original, or the extracted text of one that has. Falls back to a
-      download (binary original) or a plain message. */
-   const tryFullText = (item: LibraryItem, body: HTMLElement, req: number): void => {
-      setBodyMessage(body, "Loading…");
+      with no uploaded original, or the extracted text of one that has. On success, offer a
+      TEXT download when there is no binary original to fetch (a Friday-generated doc). */
+   const tryFullText = (item: LibraryItem, body: HTMLElement, stale: () => boolean, setDownload: SetDownload): void => {
+      setDocBodyMessage(body, "Loading…");
+      const hasBinary = Boolean(item.hasOriginal && item.originalBlobId);
+      const fallback = (): void =>
+         setDocBodyMessage(body, hasBinary ? "This document type opens as a download." : "No preview available over the connection.");
       opts
          .getFullText(item.id)
          .then((res) => {
-            if (req !== readerReq) return; // reader closed/replaced while fetching
+            if (stale()) return; // reader closed/replaced while fetching
             if (res && res.text) {
-               setBodyText(body, res.text, true); // reassembled text -> markdown render
-               /* If a binary original also exists, still offer the exact file. */
-               const ft = cleanType(item);
-               if (item.hasOriginal && item.originalBlobId && !TEXT_TYPES.has(ft)) {
-                  body.appendChild(downloadButton(item));
-               }
-            } else if (item.hasOriginal && item.originalBlobId) {
-               setBodyMessage(body, "This document type opens as a download.", downloadButton(item));
-            } else {
-               setBodyMessage(body, "No preview available over the connection.");
-            }
+               setDocBodyText(body, res.text, true); // reassembled -> markdown
+               /* A binary original (set at open) is the better download; only synthesize a
+                  text file when there is none. */
+               if (!hasBinary) setDownload(textDownload(ensureExt(item.filename || "document", "md"), res.text));
+            } else fallback();
          })
          .catch(() => {
-            if (req !== readerReq) return;
-            if (item.hasOriginal && item.originalBlobId) {
-               setBodyMessage(body, "This document type opens as a download.", downloadButton(item));
-            } else {
-               setBodyMessage(body, "No preview available over the connection.");
-            }
+            if (stale()) return;
+            fallback();
          });
    };
 
-   const populateReader = (item: LibraryItem, body: HTMLElement, req: number): void => {
+   const populateReader = (item: LibraryItem, body: HTMLElement, stale: () => boolean, setDownload: SetDownload): void => {
       if (item.isNote) {
-         setBodyText(body, item.text ?? "", true);
+         setDocBodyText(body, item.text ?? "", true);
          return;
       }
       const ft = cleanType(item);
       /* 1) An uploaded txt/md original renders with exact fidelity. */
       if (TEXT_TYPES.has(ft) && item.hasOriginal && item.originalBlobId) {
-         setBodyMessage(body, "Loading…");
+         setDocBodyMessage(body, "Loading…");
          opts
             .fetchOriginal(item.originalBlobId)
             .then(({ blob }) => blob.text())
             .then((text) => {
-               if (req !== readerReq) return; // reader closed/replaced while fetching
-               setBodyText(body, text, MARKDOWN_TYPES.has(ft));
+               if (stale()) return; // reader closed/replaced while fetching
+               setDocBodyText(body, text, MARKDOWN_TYPES.has(ft));
             })
             .catch(() => {
-               if (req !== readerReq) return;
-               tryFullText(item, body, req); // fall back to reassembled text
+               if (stale()) return;
+               tryFullText(item, body, stale, setDownload); // fall back to reassembled text
             });
          return;
       }
       /* 2) Everything else: reassembled full text (generated docs, extracted pdf/docx). */
-      tryFullText(item, body, req);
+      tryFullText(item, body, stale, setDownload);
    };
 
    const openReader = (item: LibraryItem): void => {
-      closeReader();
-      readerPrevFocus = document.activeElement as HTMLElement | null;
-      const req = ++readerReq;
-
-      const overlay = document.createElement("div");
-      overlay.className = "library-reader-overlay";
-
-      const cardEl = document.createElement("div");
-      cardEl.className = "library-reader";
-      cardEl.setAttribute("role", "dialog");
-      cardEl.setAttribute("aria-modal", "true");
-      cardEl.setAttribute("aria-label", item.filename || "Document");
-      addCorners(cardEl);
-
-      const rHead = document.createElement("div");
-      rHead.className = "library-reader-head";
-      const titleWrap = document.createElement("div");
-      titleWrap.className = "library-reader-titlewrap";
-      const rTitle = document.createElement("div");
-      rTitle.className = "library-reader-title";
-      rTitle.textContent = item.filename || "(untitled)";
-      const rSub = document.createElement("div");
-      rSub.className = "library-reader-sub";
-      rSub.textContent = [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt), item.isGlobal ? "shared" : ""]
+      const subtitle = [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt), item.isGlobal ? "shared" : ""]
          .filter(Boolean)
          .join(" · ");
-      titleWrap.append(rTitle, rSub);
-      const closeBtn = document.createElement("button");
-      closeBtn.type = "button";
-      closeBtn.className = "library-reader-close";
-      closeBtn.setAttribute("aria-label", "Close");
-      closeBtn.textContent = "×"; // ×
-      closeBtn.addEventListener("click", closeReader);
-      rHead.append(titleWrap, closeBtn);
-
-      const body = document.createElement("div");
-      body.className = "library-reader-body";
-
-      cardEl.append(rHead, body);
-      overlay.append(cardEl);
-      overlay.addEventListener("click", (e) => {
-         if (e.target === overlay) closeReader(); // backdrop only, not clicks in the card
+      /* Open-time download: a stored binary original (exact file) for a document, or the
+         note body saved as markdown. A generated document with only reassembled text gets
+         its Download set later, from tryFullText. */
+      const blobId = item.originalBlobId;
+      let download: DocDownload | undefined;
+      if (item.isNote) {
+         const body = item.text ?? "";
+         if (body) download = textDownload(ensureExt(item.filename || "note", "md"), body);
+      } else if (item.hasOriginal && blobId) {
+         download = { filename: item.filename || "document", fetch: () => opts.fetchOriginal(blobId) };
+      }
+      reader = openDocViewer({
+         title: item.filename || "(untitled)",
+         subtitle,
+         download,
+         populate: (body, stale, setDownload) => populateReader(item, body, stale, setDownload)
       });
-
-      readerKeyHandler = (e: KeyboardEvent): void => {
-         if (e.key === "Escape") {
-            e.preventDefault();
-            closeReader();
-         } else if (e.key === "Tab") {
-            trapTab(e, cardEl);
-         }
-      };
-      document.addEventListener("keydown", readerKeyHandler);
-
-      document.body.append(overlay);
-      readerOverlay = overlay;
-      closeBtn.focus();
-
-      populateReader(item, body, req);
    };
 
    /* --- rendering --------------------------------------------------------- */
@@ -495,7 +368,7 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
       isVisible: vis.isVisible,
       setVisible: vis.setVisible,
       destroy: () => {
-         closeReader();
+         reader?.close();
          window.clearTimeout(searchTimer);
          searchInput.removeEventListener("input", onSearchInput);
          searchClear.removeEventListener("click", onSearchClear);
