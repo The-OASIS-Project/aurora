@@ -707,6 +707,50 @@ side: a close-handler ownership guard + clean reconnect-eviction + pong-to-the-p
 
 ---
 
+### 9.7 OpenRouter as a first-class per-session provider (MODEL panel, 2026-08-23)
+
+DAWN promoted OpenRouter from a global gateway to a **first-class per-session provider**, and Aurora
+now consumes it as a 4th peer alongside OpenAI / Claude / Gemini. Coordinated with the DAWN-side
+agent; verified live end to end.
+
+**What changed on the wire (all additive, back-compat):**
+- **`openrouter_available`** now ships from all four runtime builders: `get_config`'s `llm_runtime`,
+  `llm_state_update`, and both `set_session_llm` response builders (alongside the existing
+  `openai/claude/gemini_available`).
+- The curated model list is on the wire in the on-connect config block:
+  **`config.llm.cloud.openrouter_models`** (a string[]) + **`openrouter_default_model_idx`** (int).
+  It is operator-curated in `dawn.toml`; DAWN deliberately does NOT enumerate OpenRouter's full
+  catalog.
+- **The `use_openrouter` gateway bool is RETIRED.** DAWN folds a legacy `use_openrouter=true` into
+  `provider="openrouter"` via a load-time `config_migrate()`; the resolve predicate now keys on the
+  `CLOUD_PROVIDER_OPENROUTER` enum. **Do NOT read `use_openrouter`** (Aurora never did); the enum is
+  the single source of truth for "are we on OpenRouter?"
+
+**What Aurora consumes (MODEL panel, `src/model/`, `src/ingest/dawn-ws.ts`, `src/menu/`):**
+- `openrouter` is a value of `LlmProvider`; an `isLlmProvider()` guard replaced the old silent
+  coerce-unknown-provider-to-`claude` in every intake path (get_config, llm_state_update,
+  set_session_llm_response echo, load_conversation). An unknown provider is rejected loudly, never
+  mislabeled.
+- Reads `openrouter_available` + `openrouter_models` + `openrouter_default_model_idx`; switches via
+  `set_session_llm {provider:"openrouter"}` and snaps to the operator's configured default index on
+  switch (parity with the old WebUI).
+- **Model strings are kept verbatim.** OpenRouter models are vendor-slugs (`openai/gpt-5.5`) and are
+  never rewritten for display or on the wire. `effortOptionsForModel()` strips the vendor prefix
+  **detection-only** to pick the right gpt-5.x effort tiers. DAWN keeps a permanent bare-id→slug remap
+  on its request path for legacy stored bare ids.
+- On conversation restore, the conversation is authoritative about its own stored provider:
+  `applyConvLlmSettings()` reads `cloud_provider`/`model`/reasoning out of
+  `load_conversation_response`'s `llm_settings` and reflects them (this also fixed the earlier
+  "stale connect-time snapshot" bug where the panel showed the connect default instead of the loaded
+  conversation's real provider/model).
+
+**Charter note (why there is no editor here):** Aurora surfaces + selects OpenRouter models (a
+per-session `set_session_llm`, a sanctioned write). It does **not** build a model-list *editor*,
+because curating `openrouter_models` in `dawn.toml` is a config write, an admin function that is over
+Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin panel).
+
+---
+
 **Original item write-ups (source cites preserved):**
 
 1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.** ✅ Done (§9.1a).
@@ -768,3 +812,8 @@ display), and the Tier-1 one-connection-per-session takeover + fresh-session con
 all shipped 2026-08-21 (§9.6; coordinated with the DAWN + in-repo-WebUI changes: `item_id` +
 `context_citations` + `<cited>` leak-fix, `payload.image_ids[]` persistence, and the
 `session_superseded` frame / `reconnected` flag / `4001` eviction).*
+**OpenRouter promoted to a first-class per-session provider consumed 2026-08-23 (§9.7; coordinated
+with the DAWN 2a-0→2a→2b arc: `openrouter_available` on all four runtime builders, curated
+`config.llm.cloud.openrouter_models` + `openrouter_default_model_idx`, the `use_openrouter` gateway
+retired via `config_migrate()` so the `CLOUD_PROVIDER_OPENROUTER` enum is the sole authority; Aurora
+treats it as a 4th provider with verbatim vendor-slug model strings; picker only, no config editor).*
