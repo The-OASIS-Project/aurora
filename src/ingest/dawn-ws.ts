@@ -562,6 +562,9 @@ export class DawnIngest implements Ingest {
       gemini: [],
       openrouter: []
    };
+   /* Which openrouter_models entry to default to when switching onto OpenRouter
+      (DAWN's curated default; parity with the old WebUI which snaps to it). */
+   private openrouterDefaultIdx = 0;
    private localModels: string[] = [];
    private isPrivate = false;
    private readonly llmListeners: Array<() => void> = [];
@@ -1059,6 +1062,7 @@ export class DawnIngest implements Ingest {
                      claude_models?: string[];
                      gemini_models?: string[];
                      openrouter_models?: string[];
+                     openrouter_default_model_idx?: number;
                      vision_enabled?: boolean;
                   };
                   local?: { vision_enabled?: boolean };
@@ -1076,10 +1080,11 @@ export class DawnIngest implements Ingest {
                this.cloudModels.openai = c.openai_models ?? [];
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
-               /* Forward-compatible: DAWN's get_config does not serialize an
-                  openrouter model list yet (that lands with the full picker, B).
+               /* OpenRouter's curated model list (operator-managed in dawn.toml).
                   Absent -> [], and modelSelect still shows the live model string. */
                this.cloudModels.openrouter = c.openrouter_models ?? [];
+               this.openrouterDefaultIdx =
+                  typeof c.openrouter_default_model_idx === "number" ? c.openrouter_default_model_idx : 0;
             }
             /* Vision capability per provider-type (config flags). isVisionCapable() resolves
                these against the active mode, so it follows a later cloud<->local switch. */
@@ -2580,11 +2585,19 @@ export class DawnIngest implements Ingest {
       return mode === "local" ? this.localModels : this.cloudModels[provider];
    }
 
-   /* If the current model is not in the active list, switch to the first one. */
+   /* If the current model is not in the active list, switch to the default one.
+      For OpenRouter that is the operator's configured default index (parity with
+      the old WebUI); every other provider defaults to the first entry. */
    private reconcileModel(): void {
       const models = this.modelsFor(this.llm.mode, this.llm.provider);
       if (models.length > 0 && !models.includes(this.llm.model)) {
-         this.llm.model = models[0];
+         const idx =
+            this.llm.provider === "openrouter" &&
+            this.openrouterDefaultIdx >= 0 &&
+            this.openrouterDefaultIdx < models.length
+               ? this.openrouterDefaultIdx
+               : 0;
+         this.llm.model = models[idx];
          /* Keep effort valid for the new model so the panel's segmented control always has
             an active value (the server clamps + echoes too, but this avoids a transient
             no-selection state until the echo lands). */

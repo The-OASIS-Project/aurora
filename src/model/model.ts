@@ -50,9 +50,13 @@ export interface ModelControl {
  *   gpt-5.1:                none | low | medium | high
  *   gpt-5.2+ / gpt-5.4*:    none | low | medium | high | xhigh
  * Everything else (Claude, Gemini, local) uses low | medium | high (token budget).
+ *
+ * An OpenRouter model carries a vendor-slug prefix (openai/gpt-5.5); strip it
+ * before matching so the gpt-5.x rules still apply. The displayed/sent string is
+ * never altered - this parse is detection-only.
  */
 export function effortOptionsForModel(model: string): string[] {
-   const m = model.toLowerCase();
+   const m = model.toLowerCase().replace(/^.*\//, "");
    const minor = m.match(/^gpt-5\.(\d+)/);
    if (minor) {
       return Number(minor[1]) >= 2
