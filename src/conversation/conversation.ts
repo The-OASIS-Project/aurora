@@ -39,6 +39,7 @@ export interface ConversationController {
    endReply(): void;
    showReply(text: string): void;
    showUser(text: string): void;
+   showError(text: string): void;
    showToolUse(tools: string[]): void;
    setAssistantName(name: string): void;
    loadHistory(items: ConversationItem[]): void;
@@ -421,6 +422,27 @@ export function mountConversation(
       summon();
    };
 
+   /* A red system error line in the transcript - a failed turn or a server error, shown
+      in-context like the old WebUI (its DawnTranscript system 'Error: ...' entry) rather
+      than only a fleeting toast. Plain text (untrusted -> textContent), not a real turn, so
+      it is not pushed to messages[]. */
+   const showError = (text: string): void => {
+      win.classList.remove("empty");
+      const el = document.createElement("div");
+      el.className = "convo-msg system";
+      const roleEl = document.createElement("div");
+      roleEl.className = "convo-role";
+      roleEl.textContent = "ERROR";
+      const body = document.createElement("div");
+      body.className = "convo-body";
+      body.textContent = text;
+      el.append(roleEl, body);
+      scroll.appendChild(el);
+      setThinking(false);
+      scrollToEnd();
+      summon();
+   };
+
    const setAssistantName = (name: string): void => {
       if (!name) return;
       assistantName = name;
@@ -750,6 +772,7 @@ export function mountConversation(
       endReply,
       showReply,
       showUser,
+      showError,
       showToolUse,
       setAssistantName,
       loadHistory,

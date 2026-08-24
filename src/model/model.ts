@@ -41,6 +41,10 @@ export interface ModelControl {
    setReasoning(reasoning: Reasoning): void;
    setEffort(effort: string): void;
    setPrivate(on: boolean): void;
+   /* Re-fetch the LLM config (the cloud model lists come from get_config and are read
+      only on connect). Called when the MODEL panel opens so a backend config edit shows
+      up without a page reload; the response updates the lists and fires onChange. */
+   refreshModels?(): void;
 }
 
 /*

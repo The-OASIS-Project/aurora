@@ -344,3 +344,36 @@
    outline: 2px solid var(--accent);
    outline-offset: 1px;
 }
+
+/* Shared manual-refresh control for movable panels (Library, Home Assistant). A subtle
+   phosphor glyph that spins once on click for feedback. Panels keep their own class too
+   (.library-refresh / .ha-refresh) purely as the makeMovable drag-ignore hook. */
+.panel-refresh {
+   flex: 0 0 auto;
+   align-self: center;
+   padding: 0 0.15rem;
+   border: none;
+   background: none;
+   color: var(--text-faint);
+   font-size: var(--fs-body);
+   line-height: 1;
+   cursor: pointer;
+   transition: color 140ms ease;
+}
+.panel-refresh::before {
+   content: "↻"; /* clockwise open circle arrow */
+}
+.panel-refresh:hover {
+   color: var(--accent-glow);
+}
+.panel-refresh.spin {
+   animation: panel-refresh-spin 600ms ease;
+}
+@keyframes panel-refresh-spin {
+   from {
+      transform: rotate(0deg);
+   }
+   to {
+      transform: rotate(360deg);
+   }
+}

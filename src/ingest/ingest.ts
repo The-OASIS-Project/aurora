@@ -58,6 +58,9 @@ export interface ConversationSink {
    /* A user turn from DAWN (a voice transcript). Typed turns are appended locally on
       submit, so this is only for spoken input echoed back by the daemon. */
    showUser(text: string): void;
+   /* A red system error line in the transcript (a failed turn or a server error), shown
+      in-context rather than only as a fleeting notice. */
+   showError(text: string): void;
    /* A tool call surfaced as a compact chip (the tool names), not raw tool_use JSON. */
    showToolUse(tools: string[]): void;
    /* The configured assistant display name (ai_name), for the reply header. */

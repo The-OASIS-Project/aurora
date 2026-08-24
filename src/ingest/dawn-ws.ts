@@ -97,6 +97,20 @@ function isLlmProvider(v: string): v is LlmProvider {
    return v === "openai" || v === "claude" || v === "gemini" || v === "openrouter";
 }
 
+/* Display label for the HUD provider readout (the panel's own labels). */
+function providerLabel(p: LlmProvider): string {
+   switch (p) {
+      case "openai":
+         return "OpenAI";
+      case "claude":
+         return "Claude";
+      case "gemini":
+         return "Gemini";
+      case "openrouter":
+         return "OpenRouter";
+   }
+}
+
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
    toward recent generations. Persisted so it survives a refresh. */
@@ -565,6 +579,15 @@ export class DawnIngest implements Ingest {
    /* Which openrouter_models entry to default to when switching onto OpenRouter
       (DAWN's curated default; parity with the old WebUI which snaps to it). */
    private openrouterDefaultIdx = 0;
+   /* Set while a MODEL-panel-open refresh get_config is in flight: the response updates the
+      model lists + provider availability, but must NOT re-apply the session's llm_runtime
+      selection (mode/provider/model/reasoning) - that would revert a loaded conversation's
+      provider back to the session default, since DAWN does not switch the session LLM on a
+      conversation load (applyConvLlmSettings owns that, client-side). */
+   private modelsRefreshOnly = false;
+   /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
+      LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
+   private lastErrorAt = 0;
    private localModels: string[] = [];
    private isPrivate = false;
    private readonly llmListeners: Array<() => void> = [];
@@ -1107,14 +1130,19 @@ export class DawnIngest implements Ingest {
                gemini_available?: boolean;
                openrouter_available?: boolean;
             };
-            if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
-            const prov = (rt.provider ?? "").toLowerCase();
-            if (isLlmProvider(prov)) this.llm.provider = prov;
-            if (rt.model) this.llm.model = rt.model;
-            /* Reasoning/effort: prefer the session's resolved runtime values; fall
-               back to the global config default only for older servers that omit them
-               from llm_runtime. Legacy "auto" folds into "enabled". */
-            this.applyReasoning(rt.thinking_mode ?? cfg.llm?.thinking?.mode, rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort);
+            /* A models-only refresh (MODEL panel open) must not touch the current
+               selection - that could revert a loaded conversation's provider/model back to
+               the session default. Update only the lists (above) + availability (below). */
+            if (!this.modelsRefreshOnly) {
+               if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
+               const prov = (rt.provider ?? "").toLowerCase();
+               if (isLlmProvider(prov)) this.llm.provider = prov;
+               if (rt.model) this.llm.model = rt.model;
+               /* Reasoning/effort: prefer the session's resolved runtime values; fall
+                  back to the global config default only for older servers that omit them
+                  from llm_runtime. Legacy "auto" folds into "enabled". */
+               this.applyReasoning(rt.thinking_mode ?? cfg.llm?.thinking?.mode, rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort);
+            }
             if (rt.openai_available !== undefined) {
                this.llm.providers = {
                   openai: rt.openai_available === true,
@@ -1127,6 +1155,7 @@ export class DawnIngest implements Ingest {
                   openrouter: rt.openrouter_available === true || this.llm.provider === "openrouter"
                };
             }
+            this.modelsRefreshOnly = false;
             this.notifyLlm();
             break;
          }
@@ -1171,6 +1200,18 @@ export class DawnIngest implements Ingest {
                   typeof p.reasoning_effort === "string" ? p.reasoning_effort : undefined
                );
                this.notifyLlm();
+            } else {
+               /* The session LLM change was rejected (e.g. a provider/model DAWN could not
+                  select). Surface it instead of failing silently - a control-feedback notice,
+                  not a chat line. The session kept its previous LLM. */
+               const err = (p as { error?: string }).error;
+               console.warn("[dawn] set_session_llm rejected:", err);
+               this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
+                  tone: "attention",
+                  hold: 9,
+                  x: 0,
+                  y: -0.55
+               });
             }
             break;
 
@@ -1271,6 +1312,7 @@ export class DawnIngest implements Ingest {
                this.sinks.conversationList.setActive(cid);
                this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
                this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+               this.setActiveTitle(String((p as { title?: string }).title ?? ""));
                this.notifyLlm();
                break;
             }
@@ -1296,6 +1338,7 @@ export class DawnIngest implements Ingest {
             /* And its stamped LLM settings, so the MODEL panel shows what this
                conversation actually runs on rather than the connect-time snapshot. */
             this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+            this.setActiveTitle(String((p as { title?: string }).title ?? ""));
             this.notifyLlm();
             break;
          }
@@ -1362,6 +1405,7 @@ export class DawnIngest implements Ingest {
                this.replyBuf = "";
                this.sinks.conversation.clear();
                this.sinks.context.clear();
+               this.setActiveTitle(""); // fresh chat
                this.sinks.conversationList.setActive(0);
             }
             this.pendingDeleteId = 0;
@@ -1373,6 +1417,7 @@ export class DawnIngest implements Ingest {
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             const t = typeof (p as { title?: string }).title === "string" ? (p as { title: string }).title : "";
             if (cid) this.sinks.conversationList.markRenamed(cid, t);
+            if (cid === this.convId) this.setActiveTitle(t); // keep the HUD readout current
             break;
          }
 
@@ -1398,6 +1443,7 @@ export class DawnIngest implements Ingest {
             this.sinks.conversation.clear();
             this.sinks.context.clear();
             this.convId = 0;
+            this.setActiveTitle(""); // fresh chat -> HUD shows "New conversation"
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
             break;
@@ -1405,6 +1451,7 @@ export class DawnIngest implements Ingest {
          case "new_conversation_response":
             /* The fresh conversation the daemon just created — persist to it now. */
             this.sinks.context.clear(); // fresh conversation: no injected context yet
+            this.setActiveTitle(""); // untitled until DAWN auto-titles (conversation_renamed)
             this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
@@ -1494,9 +1541,38 @@ export class DawnIngest implements Ingest {
                      y: -0.55
                   });
                }
+            } else if (severity === "warning") {
+               /* A warning is not a failed turn - surface it as an ambient toast, not a
+                  chat line. */
+               const message = typeof p.message === "string" ? p.message : "";
+               console.warn("[dawn] warning frame:", code, message);
+               this.spikeNotice("dawn-warning", "attention", message || "Warning", {
+                  tone: "attention",
+                  hold: 9,
+                  x: 0,
+                  y: -0.55
+               });
             } else {
+               /* A real error (e.g. LLM_ERROR "Failed to get response from AI" when an API
+                  call fails). Surface the specific message as a red line IN THE TRANSCRIPT -
+                  parity with the old WebUI's in-context system 'Error: ...' entry, not a
+                  fleeting toast - plus the reactor error state. This is the fix for the
+                  silent-failure report: the message now reaches the user. */
+               const message = typeof p.message === "string" ? p.message : "";
+               console.warn("[dawn] error frame:", severity, code, message);
                this.sinks.reactor.setState("error");
-               console.warn("[dawn] error frame:", severity, code, p.message);
+               /* DAWN emits its generic LLM_ERROR ("Failed to get response...") AFTER the
+                  provider's specific error for the same failed turn. If we just showed an
+                  error, drop the trailing generic one so a single failure is one red line. */
+               const isGeneric =
+                  message === "Failed to get response from AI" || message === "Failed to get response";
+               const now = Date.now();
+               if (isGeneric && now - this.lastErrorAt < 3000) {
+                  console.info("[dawn] suppressed redundant generic error after a specific one");
+               } else {
+                  this.sinks.conversation.showError(message || "Something went wrong.");
+                  this.lastErrorAt = now;
+               }
             }
             break;
          }
@@ -2504,10 +2580,19 @@ export class DawnIngest implements Ingest {
          — llm_state_update can arrive after get_config, and an empty value would
          clobber the cached (persistent) reading. */
       const effort = this.llm.reasoning === "disabled" ? "OFF" : this.llm.effort.toUpperCase();
-      const update: Record<string, string> = { effort };
+      const update: Record<string, string> = {
+         effort,
+         provider: this.llm.mode === "local" ? "Local" : providerLabel(this.llm.provider)
+      };
       if (this.llm.model) update.model = this.llm.model;
       this.sinks.telemetry.update(update);
       for (const cb of this.llmListeners) cb();
+   }
+
+   /* Mirror the active conversation's title into the HUD readout (empty -> a fresh chat).
+      The HUD caches the last value, so it survives a reload / re-anchor without a re-push. */
+   private setActiveTitle(t: string): void {
+      this.sinks.telemetry.update({ title: t || "New conversation" });
    }
 
    /* Apply an llm_state_update (mode/provider/model + provider availability). */
@@ -2654,6 +2739,15 @@ export class DawnIngest implements Ingest {
                });
             }
             this.notifyLlm();
+         },
+         refreshModels: () => {
+            /* Re-request get_config so a backend model-list edit is picked up live. The
+               get_config_response handler refreshes this.cloudModels + availability and
+               calls notifyLlm to rebuild the open panel, but skips re-applying the session
+               selection (see modelsRefreshOnly). Cheap read; DAWN pushes nothing on a config
+               save (set_config_response goes only to the editing client). */
+            this.modelsRefreshOnly = true;
+            this.send({ type: "get_config" });
          }
       };
    }

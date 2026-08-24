@@ -122,7 +122,7 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
    titleEl.textContent = "Library";
    const refreshBtn = document.createElement("button");
    refreshBtn.type = "button";
-   refreshBtn.className = "library-refresh";
+   refreshBtn.className = "library-refresh panel-refresh"; // library-refresh is the drag-ignore hook
    refreshBtn.setAttribute("aria-label", "Refresh library");
    refreshBtn.title = "Refresh";
    head.append(titleEl, refreshBtn);
@@ -184,7 +184,7 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
       setDocBodyMessage(body, "Loading…");
       const hasBinary = Boolean(item.hasOriginal && item.originalBlobId);
       const fallback = (): void =>
-         setDocBodyMessage(body, hasBinary ? "This document type opens as a download." : "No preview available over the connection.");
+         setDocBodyMessage(body, hasBinary ? "This document type opens as a download." : "No readable text is stored for this document.");
       opts
          .getFullText(item.id)
          .then((res) => {
@@ -342,9 +342,13 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
    };
    list.addEventListener("scroll", onScroll);
 
-   const onRefreshClick = (): void => {
+   const onRefreshClick = (e: MouseEvent): void => {
+      e.stopPropagation(); // don't let the click begin a card drag
       onSearchClear();
       opts.onRefresh();
+      refreshBtn.classList.remove("spin");
+      void refreshBtn.offsetWidth; // restart the animation
+      refreshBtn.classList.add("spin");
    };
    refreshBtn.addEventListener("click", onRefreshClick);
 

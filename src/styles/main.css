@@ -306,6 +306,14 @@ body.engaged #docks {
 .tel-model .tel-val {
    color: var(--accent-glow);
 }
+/* Conversation title: identity like the model, but can be long - cap it and ellipsize
+   so a wordy auto-title never blows out the readout width. */
+.tel-title .tel-val {
+   color: var(--accent-glow);
+   max-width: 12rem;
+   overflow: hidden;
+   text-overflow: ellipsis;
+}
 .tel-sep {
    height: 1px;
    margin: 0.35rem 0 0.4rem;

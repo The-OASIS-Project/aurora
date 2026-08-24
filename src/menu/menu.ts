@@ -95,7 +95,7 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
       closeAll
    );
 
-   const groups = [panels, display];
+   const groups: { el: HTMLElement; refresh: () => void; onOpen?: () => void }[] = [panels, display];
    if (opts.model) groups.push(modelMenu(opts.model));
    groups.push(system);
    bar.append(...groups.map((g) => g.el));
@@ -110,6 +110,7 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
       if (!wasOpen) {
          group.classList.add("open");
          groups.forEach((g) => g.refresh()); // reflect current state
+         groups.find((g) => g.el === group)?.onOpen?.(); // e.g. re-fetch the model list
       }
    };
    bar.addEventListener("click", onBarClick);
@@ -292,7 +293,7 @@ function actionMenu(
 
 /* The MODEL panel: a richer dropdown of segmented controls + a model select + a
    privacy toggle. Rebuilt from the control's state on open and on any change push. */
-function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void } {
+function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void; onOpen: () => void } {
    const { el, dropdown } = menuGroup("Model");
    dropdown.classList.add("model-panel");
 
@@ -349,7 +350,9 @@ function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void }
    ctrl.onChange(() => {
       if (el.classList.contains("open")) build();
    });
-   return { el, refresh: build };
+   /* On open, re-fetch the LLM config so a backend model-list edit shows up without a
+      page reload (the response fires onChange -> build). */
+   return { el, refresh: build, onOpen: () => ctrl.refreshModels?.() };
 }
 
 /* A labelled segmented control: one active option, the rest selectable (or dimmed

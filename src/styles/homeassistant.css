@@ -59,31 +59,7 @@
    color: var(--text-faint);
    white-space: nowrap;
 }
-.ha-refresh {
-   flex: 0 0 auto;
-   background: none;
-   border: none;
-   padding: 0 0.1rem;
-   font-size: var(--fs-body);
-   line-height: 1;
-   color: var(--text-faint);
-   cursor: pointer;
-   transition: color 140ms ease;
-}
-.ha-refresh:hover {
-   color: var(--accent-glow);
-}
-.ha-refresh.spin {
-   animation: ha-spin 600ms ease;
-}
-@keyframes ha-spin {
-   from {
-      transform: rotate(0deg);
-   }
-   to {
-      transform: rotate(360deg);
-   }
-}
+/* The manual-refresh button styling is shared: .panel-refresh in styles/panels.css. */
 
 /* Entity list. Sizing / overflow-fade / hover-expand come from the shared .lcard rules
    (styles/list-card.css); this just sets the row spacing (tight, to hold more data). */

@@ -152,6 +152,21 @@
    color: var(--text);
 }
 
+/* A system error line: the alert red, reserved for a failed turn / server error. */
+.convo-msg.system {
+   border-color: color-mix(in srgb, var(--alert) 55%, transparent);
+}
+.convo-msg.system .convo-role {
+   color: var(--alert-glow);
+}
+.convo-msg.system .convo-body {
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   letter-spacing: 0.03em;
+   color: var(--alert-glow);
+   white-space: pre-wrap;
+}
+
 /* Tool-use markers: DAWN ran a tool this turn, shown as compact on-theme chips rather
    than the raw tool_use JSON. A dim phosphor pill row (mono + uppercase like the role
    labels, a machined cog glyph), indented to sit under the turn it belongs to. */

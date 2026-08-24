@@ -135,9 +135,8 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
    statusEl.className = "ha-status";
    const refreshBtn = document.createElement("button");
    refreshBtn.type = "button";
-   refreshBtn.className = "ha-refresh";
+   refreshBtn.className = "ha-refresh panel-refresh"; // ha-refresh is the drag-ignore hook
    refreshBtn.setAttribute("aria-label", "Refresh Home Assistant now");
-   refreshBtn.textContent = "↻"; // clockwise open circle arrow
    head.append(titleEl, statusEl, refreshBtn);
 
    const list = document.createElement("div");
