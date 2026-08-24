@@ -1028,6 +1028,14 @@ export class DawnIngest implements Ingest {
             }
             break;
 
+         case "config_changed":
+            /* DAWN fans this empty frame to admin browsers on any config save (like
+               calendar_events_changed). Re-pull get_config so a backend model-list edit
+               shows up live, even with the MODEL panel closed. Feature-detected: older
+               daemons never send it, and the MODEL-panel-open refetch still covers them. */
+            this.requestConfigRefresh();
+            break;
+
          case "config": {
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
@@ -1563,7 +1571,9 @@ export class DawnIngest implements Ingest {
                this.sinks.reactor.setState("error");
                /* DAWN emits its generic LLM_ERROR ("Failed to get response...") AFTER the
                   provider's specific error for the same failed turn. If we just showed an
-                  error, drop the trailing generic one so a single failure is one red line. */
+                  error, drop the trailing generic one so a single failure is one red line.
+                  Current DAWN suppresses this double at the source, so this is inert there;
+                  kept as a back-compat safety net for older daemons that still send both. */
                const isGeneric =
                   message === "Failed to get response from AI" || message === "Failed to get response";
                const now = Date.now();
@@ -2595,6 +2605,15 @@ export class DawnIngest implements Ingest {
       this.sinks.telemetry.update({ title: t || "New conversation" });
    }
 
+   /* Re-request get_config to refresh the cloud model lists + provider availability after a
+      backend config edit. Sets modelsRefreshOnly so the response updates the lists only,
+      never the current selection (which would clobber a loaded conversation's provider).
+      Shared by the config_changed push and the MODEL-panel-open refetch. */
+   private requestConfigRefresh(): void {
+      this.modelsRefreshOnly = true;
+      this.send({ type: "get_config" });
+   }
+
    /* Apply an llm_state_update (mode/provider/model + provider availability). */
    private applyLlmState(json: string): void {
       let msg: { payload?: Record<string, unknown> };
@@ -2741,13 +2760,12 @@ export class DawnIngest implements Ingest {
             this.notifyLlm();
          },
          refreshModels: () => {
-            /* Re-request get_config so a backend model-list edit is picked up live. The
-               get_config_response handler refreshes this.cloudModels + availability and
-               calls notifyLlm to rebuild the open panel, but skips re-applying the session
-               selection (see modelsRefreshOnly). Cheap read; DAWN pushes nothing on a config
-               save (set_config_response goes only to the editing client). */
-            this.modelsRefreshOnly = true;
-            this.send({ type: "get_config" });
+            /* Re-request get_config so a backend model-list edit is picked up live when the
+               MODEL panel opens. The get_config_response handler refreshes this.cloudModels
+               + availability and rebuilds the open panel, skipping the session selection (see
+               modelsRefreshOnly). Complements the config_changed push (which also fires this
+               when the panel is closed); keeping both is belt-and-suspenders. */
+            this.requestConfigRefresh();
          }
       };
    }
