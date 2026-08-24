@@ -81,6 +81,15 @@ export default defineConfig({
             changeOrigin: true,
             secure: false,
             ws: true
+         },
+         // Vendor scripts (Chart.js, ...) that model-generated `<dawn-visual type=html>`
+         // blocks reference as `<script src="/js/vendor/X">`; the visual renderer fetches
+         // and inlines them into its sandboxed iframe. DAWN serves them from its www root,
+         // and in production the HUD is same-origin with DAWN so this path resolves there too.
+         "/js/vendor": {
+            target: DAWN_TARGET,
+            changeOrigin: true,
+            secure: false
          }
       }
    },

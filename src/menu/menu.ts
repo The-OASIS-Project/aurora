@@ -390,33 +390,130 @@ function segmented(
    return row;
 }
 
-/* The model dropdown (long lists). Shows the current value even if it is not in the
-   available list yet (state can arrive before the list). */
+/* The model dropdown (long lists). A custom on-theme control (a native <select> renders an
+   OS-styled option list that breaks the design); shows the current value even if it is not
+   in the available list yet (state can arrive before the list). Keyboard: Enter/Space/Down
+   opens, Up/Down move, Enter selects, Esc closes; a mousedown outside closes. Selecting fires
+   onSelect, which rebuilds the whole panel, so this control is short-lived - no teardown
+   beyond the open-only document listener it removes on close. */
 function modelSelect(options: string[], current: string, onSelect: (value: string) => void): HTMLElement {
    const row = document.createElement("div");
    row.className = "model-row";
    const lbl = document.createElement("span");
    lbl.className = "model-label";
    lbl.textContent = "Model";
-   const sel = document.createElement("select");
-   sel.className = "model-select";
+
+   const dd = document.createElement("div");
+   dd.className = "model-dd";
+   const btn = document.createElement("button");
+   btn.type = "button";
+   btn.className = "model-dd-btn";
+   btn.setAttribute("aria-haspopup", "listbox");
+   btn.setAttribute("aria-expanded", "false");
+   const valEl = document.createElement("span");
+   valEl.className = "model-dd-value";
+   const caret = document.createElement("span");
+   caret.className = "model-dd-caret";
+   caret.textContent = "▾"; // ▾
+   btn.append(valEl, caret);
+   dd.appendChild(btn);
+
    const values = options.includes(current) || !current ? options : [current, ...options];
    if (values.length === 0) {
-      const opt = document.createElement("option");
-      opt.textContent = "—";
-      sel.appendChild(opt);
-      sel.disabled = true;
-   } else {
-      for (const v of values) {
-         const opt = document.createElement("option");
-         opt.value = v;
-         opt.textContent = v;
-         if (v === current) opt.selected = true;
-         sel.appendChild(opt);
-      }
-      sel.addEventListener("change", () => onSelect(sel.value));
+      valEl.textContent = "—"; // —
+      btn.disabled = true;
+      row.append(lbl, dd);
+      return row;
    }
-   row.append(lbl, sel);
+   valEl.textContent = current || values[0];
+
+   const list = document.createElement("ul");
+   list.className = "model-dd-list";
+   list.setAttribute("role", "listbox");
+   list.hidden = true;
+   const opts: HTMLElement[] = values.map((v, i) => {
+      const li = document.createElement("li");
+      li.className = "model-dd-opt";
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", v === current ? "true" : "false");
+      if (v === current) li.classList.add("selected");
+      li.textContent = v; // model string is trusted config text, but bind as text regardless
+      li.dataset.index = String(i);
+      list.appendChild(li);
+      return li;
+   });
+   dd.appendChild(list);
+
+   let open = false;
+   let active = Math.max(0, values.indexOf(current));
+   let onDocDown: ((e: Event) => void) | null = null;
+
+   const setActive = (i: number): void => {
+      active = (i + values.length) % values.length;
+      opts.forEach((o, idx) => o.classList.toggle("active", idx === active));
+      opts[active].scrollIntoView({ block: "nearest" });
+   };
+   const close = (): void => {
+      if (!open) return;
+      open = false;
+      list.hidden = true;
+      dd.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+      if (onDocDown) document.removeEventListener("mousedown", onDocDown);
+      onDocDown = null;
+   };
+   const openList = (): void => {
+      if (open) return;
+      open = true;
+      list.hidden = false;
+      dd.classList.add("open");
+      btn.setAttribute("aria-expanded", "true");
+      setActive(Math.max(0, values.indexOf(current)));
+      onDocDown = (e: Event): void => {
+         if (!dd.contains(e.target as Node)) close();
+      };
+      document.addEventListener("mousedown", onDocDown);
+   };
+   const choose = (i: number): void => {
+      const v = values[i];
+      close();
+      if (v !== current) onSelect(v); // rebuilds the panel via onChange
+   };
+
+   btn.addEventListener("click", () => (open ? close() : openList()));
+   /* mousedown (not click) so it fires before the open-only outside-close listener. */
+   list.addEventListener("mousedown", (e) => {
+      const li = (e.target as HTMLElement).closest<HTMLElement>(".model-dd-opt");
+      if (li && li.dataset.index) {
+         e.preventDefault();
+         choose(Number(li.dataset.index));
+      }
+   });
+   dd.addEventListener("keydown", (e) => {
+      if (!open) {
+         if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+            e.preventDefault();
+            openList();
+         }
+         return;
+      }
+      if (e.key === "Escape") {
+         e.preventDefault();
+         close();
+         btn.focus();
+      } else if (e.key === "ArrowDown") {
+         e.preventDefault();
+         setActive(active + 1);
+      } else if (e.key === "ArrowUp") {
+         e.preventDefault();
+         setActive(active - 1);
+      } else if (e.key === "Enter" || e.key === " ") {
+         e.preventDefault();
+         choose(active);
+      }
+   });
+
+   row.append(lbl, dd);
    return row;
 }
 

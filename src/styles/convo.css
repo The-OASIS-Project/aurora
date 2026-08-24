@@ -26,7 +26,10 @@
    display: flex;
    flex-direction: column;
    gap: 0.9rem;
-   background: color-mix(in srgb, var(--ground-raise) 30%, transparent);
+   /* Darker, less transparent than before so rendered visuals (graphs/diagrams) sit on a
+      solid backdrop rather than the busy reactor behind. Uses ground-raise (the tinted
+      elevated surface) so it reads as a shaded panel, not flat black. */
+   background: color-mix(in srgb, var(--ground-raise) 60%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
    backdrop-filter: blur(7px);
    -webkit-backdrop-filter: blur(7px);
@@ -165,6 +168,77 @@
    letter-spacing: 0.03em;
    color: var(--alert-glow);
    white-space: pre-wrap;
+}
+
+/* Model-generated visuals (<dawn-visual>) render in a sandboxed iframe inside a framed
+   card; the download button floats top-right. See src/conversation/visual.ts. */
+.convo-visual {
+   position: relative;
+   margin: 0.7rem 0;
+   border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+   border-radius: 4px;
+   background: color-mix(in srgb, var(--ground-raise) 40%, transparent);
+   overflow: hidden;
+}
+.convo-visual-frame {
+   display: block;
+   width: 100%;
+   border: none;
+   background: transparent;
+}
+.convo-visual-download {
+   position: absolute;
+   top: 0.4rem;
+   right: 0.4rem;
+   z-index: 2;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   width: 1.6rem;
+   height: 1.6rem;
+   padding: 0;
+   font-size: 1rem;
+   line-height: 1;
+   color: var(--text-faint);
+   background: color-mix(in srgb, var(--ground) 70%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+   opacity: 0;
+   transition: opacity 140ms ease, color 140ms ease;
+}
+.convo-visual:hover .convo-visual-download {
+   opacity: 1;
+}
+.convo-visual-download:hover {
+   color: var(--accent-glow);
+}
+/* Streaming placeholder while a visual is still arriving in the token stream. */
+.convo-visual-pending {
+   margin: 0.5rem 0;
+   padding: 0.5rem 0.7rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+   border: 1px dashed color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 3px;
+   animation: convo-visual-pulse 1.4s ease-in-out infinite;
+}
+@keyframes convo-visual-pulse {
+   0%,
+   100% {
+      opacity: 0.55;
+   }
+   50% {
+      opacity: 1;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .convo-visual-pending {
+      animation: none;
+   }
 }
 
 /* Tool-use markers: DAWN ran a tool this turn, shown as compact on-theme chips rather

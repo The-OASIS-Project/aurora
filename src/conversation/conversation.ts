@@ -19,6 +19,7 @@ import type { ActivityStatus, ConversationItem, OutImage, UploadedDoc } from "..
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
 import { renderMarkdown } from "./format.ts";
+import { hasVisual, splitVisualSegments, stripVisualsForStreaming, createVisualFrame, initVisuals } from "./visual.ts";
 import { emojify } from "../util/emoji.ts";
 import { compressImage } from "../util/image.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
@@ -276,6 +277,27 @@ export function mountConversation(
       return wrap;
    };
 
+   /* Render an assistant body: plain markdown, or - when the reply carries model-generated
+      <dawn-visual> blocks - alternating markdown text segments and sandboxed visual frames. */
+   const renderAssistantBody = (body: HTMLElement, text: string): void => {
+      if (!hasVisual(text)) {
+         body.innerHTML = renderMarkdown(text);
+         return;
+      }
+      body.replaceChildren();
+      for (const seg of splitVisualSegments(text)) {
+         if (seg.kind === "text") {
+            if (!seg.content.trim()) continue;
+            const d = document.createElement("div");
+            d.className = "convo-seg";
+            d.innerHTML = renderMarkdown(seg.content);
+            body.appendChild(d);
+         } else {
+            body.appendChild(createVisualFrame(seg.visual));
+         }
+      }
+   };
+
    const appendMsg = (role: "user" | "assistant", rawText: string): Msg => {
       win.classList.remove("empty");
       const el = document.createElement("div");
@@ -293,7 +315,7 @@ export function mountConversation(
       const body = document.createElement("div");
       body.className = "convo-body";
       if (role === "user") body.textContent = text;
-      else body.innerHTML = renderMarkdown(text);
+      else renderAssistantBody(body, text);
       const attach = renderAttachments(images, docs);
       if (attach) body.appendChild(attach);
 
@@ -337,7 +359,17 @@ export function mountConversation(
       raf = requestAnimationFrame(() => {
          raf = 0;
          if (streaming) {
-            streaming.body.innerHTML = renderMarkdown(streaming.text);
+            /* Mid-stream a <dawn-visual> tag is raw XML - strip it and show a placeholder;
+               the real frame is built once the reply finalizes (endReply). */
+            if (hasVisual(streaming.text)) {
+               streaming.body.innerHTML = renderMarkdown(stripVisualsForStreaming(streaming.text));
+               const ph = document.createElement("div");
+               ph.className = "convo-visual-pending";
+               ph.textContent = "Generating visual…";
+               streaming.body.appendChild(ph);
+            } else {
+               streaming.body.innerHTML = renderMarkdown(streaming.text);
+            }
             scrollToEnd();
          }
       });
@@ -396,7 +428,7 @@ export function mountConversation(
          cancelAnimationFrame(raf);
          raf = 0;
       }
-      if (streaming) streaming.body.innerHTML = renderMarkdown(streaming.text);
+      if (streaming) renderAssistantBody(streaming.body, streaming.text);
       streaming = null;
       scrollToEnd(true); // final markdown reflow can change height; ease it, don't snap
       setThinking(false);
@@ -765,6 +797,14 @@ export function mountConversation(
       (position:relative), it owns its own dropdown + keys and is torn down below. */
    const emojiPicker = attachEmojiPicker(input, form);
 
+   /* Model-visual bridge (resize + click-to-prompt). A node click inside a sandboxed visual
+      fills the composer and submits, the same deliberate user action as typing. */
+   const disposeVisuals = initVisuals((text) => {
+      input.value = text;
+      input.focus();
+      form.requestSubmit();
+   });
+
    return {
       setThinking,
       startReply,
@@ -787,6 +827,7 @@ export function mountConversation(
          input.removeEventListener("focus", engage);
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
+         disposeVisuals();
          attachBtn?.removeEventListener("click", onAttachClick);
          fileInput?.removeEventListener("change", onFileChange);
          window.removeEventListener("dragenter", onWinDragEnter);

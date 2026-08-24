@@ -64,20 +64,93 @@
 }
 
 /* Model dropdown. */
-.model-select {
+.model-dd {
+   position: relative;
+}
+.model-dd-btn {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 0.5rem;
+   min-width: 8rem;
    max-width: 11.5rem;
-   padding: 0.24rem 0.4rem;
+   padding: 0.24rem 0.4rem 0.24rem 0.55rem;
    font-family: var(--font-mono);
    font-size: var(--fs-label);
    color: var(--text);
-   background: color-mix(in srgb, var(--ground) 60%, transparent);
+   /* Closed control blends with the panel (the popup is the dark surface, inverted). */
+   background: transparent;
    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
    border-radius: 2px;
    cursor: pointer;
+   transition: border-color 120ms ease;
 }
-.model-select:disabled {
+.model-dd-btn:hover:not(:disabled) {
+   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.model-dd-btn:disabled {
    color: var(--text-faint);
    cursor: default;
+}
+.model-dd-value {
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.model-dd-caret {
+   flex: none;
+   font-size: 0.95rem;
+   line-height: 1;
+   color: var(--text-dim);
+   transition: transform 140ms ease, color 140ms ease;
+}
+.model-dd.open .model-dd-caret {
+   transform: rotate(180deg);
+   color: var(--accent-glow);
+}
+/* The popup list: overlays the rows below it (absolute in .model-dd), on-theme. */
+.model-dd-list {
+   position: absolute;
+   right: 0;
+   top: calc(100% + 4px);
+   z-index: 60;
+   margin: 0;
+   padding: 0.2rem;
+   list-style: none;
+   min-width: 100%;
+   max-width: 16rem;
+   max-height: 14rem;
+   overflow-y: auto;
+   /* Dark surface (near-black), inverted from the now-transparent closed control. */
+   background: color-mix(in srgb, var(--ground) 95%, #000);
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 3px;
+   box-shadow: 0 10px 30px color-mix(in srgb, var(--ground) 74%, transparent);
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.model-dd-list::-webkit-scrollbar {
+   width: 8px;
+}
+.model-dd-list::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
+}
+.model-dd-opt {
+   padding: 0.3rem 0.5rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text-dim);
+   border-radius: 2px;
+   cursor: pointer;
+   white-space: nowrap;
+}
+.model-dd-opt.active {
+   background: color-mix(in srgb, var(--accent) 18%, transparent);
+   color: var(--text);
+}
+.model-dd-opt.selected {
+   color: var(--accent-glow);
 }
 
 .model-divider {
