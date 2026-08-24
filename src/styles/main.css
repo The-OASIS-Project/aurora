@@ -255,6 +255,9 @@ body.engaged #docks {
    position: absolute;
    top: 34px;
    left: 40px;
+   /* Breathing room so the time never sits tight against the edge / frame corner when
+      docked in the left corner. */
+   padding-left: 0.6rem;
 }
 .clk-time {
    font-size: var(--fs-display);
@@ -282,6 +285,27 @@ body.engaged #docks {
    right: 40px;
    text-align: right;
    min-width: 12rem;
+   /* Match the clock: horizontal breathing room so the readout never sits tight against
+      the edge / frame corner when docked. */
+   padding: 0 0.6rem;
+}
+
+/* The clock + telemetry readout are movable, toggleable panels (makeMovable +
+   makeVisibility). #hud is pointer-events:none, so re-enable events on these two to catch
+   the drag; the frame corners + reticle stay inert fixed chrome. */
+#hud-clock,
+#hud-status {
+   pointer-events: auto;
+   cursor: grab;
+   touch-action: none;
+}
+#hud-clock:active,
+#hud-status:active {
+   cursor: grabbing;
+}
+.hud-clock-off,
+.hud-status-off {
+   display: none;
 }
 .tel-row {
    display: flex;

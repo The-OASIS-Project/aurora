@@ -146,7 +146,7 @@ src/
   calendar/          the movable calendar card
   homeassistant/     the movable Home Assistant board
   audio/             TTS playback + FFT tap to the reactor
-  hud/               clock + telemetry readout
+  hud/               clock + telemetry readout (both movable + Panels-menu toggleable)
   menu/              top menu: panels, display, model, system
   auth/              login panel (+ the "another tab took over" takeover card)
   model/             LLM-selection types + effort rules
@@ -192,5 +192,6 @@ has no use for change-notification plumbing, and polling has no ordering surpris
   with a persisted position, via `makeMovable` (`src/render/movable.ts`) - all sharing one
   snap set (they snap to each other and the viewport, with a central dead zone around the
   reactor). This is distinct from the store-backed ambient panels, which drag onto the side
-  rails through `PanelDrag` (a path only `StubIngest` exercises today). Reserve a fixed
-  screen position for fixed HUD chrome (clock, telemetry frame) only.
+  rails through `PanelDrag` (a path only `StubIngest` exercises today). The clock and the
+  telemetry readout are also movable + toggleable (grab-to-move + a Panels-menu show/hide,
+  wired in `hud.ts`); the only fixed HUD chrome left is the frame corners and the reticle.

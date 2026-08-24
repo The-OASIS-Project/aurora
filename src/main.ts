@@ -279,14 +279,18 @@ const menu = mountMenu(stage, {
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "context", label: "Context", enabled: contextPanel.isVisible() },
-      { id: "music", label: "Music", enabled: musicPlayer.isVisible() }
-   ],
+      { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
+      { id: "clock", label: "Clock", enabled: hud.clock.isVisible() },
+      { id: "telemetry", label: "Telemetry", enabled: hud.status.isVisible() }
+   ].sort((a, b) => a.label.localeCompare(b.label)),
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
+      else if (id === "clock") hud.clock.setVisible(!hud.clock.isVisible());
+      else if (id === "telemetry") hud.status.setVisible(!hud.status.isVisible());
       else store.toggleEnabled(id);
    },
    displayToggles: [

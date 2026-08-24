@@ -12,9 +12,21 @@
  */
 
 import { safeTimeZone } from "../util/tz.ts";
+import { makeMovable } from "../render/movable.ts";
+import { makeVisibility } from "../render/visibility.ts";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const HUD_CACHE_KEY = "dawn.hero.hud"; // last telemetry values, to survive a refresh
+const CLOCK_POS_KEY = "dawn.hero.clockPos";
+const CLOCK_SHOWN_KEY = "dawn.hero.clockShown";
+const STATUS_POS_KEY = "dawn.hero.statusPos";
+const STATUS_SHOWN_KEY = "dawn.hero.statusShown";
+
+/* A show/hide handle the Panels menu can toggle (a subset of Visibility). */
+export interface HudPanel {
+   isVisible(): boolean;
+   setVisible(on: boolean): void;
+}
 
 export interface HudController {
    /* Ingest pushes telemetry values (keyed by the row's data-tel attribute). */
@@ -22,6 +34,11 @@ export interface HudController {
    /* Render the clock in a specific IANA timezone (the user's, from DAWN) instead
       of the browser box's local time. Invalid/empty falls back to browser-local. */
    setTimezone(tz: string): void;
+   /* The clock and the telemetry readout are movable, toggleable panels (grab to move,
+      persisted position; hide via the Panels menu). Only the frame corners + reticle stay
+      fixed HUD chrome now. */
+   clock: HudPanel;
+   status: HudPanel;
    destroy(): void;
 }
 
@@ -68,10 +85,35 @@ export function mountHud(root: HTMLElement): HudController {
       tz = safeTimeZone(zone);
    };
 
+   /* Make the clock + telemetry readout grab-to-move (persisted) and toggleable. They keep
+      their CSS corner until first dragged (makeMovable only restores a stored position), so
+      the default layout is unchanged. */
+   const noop = (): void => {};
+   const clockEl = root.querySelector<HTMLElement>("#hud-clock");
+   const statusEl = root.querySelector<HTMLElement>("#hud-status");
+   const disposeClockMove = clockEl ? makeMovable(clockEl, { storageKey: CLOCK_POS_KEY }) : noop;
+   const disposeStatusMove = statusEl ? makeMovable(statusEl, { storageKey: STATUS_POS_KEY }) : noop;
+   const clockVis = clockEl
+      ? makeVisibility(clockEl, { storageKey: CLOCK_SHOWN_KEY, offClass: "hud-clock-off" })
+      : null;
+   const statusVis = statusEl
+      ? makeVisibility(statusEl, { storageKey: STATUS_SHOWN_KEY, offClass: "hud-status-off" })
+      : null;
+   const panel = (vis: ReturnType<typeof makeVisibility> | null): HudPanel => ({
+      isVisible: () => vis?.isVisible() ?? true,
+      setVisible: (on: boolean) => vis?.setVisible(on)
+   });
+
    return {
       updateTelemetry,
       setTimezone,
-      destroy: () => stopClock()
+      clock: panel(clockVis),
+      status: panel(statusVis),
+      destroy: () => {
+         stopClock();
+         disposeClockMove();
+         disposeStatusMove();
+      }
    };
 }
 
