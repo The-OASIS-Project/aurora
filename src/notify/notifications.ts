@@ -61,6 +61,9 @@ const REST_PERSIST = 1.0; // a persist notice settles to this ambient floor (mid
    removed by a separate life timer, not by importance hitting zero. */
 const REST_TOAST = 0.7;
 const TOAST_LIFE = 60; // seconds an unattended toast lingers before removal; reset on hover
+const MAX_PERSIST = 6; // un-snapped persist alerts kept live at once; beyond this the oldest is
+// evicted, so a days-long session can't accumulate unbounded cards. Snapped/sticky cards are
+// user-docked and exempt; toasts self-limit via their life timer.
 
 interface Card {
    notice: Notice;
@@ -126,6 +129,23 @@ export class Notifications implements NotificationsSink {
       const existing = this.cards.get(notice.id);
       if (existing) this.update(existing, notice);
       else this.mount(notice);
+      if (notice.persist) this.capPersist();
+   }
+
+   /* Bound the un-snapped persist population. A persist alert recedes to a quiet float but never
+      auto-removes (only a user dismiss does), so without a cap a days-long session accumulates
+      unbounded cards (DOM + makeMovable + listeners) and scales the per-frame tick. Beyond
+      MAX_PERSIST, evict the oldest un-snapped, un-hovered persist card. Snapped/sticky cards are
+      user-docked (exempt); toasts self-limit via their life timer, so neither is counted. */
+   private capPersist(): void {
+      const live = [...this.cards.values()].filter((c) => c.notice.persist && !c.snapped && !c.notice.sticky);
+      let overflow = live.length - MAX_PERSIST; // insertion order => live[0] is oldest
+      for (const c of live) {
+         if (overflow <= 0) break;
+         if (c.hovered) continue; // don't yank a card the user is reading
+         this.teardown(c);
+         overflow--;
+      }
    }
 
    remove(id: string): void {
@@ -422,8 +442,20 @@ export class Notifications implements NotificationsSink {
       const nx = (card.notice.x + 1) / 2;
       const ny = (card.notice.y + 1) / 2;
       const edge = cssMovableEdge(); // same inset makeMovable docks to (the --movable-edge token)
-      const left = Math.round(edge + nx * Math.max(0, W - cw - 2 * edge));
-      const top = Math.round(edge + ny * Math.max(0, H - ch - 2 * edge));
+      /* Cascade: cards born at the SAME spawn origin (a burst of alerts) fan down-and-right by a
+         step each, so they don't render exactly on top of one another. Bounded by a wrap so a
+         long burst can't march off-screen; count only current, un-placed same-origin cards, so
+         the cascade self-limits as older toasts fade. */
+      let cohort = 0;
+      for (const other of this.cards.values()) {
+         if (other === card) continue;
+         if (other.notice.x === card.notice.x && other.notice.y === card.notice.y && !localStorage.getItem(this.posKey(other.notice.id))) cohort++;
+      }
+      const cascade = (cohort % 6) * 18;
+      /* Clamp AFTER adding the cascade so a burst can't push a card past the docking inset /
+         off-screen (the base term alone is clamped; the +cascade would escape it). */
+      const left = Math.min(Math.round(edge + nx * Math.max(0, W - cw - 2 * edge)) + cascade, Math.max(edge, W - cw - edge));
+      const top = Math.min(Math.round(edge + ny * Math.max(0, H - ch - 2 * edge)) + cascade, Math.max(edge, H - ch - edge));
       card.root.style.left = `${left}px`;
       card.root.style.top = `${top}px`;
       card.root.style.right = "auto";

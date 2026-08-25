@@ -1966,7 +1966,13 @@ export class DawnIngest implements Ingest {
             /* SAGE proactive attention — the signature ambient spike. level=alert
                needs the user (warm + claims the front); level=ambient is an FYI. */
             const alert = String(p.level ?? "ambient") === "alert";
-            this.spikeNotice("attention", "attention", String(p.summary ?? ""), {
+            const summary = String(p.summary ?? "");
+            /* Key the notice by its text: distinct alerts get distinct cards (two watches firing
+               close together stack instead of one overwriting the other), while an identical
+               re-fire coalesces onto the same card and re-spikes - so one flapping watch can't
+               crowd the rest out. Content-stable, so it also survives a reload without colliding
+               with a per-session counter (which would reset and inherit stale saved positions). */
+            this.spikeNotice(`attention:${summary}`, "attention", summary, {
                tone: alert ? "attention" : "nominal",
                hold: alert ? 9 : 6,
                persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
@@ -1977,8 +1983,12 @@ export class DawnIngest implements Ingest {
          }
 
          case "silent_observation":
-            /* A quieter noticed-something FYI, categorized (calendar/email/…). */
-            this.spikeNotice("observation", String(p.category ?? "note"), String(p.note ?? ""), {
+            /* A quieter noticed-something FYI, categorized (calendar/email/…). Keyed by
+               category+note so distinct observations stack and identical ones coalesce (see
+               attention_alert). */
+            const category = String(p.category ?? "note");
+            const note = String(p.note ?? "");
+            this.spikeNotice(`observation:${category}:${note}`, category, note, {
                hold: 5,
                x: -0.62,
                y: 0.42
