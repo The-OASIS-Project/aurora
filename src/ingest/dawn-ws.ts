@@ -40,6 +40,7 @@ import type {
    OutImage,
    UploadedDoc,
    UploadedImage,
+   WatchFields,
    WatchItem
 } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
@@ -378,6 +379,23 @@ function toHAEntity(e: Record<string, unknown>): HAEntity {
 
 /* A watch_list watch object -> our WatchItem. `threshold`/`current` are optional on the wire
    (omitted when non-finite), so read them independently rather than off `has_current`. */
+/* WatchFields -> the snake_case wire keys DAWN's apply_overrides() reads (shared by add +
+   update). rule_type drives an in-place threshold<->slope switch; the trigger key follows the
+   kind (threshold vs slope_per_min, a positive magnitude in units/MINUTE - the sign comes from
+   direction). Only defined fields are sent (an omitted field keeps its server value). */
+function watchFieldsToWire(fields: WatchFields | undefined): Record<string, unknown> {
+   const payload: Record<string, unknown> = {};
+   if (!fields) return payload;
+   if (fields.name !== undefined) payload.name = fields.name;
+   if (fields.ruleType !== undefined) payload.rule_type = fields.ruleType;
+   if (fields.direction !== undefined) payload.direction = fields.direction;
+   if (fields.threshold !== undefined) payload.threshold = fields.threshold;
+   if (fields.slopePerMin !== undefined) payload.slope_per_min = fields.slopePerMin;
+   if (fields.slopeWindowSec !== undefined) payload.slope_window_sec = fields.slopeWindowSec;
+   if (fields.notify !== undefined) payload.notify = fields.notify;
+   return payload;
+}
+
 function toWatchItem(w: Record<string, unknown>): WatchItem {
    return {
       id: Number(w.id ?? 0),
@@ -388,9 +406,12 @@ function toWatchItem(w: Record<string, unknown>): WatchItem {
       ruleType: String(w.rule_type ?? "threshold"),
       direction: String(w.direction ?? "above"),
       threshold: typeof w.threshold === "number" ? w.threshold : undefined,
+      slopePerMin: typeof w.slope_per_min === "number" ? w.slope_per_min : undefined,
+      slopeWindowSec: typeof w.slope_window_sec === "number" ? w.slope_window_sec : undefined,
       absenceAfterSec: Number(w.absence_after_sec ?? 0),
       notify: String(w.notify ?? ""),
       enabled: w.enabled === true,
+      named: w.named === true,
       source: String(w.source ?? ""),
       hasCurrent: w.has_current === true,
       current: typeof w.current === "number" ? w.current : undefined,
@@ -1835,7 +1856,10 @@ export class DawnIngest implements Ingest {
             const catalog = ((p.catalog ?? []) as Array<Record<string, unknown>>).map((c) => ({
                key: String(c.key ?? ""),
                label: String(c.label ?? c.key ?? ""),
-               unit: String(c.unit ?? "")
+               unit: String(c.unit ?? ""),
+               ruleType: typeof c.rule_type === "string" ? c.rule_type : undefined,
+               defaultDirection: typeof c.default_direction === "string" ? c.default_direction : undefined,
+               defaultThreshold: typeof c.default_threshold === "number" ? c.default_threshold : undefined
             }));
             this.sinks.watches.setWatches(rows.map(toWatchItem), catalog);
             this.sinks.watches.setStatus({
@@ -2502,19 +2526,21 @@ export class DawnIngest implements Ingest {
       liveness; each reconciles via the re-list in its *_response handler. `updateWatch` sends
       the full field state (a partial send would reset omitted fields to catalog defaults).
       `removeWatch` is only ever invoked from the panel's confirm-gated gesture. */
-   addWatch(metric: string): void {
+   addWatch(metric: string, fields?: WatchFields): void {
       if (!this.isLinkLive()) {
          this.notifyUser("Not connected to DAWN - not sent.");
          return;
       }
-      this.send({ type: "watch_add", payload: { metric } });
+      /* CREATES a new watch (add no longer dedups by metric). The create modal supplies the
+         name + condition in `fields`; a bare add falls back to the server's catalog defaults. */
+      this.send({ type: "watch_add", payload: { metric, ...watchFieldsToWire(fields) } });
    }
-   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void {
+   updateWatch(id: number, fields: WatchFields): void {
       if (!this.isLinkLive()) {
          this.notifyUser("Not connected to DAWN - not sent.");
          return;
       }
-      this.send({ type: "watch_update", payload: { id, ...fields } });
+      this.send({ type: "watch_update", payload: { id, ...watchFieldsToWire(fields) } });
    }
    removeWatch(id: number): void {
       if (!this.isLinkLive()) {

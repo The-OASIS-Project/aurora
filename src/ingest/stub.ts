@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -96,40 +96,62 @@ export class StubIngest implements Ingest {
       { id: 1, name: "", metric: "stat.system_temp", label: "system temperature", unit: "°C", ruleType: "threshold", direction: "above", threshold: 80, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 61 },
       { id: 2, name: "", metric: "stat.battery.soc", label: "battery level", unit: "%", ruleType: "threshold", direction: "below", threshold: 15, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 88 },
       { id: 3, name: "", metric: "stat.cpu_usage", label: "CPU usage", unit: "%", ruleType: "threshold", direction: "above", threshold: 90, absenceAfterSec: 0, notify: "ambient", enabled: false, source: "stat", hasCurrent: true, current: 34 },
-      { id: 4, name: "", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1500, absenceAfterSec: 0, notify: "alert", enabled: true, source: "suit", hasCurrent: false },
-      { id: 5, name: "", metric: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", direction: "above", absenceAfterSec: 120, notify: "alert", enabled: true, source: "component", hasCurrent: true, current: 3 }
+      { id: 4, name: "CO2 danger", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1500, absenceAfterSec: 0, notify: "alert", enabled: true, named: true, source: "suit", hasCurrent: false },
+      { id: 7, name: "CO2 elevated", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1000, absenceAfterSec: 0, notify: "ambient", enabled: true, named: true, source: "suit", hasCurrent: false },
+      { id: 5, name: "", metric: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", direction: "above", absenceAfterSec: 120, notify: "alert", enabled: true, source: "component", hasCurrent: true, current: 3 },
+      { id: 6, name: "helmet warming fast", metric: "suit.temp", label: "helmet temperature", unit: "°C", ruleType: "slope", direction: "rising", slopePerMin: 2, slopeWindowSec: 120, absenceAfterSec: 0, notify: "ambient", enabled: true, named: true, source: "suit", hasCurrent: true, current: 24 }
    ];
    private fakeCatalog: WatchCatalogEntry[] = [
-      { key: "stat.cpu_usage", label: "CPU usage", unit: "%" },
-      { key: "stat.system_temp", label: "system temperature", unit: "°C" },
-      { key: "stat.battery.soc", label: "battery level", unit: "%" },
-      { key: "stat.memory_usage", label: "memory usage", unit: "%" },
-      { key: "suit.co2_ppm", label: "CO2", unit: "ppm" },
-      { key: "suit.temp", label: "helmet temperature", unit: "°C" },
-      { key: "component.hud", label: "helmet HUD link", unit: "s" }
+      { key: "stat.cpu_usage", label: "CPU usage", unit: "%", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 90 },
+      { key: "stat.system_temp", label: "system temperature", unit: "°C", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 80 },
+      { key: "stat.battery.soc", label: "battery level", unit: "%", ruleType: "threshold", defaultDirection: "below", defaultThreshold: 15 },
+      { key: "stat.memory_usage", label: "memory usage", unit: "%", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 85 },
+      { key: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 1500 },
+      { key: "suit.temp", label: "helmet temperature", unit: "°C", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 35 },
+      { key: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", defaultDirection: "above", defaultThreshold: 120 }
    ];
    requestWatches(): void {
       this.sinks.watches.setWatches([...this.fakeWatches], this.fakeCatalog);
       this.sinks.watches.setStatus({ ok: true, attentionEnabled: true });
    }
-   addWatch(metric: string): void {
-      if (!this.fakeWatches.some((w) => w.metric === metric)) {
-         const cat = this.fakeCatalog.find((c) => c.key === metric);
-         const id = Math.max(0, ...this.fakeWatches.map((w) => w.id)) + 1;
-         this.fakeWatches.push({
-            id, name: "", metric, label: cat?.label ?? metric, unit: cat?.unit ?? "",
-            ruleType: metric === "component.hud" ? "absence" : "threshold",
-            direction: "above", threshold: 50, absenceAfterSec: 120, notify: "alert",
-            enabled: true, source: metric.split(".")[0], hasCurrent: false
-         });
-      }
+   addWatch(metric: string, fields?: WatchFields): void {
+      /* No longer dedups by metric - always creates a new watch, mirroring the server. The
+         create modal supplies name + condition in `fields`; a bare add falls back to catalog
+         defaults with a descriptive auto-name (which the server would own). */
+      const cat = this.fakeCatalog.find((c) => c.key === metric);
+      const ruleType = fields?.ruleType ?? (cat?.ruleType === "absence" ? "absence" : "threshold");
+      const isAbsence = ruleType === "absence";
+      const id = Math.max(0, ...this.fakeWatches.map((w) => w.id)) + 1;
+      const dir = fields?.direction ?? cat?.defaultDirection ?? "above";
+      const thr = fields?.threshold ?? cat?.defaultThreshold ?? 50;
+      const named = !!fields?.name;
+      this.fakeWatches.push({
+         id,
+         name: named ? (fields as WatchFields).name! : isAbsence ? `${cat?.label ?? metric} silent` : `${cat?.label ?? metric} ${dir} ${thr}`,
+         metric, label: cat?.label ?? metric, unit: cat?.unit ?? "",
+         ruleType,
+         direction: dir,
+         threshold: isAbsence || ruleType === "slope" ? undefined : thr, // a slope rule has no threshold
+         slopePerMin: fields?.slopePerMin,
+         slopeWindowSec: fields?.slopeWindowSec,
+         absenceAfterSec: isAbsence ? (fields?.threshold ?? cat?.defaultThreshold ?? 120) : 0,
+         notify: fields?.notify ?? "alert",
+         enabled: true, named, source: metric.split(".")[0], hasCurrent: false
+      });
       this.requestWatches();
    }
-   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void {
+   updateWatch(id: number, fields: WatchFields): void {
       const w = this.fakeWatches.find((x) => x.id === id);
       if (w) {
+         if (fields.name !== undefined && fields.name !== "") {
+            w.name = fields.name;
+            w.named = true; // a supplied name marks it user-named (server behavior)
+         }
+         if (fields.ruleType !== undefined) w.ruleType = fields.ruleType;
          if (fields.direction !== undefined) w.direction = fields.direction;
          if (fields.threshold !== undefined) w.threshold = fields.threshold;
+         if (fields.slopePerMin !== undefined) w.slopePerMin = fields.slopePerMin;
+         if (fields.slopeWindowSec !== undefined) w.slopeWindowSec = fields.slopeWindowSec;
          if (fields.notify !== undefined) w.notify = fields.notify;
       }
       this.requestWatches();

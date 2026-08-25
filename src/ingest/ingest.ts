@@ -257,12 +257,18 @@ export interface WatchItem {
    metric: string;
    label: string; // catalog label, e.g. "system temperature"
    unit: string; // literal UTF-8 on the wire ("°C", "%", "ppm", "" for counts)
-   ruleType: string; // "threshold" | "absence" | ...
-   direction: string; // "above" | "below" | "rising"
-   threshold?: number; // omitted when non-finite
+   ruleType: string; // "threshold" | "slope" | "absence" | ...
+   direction: string; // threshold: "above" | "below"; slope: "rising" | "falling"
+   threshold?: number; // threshold rule: metric units. Omitted when non-finite / on a slope row.
+   slopePerMin?: number; // slope rule: rate trigger, positive magnitude, canonical units/MINUTE
+   slopeWindowSec?: number; // slope rule: averaging window (seconds); omitted when absent
    absenceAfterSec: number;
-   notify: string; // "alert" | "ambient" | "digest"
+   notify: string; // "alert" | "ambient" (digest is DAWN-P0 log-only, not offered in the UI)
    enabled: boolean;
+   /* true = user-named (authoritative; shown as the row title, spoken in alerts). false = a
+      system auto-name (server owns it, regenerates it on a condition edit). Feature-detected:
+      absent on older servers -> treat as false (auto). */
+   named?: boolean;
    source: string; // source_tag, the group key: "stat" | "suit" | "component" | ...
    hasCurrent: boolean;
    current?: number;
@@ -271,12 +277,32 @@ export interface WatchItem {
    breaching?: boolean;
 }
 
-/* A watchable metric (powers the Phase-2 add modal). The wire catalog is key/label/unit
-   only - no rule_type or defaults. */
+/* The mutable dials of a watch, sent by the edit modal (the FULL field state - a partial
+   send would reset omitted fields to catalog defaults server-side). Rule-type-specific:
+   DAWN rejects cross-vocabulary (above/below only on threshold, rising/falling only on
+   slope). `ruleType` drives an in-place kind switch (threshold <-> slope); omit to keep the
+   current kind (absence is not switchable). The trigger key follows the kind: `threshold`
+   for a threshold rule (or seconds of silence for absence), `slopePerMin` (+ optional
+   `slopeWindowSec`) for a slope rule. Per-minute is canonical on the wire. */
+export interface WatchFields {
+   name?: string; // user-facing watch name; sent only when non-empty (empty keeps the current/auto name)
+   ruleType?: string; // "threshold" | "slope"
+   direction?: string; // threshold: "above"|"below"; slope: "rising"|"falling"
+   threshold?: number; // threshold: metric units; absence: seconds of silence
+   slopePerMin?: number; // slope: positive magnitude, units/MINUTE (sign comes from direction)
+   slopeWindowSec?: number; // slope: averaging window in seconds (optional)
+   notify?: string; // "alert" | "ambient"
+}
+
+/* A watchable metric (powers the add modal). Newer servers also carry the metric's natural
+   rule shape + seed values (feature-detected; absent on older servers). */
 export interface WatchCatalogEntry {
    key: string;
    label: string;
    unit: string;
+   ruleType?: string; // the metric's natural kind: "threshold" | "slope" | "absence"
+   defaultDirection?: string; // seed direction for a fresh add
+   defaultThreshold?: number; // seed threshold for a fresh add
 }
 
 /* List outcome, so the panel shows a real "couldn't list" state instead of an empty one
@@ -504,12 +530,13 @@ export interface Ingest {
       readings when a client is actually looking. Re-subscribed on reconnect if still wanted. */
    watchReadingsSubscribe(enabled: boolean): void;
    /* Phase-2 watch CRUD - per-user proactive rules, deliberate user actions (same class as
-      the conversation picker's verbs). `addWatch` starts watching a metric (DAWN templates
-      the catalog defaults; one-watch-per-metric, so it upserts). `updateWatch` sends the FULL
+      the conversation picker's verbs). `addWatch` CREATES a new watch on a metric (a metric can
+      hold several named watches now, so add never dedups); `fields` carries the name + condition
+      the create modal collected, so nothing is written until Save. `updateWatch` sends the FULL
       field state (partial sends would reset omitted fields to defaults). `removeWatch` is only
       ever called from a confirm-gated gesture. All server-reconciled via a re-list. */
-   addWatch(metric: string): void;
-   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void;
+   addWatch(metric: string, fields?: WatchFields): void;
+   updateWatch(id: number, fields: WatchFields): void;
    removeWatch(id: number): void;
    /* --- Conversation picker (request/response). listConversations paginates; searchConversations
       filters (title, or message content when `content`). loadConversation / newConversation are

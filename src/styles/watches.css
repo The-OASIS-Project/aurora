@@ -145,7 +145,7 @@
 /* Row: dot | (name + condition) | live reading | toggle. */
 .watches-row {
    display: grid;
-   grid-template-columns: 8px 1fr auto auto;
+   grid-template-columns: 8px 1fr auto;
    align-items: center;
    column-gap: 0.55rem;
    padding: 0.16rem 0;
@@ -170,13 +170,25 @@
    min-width: 0;
 }
 .watches-row-name {
+   /* The title: spans the full row width on its own line, above the detail line. Ellipsis only
+      if it outruns the whole row (not the old mid-row column boundary). */
    font-size: var(--fs-label);
    color: var(--text);
    overflow: hidden;
    text-overflow: ellipsis;
    white-space: nowrap;
+   margin-bottom: 0.05rem;
+}
+/* The line under the title: condition on the left, live "now" reading pushed to the right. */
+.watches-row-detail {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.75rem;
 }
 .watches-row-cond {
+   flex: 1 1 auto;
+   min-width: 0;
    font-family: var(--font-mono);
    font-size: var(--fs-nano);
    letter-spacing: 0.03em;
@@ -185,6 +197,7 @@
    overflow-wrap: anywhere;
 }
 .watches-row-current {
+   flex: 0 0 auto;
    font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.04em;
@@ -420,10 +433,60 @@
    outline: none;
    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
+.watch-text {
+   flex: 1 1 auto;
+   min-width: 0;
+   margin-left: 1rem;
+   padding: 0.24rem 0.4rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground) 60%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 2px;
+}
+.watch-text:focus {
+   outline: none;
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
 .watch-num-unit {
    font-family: var(--font-mono);
    font-size: var(--fs-label);
    color: var(--text-faint);
+}
+/* The condition section (direction + trigger), rebuilt when the kind flips; match the body's
+   inter-field rhythm so a multi-field slope condition breathes like the rest of the form. */
+.watch-cond {
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+}
+/* The per-min / per-sec unit is a button (clickable to switch), so lift it out of the faint
+   static-unit look into a small interactive pill. */
+.watch-unit-toggle {
+   padding: 0.16rem 0.4rem;
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--accent) 8%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+   transition: border-color 120ms ease, color 120ms ease;
+}
+.watch-unit-toggle:hover {
+   color: var(--text);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* Inline validation (e.g. a slope watch needs a positive rate) - warm, quiet, above Save. */
+.watch-modal-err {
+   min-height: 1em;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--alert-glow);
+}
+/* When empty, drop out of the flex flow entirely so it adds no gap between the condition and
+   Notify rows (a zero-height flex child still contributes the column gap on both sides). */
+.watch-modal-err:empty {
+   display: none;
 }
 .watch-modal-actions {
    display: flex;

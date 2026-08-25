@@ -19,7 +19,7 @@
  * is user/LLM-authorable through the `attention` tool, so treat it as untrusted.
  */
 
-import type { WatchItem, WatchesStatus, WatchesSink, WatchCatalogEntry, WatchReading } from "../ingest/ingest.ts";
+import type { WatchItem, WatchesStatus, WatchesSink, WatchCatalogEntry, WatchReading, WatchFields } from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
@@ -44,8 +44,8 @@ export interface WatchesPanelOpts {
    /* Phase-2 CRUD (deliberate user actions). `onAdd` starts watching a metric (defaults);
       `onUpdate` sends the full field state of an existing watch; `onRemove` is only ever
       reached from the confirm-gated gesture here. Optional so Phase-1 hosts still work. */
-   onAdd?(metric: string): void;
-   onUpdate?(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void;
+   onAdd?(metric: string, fields: WatchFields): void;
+   onUpdate?(id: number, fields: WatchFields): void;
    onRemove?(id: number): void;
    /* Is the DAWN link usable right now? When not, the flip is neither sent nor shown
       (it would lie), and `notify` says why. Optional -> treated as always-live. */
@@ -75,13 +75,33 @@ function withUnit(v: number, unit: string): string {
    return n && unit ? `${n} ${unit}` : n;
 }
 
+/* The row title: the watch's own name (a metric can now hold several named watches - a min
+   and a max, tiers - so the name is what tells them apart), falling back to the catalog label
+   then the metric key on an older server that sends no name. */
+function rowTitle(w: WatchItem): string {
+   return w.name.trim() || w.label || w.metric;
+}
+
+/* A slope rate, in the metric's units per minute ("2 °C/min", "40 /min" for a unitless
+   count). Per-minute is the wire's canonical unit. */
+function rateText(v: number, unit: string): string {
+   const n = fmtNum(v);
+   if (!n) return "-";
+   return unit ? `${n} ${unit}/min` : `${n}/min`;
+}
+
 /* "What this watch does", one line. */
 function conditionText(w: WatchItem): string {
    if (w.ruleType === "absence") {
       return `Alerts if silent over ${w.absenceAfterSec}s`;
    }
+   if (w.ruleType === "slope") {
+      const rate = typeof w.slopePerMin === "number" ? rateText(w.slopePerMin, w.unit) : "-";
+      const dir = w.direction === "falling" ? "falling" : "rising";
+      return `Alerts when ${dir} ${rate}`;
+   }
    const thr = typeof w.threshold === "number" ? withUnit(w.threshold, w.unit) : "-";
-   const dir = w.direction === "below" ? "below" : w.direction === "rising" ? "rising past" : "above";
+   const dir = w.direction === "below" ? "below" : "above";
    return `Alerts when ${dir} ${thr}`;
 }
 
@@ -149,7 +169,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
    /* --- state ------------------------------------------------------------- */
    let watches: WatchItem[] = [];
    let catalog: WatchCatalogEntry[] = []; // watchable metrics (Phase-2 add picker)
-   let pendingEditMetric = ""; // just-added metric: open its edit form when the re-list arrives
+   let destroyed = false; // set in destroy(); guards the deferred create-modal open below
    let status: WatchesStatus = { ok: true, attentionEnabled: true };
    let loaded = false; // suppress the transition-spike on the first list
    let changed = new Set<number>(); // watch ids whose enabled / has-reading flipped this list
@@ -200,7 +220,11 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       return keys.map((family) => ({
          family,
          label: FAMILY_LABELS[family] ?? family.charAt(0).toUpperCase() + family.slice(1),
-         items: (groups.get(family) as WatchItem[]).sort((a, b) => a.label.localeCompare(b.label) || a.id - b.id)
+         /* Cluster watches on the same metric together (a min + a max sit adjacent), then by
+            title, then id for a stable order. */
+         items: (groups.get(family) as WatchItem[]).sort(
+            (a, b) => a.metric.localeCompare(b.metric) || rowTitle(a).localeCompare(rowTitle(b)) || a.id - b.id
+         )
       }));
    };
 
@@ -227,20 +251,40 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       });
    };
 
-   /* Add: a catalog picker of not-yet-watched metrics (grouped label prefix). Choosing one
-      adds it with defaults, then we drop into its edit form when the re-list lands, so the
-      user can set the threshold immediately (no-backend add-then-edit). */
+   /* Build a blank watch to seed the create modal, from the catalog entry's natural rule shape
+      + default condition. Nothing is written until the user hits Save (id 0 = not yet created). */
+   const seedWatch = (c: WatchCatalogEntry): WatchItem => {
+      const isAbsence = c.ruleType === "absence";
+      return {
+         id: 0,
+         name: "",
+         metric: c.key,
+         label: c.label,
+         unit: c.unit,
+         ruleType: c.ruleType ?? "threshold",
+         direction: c.defaultDirection ?? "above",
+         threshold: isAbsence ? undefined : c.defaultThreshold,
+         absenceAfterSec: isAbsence ? c.defaultThreshold ?? 120 : 0,
+         notify: "alert",
+         enabled: true,
+         named: false,
+         source: c.key.split(".")[0],
+         hasCurrent: false
+      };
+   };
+
+   /* Add: a catalog picker of every watchable metric (grouped label prefix). A metric can hold
+      several named watches now (min + max, tiers), so the list is NOT filtered by what's already
+      watched. Choosing one opens a blank create modal seeded from the catalog defaults; the watch
+      is written only on Save (Cancel leaves nothing behind - no stray default watch). */
    const openAdd = (): void => {
-      const watched = new Set(watches.map((w) => w.metric));
-      const choices = catalog
-         .filter((c) => !watched.has(c.key))
-         .map((c) => {
-            const fam = c.key.split(".")[0];
-            const famLabel = fam === "stat" ? "System" : fam === "suit" ? "Suit" : fam === "component" ? "Components" : fam;
-            return { label: `${famLabel} · ${c.label}`, value: c.key };
-         });
+      const choices = catalog.map((c) => {
+         const fam = c.key.split(".")[0];
+         const famLabel = fam === "stat" ? "System" : fam === "suit" ? "Suit" : fam === "component" ? "Components" : fam;
+         return { label: `${famLabel} · ${c.label}`, value: c.key };
+      });
       if (choices.length === 0) {
-         openDialog({ title: "Add a watch", sub: "Everything in the catalog is already watched." });
+         openDialog({ title: "Add a watch", sub: "No watchable metrics available." });
          return;
       }
       openDialog({
@@ -248,8 +292,19 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          sub: "Pick a metric to watch.",
          choices,
          onChoose: (metric) => {
-            pendingEditMetric = metric;
-            opts.onAdd?.(metric);
+            const c = catalog.find((x) => x.key === metric);
+            if (!c) return;
+            /* Defer so the picker dialog fully closes first (it restores focus after onChoose);
+               the create modal then opens last and keeps focus. Guard against the panel being
+               torn down between the click and the microtask. */
+            queueMicrotask(() => {
+               if (destroyed) return;
+               openEditWatch({
+                  watch: seedWatch(c),
+                  isNew: true,
+                  onSave: (fields) => opts.onAdd?.(metric, fields)
+               });
+            });
          }
       });
    };
@@ -294,21 +349,25 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       const dot = document.createElement("span");
       dot.className = "watches-dot";
 
+      /* Title spans the full row width on its own line (reads as a title); the condition and
+         the live "now" reading share the line beneath it. */
       const main = document.createElement("div");
       main.className = "watches-row-main";
       const name = document.createElement("span");
       name.className = "watches-row-name";
-      name.textContent = w.label || w.metric; // catalog label; DAWN string -> textContent
+      name.textContent = rowTitle(w); // watch name (or label fallback); DAWN string -> textContent
+      const detail = document.createElement("div");
+      detail.className = "watches-row-detail";
       const cond = document.createElement("span");
       cond.className = "watches-row-cond";
       cond.textContent = conditionText(w);
-      main.append(name, cond);
-
       const reading = document.createElement("span");
       reading.className = "watches-row-current";
       reading.textContent = currentText(w);
+      detail.append(cond, reading);
+      main.append(name, detail);
 
-      row.append(dot, main, reading, buildToggle(w));
+      row.append(dot, main, buildToggle(w));
       /* Click the row (anywhere but the toggle, which stops propagation) to edit it. */
       row.classList.add("editable");
       row.addEventListener("click", () => openEdit(w));
@@ -439,17 +498,15 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          watches = next;
          catalog = cat;
          render();
-         /* add-then-edit: a metric we just added has now appeared - open its edit form so the
-            user can set the threshold (the fresh row carries the resolved rule_type/values). */
-         if (pendingEditMetric) {
-            const justAdded = watches.find((w) => w.metric === pendingEditMetric);
-            pendingEditMetric = "";
-            if (justAdded) openEdit(justAdded);
-         }
       },
       setStatus: (s) => {
+         /* A list poll calls setWatches (which may have just built the discrete-transition
+            spike rows) then setStatus back-to-back in the same tick. Re-rendering here on an
+            UNCHANGED status would replaceChildren and discard those spike rows before they
+            paint - so only render when the status actually changed. */
+         const same = status.ok === s.ok && status.attentionEnabled === s.attentionEnabled && status.error === s.error;
          status = s;
-         render();
+         if (!same) render();
       },
       /* Patch the live readings in place - update the number + the no-reading dim per row,
          no re-render (the rule structure is unchanged, and values must not spike). A row in
@@ -481,6 +538,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       isVisible: vis.isVisible,
       setVisible,
       destroy: () => {
+         destroyed = true;
          opts.onReadingsSubscribe?.(false); // stop the stream when the panel goes away
          closeWatchModal(); // an open edit form must not outlive the panel (HMR)
          refreshBtn.removeEventListener("click", onRefreshClick);
