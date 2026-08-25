@@ -11,6 +11,13 @@ export function onActivate(el: HTMLElement, fn: (e: Event) => void): () => void 
 
    const onClick = (e: Event): void => fn(e);
    const onKey = (e: KeyboardEvent): void => {
+      /* Don't hijack Space/Enter typed into a nested editable (e.g. an inline-rename input
+         inside an activatable row): the keystroke bubbles up here, and a preventDefault would
+         eat the space or fire the row action mid-edit. Let the editable have its own keys. */
+      const t = e.target as HTMLElement | null;
+      if (t && t !== el && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) {
+         return;
+      }
       if (e.key === "Enter" || e.key === " ") {
          e.preventDefault();
          fn(e);
