@@ -1976,7 +1976,9 @@ export class DawnIngest implements Ingest {
                tone: alert ? "attention" : "nominal",
                hold: alert ? 9 : 6,
                persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
-               x: -0.62,
+               /* Spawn centered, in the reactor's full-height dead strip: docked panels are kept
+                  in the left/right columns flanking it, so a centered notice avoids them. */
+               x: 0,
                y: -0.42
             });
             break;
@@ -1990,7 +1992,8 @@ export class DawnIngest implements Ingest {
             const note = String(p.note ?? "");
             this.spikeNotice(`observation:${category}:${note}`, category, note, {
                hold: 5,
-               x: -0.62,
+               /* Centered in the dead strip too (see attention_alert), just lower. */
+               x: 0,
                y: 0.42
             });
             break;
