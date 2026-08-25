@@ -1,0 +1,253 @@
+/*
+ * Watches board. DAWN's SAGE proactive-alert rules in the same machined/frosted language
+ * as the Home Assistant board: standalone + grab-to-move, grouped by source, each row a
+ * metric with its condition, live reading, and an enable toggle. Phosphor tokens only.
+ * An armed (enabled) watch reads lit; a disabled one recedes to hollow; a watch with no
+ * live reading dims (nothing trustworthy to show).
+ */
+
+.watches {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   cursor: default; /* body is interactive; only the header drags */
+}
+.watches.movable-dragging {
+   cursor: grabbing;
+}
+.watches.watches-off {
+   display: none;
+}
+.watches .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Header (the drag handle): title + status line + a manual-refresh glyph. */
+.watches-head {
+   display: flex;
+   align-items: baseline;
+   gap: 0.6rem;
+   cursor: grab;
+}
+.watches.movable-dragging .watches-head {
+   cursor: grabbing;
+}
+.watches-title {
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.watches-status {
+   flex: 1 1 auto;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+/* The manual-refresh button styling is shared: .panel-refresh in styles/panels.css. */
+
+.watches-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.12rem;
+}
+
+.watches-empty {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   padding: 0.4rem 0;
+}
+/* System-attention-off note: warm, because it means nothing will fire. */
+.watches-disarmed {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--warn);
+   padding: 0.15rem 0 0.35rem;
+}
+.watches-stale {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   padding: 0.15rem 0 0.35rem;
+}
+
+/* Group section header (source): a quiet uppercase label that doubles as a collapse toggle. */
+.watches-group {
+   display: flex;
+   align-items: center;
+   gap: 0.4rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+   margin-top: 0.4rem;
+   padding-bottom: 0.12rem;
+   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+   cursor: pointer;
+   user-select: none;
+   transition: color 140ms ease;
+}
+.watches-group:first-child {
+   margin-top: 0;
+}
+.watches-group:hover {
+   color: var(--text);
+}
+.watches-group:focus-visible {
+   outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+   outline-offset: 2px;
+}
+.watches-group-chevron {
+   flex: 0 0 auto;
+   width: 0.6em;
+   color: color-mix(in srgb, var(--accent) 55%, var(--text-dim));
+   transition: transform 140ms ease;
+}
+.watches-group-chevron::before {
+   content: "\25BE"; /* ▾ */
+}
+.watches-group.collapsed .watches-group-chevron {
+   transform: rotate(-90deg);
+}
+.watches-group-label {
+   flex: 1 1 auto;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.watches-group-count {
+   flex: 0 0 auto;
+   font-size: var(--fs-nano);
+   letter-spacing: 0.04em;
+   color: var(--accent-glow);
+   padding: 0 0.3em;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* Row: dot | (name + condition) | live reading | toggle. */
+.watches-row {
+   display: grid;
+   grid-template-columns: 8px 1fr auto auto;
+   align-items: center;
+   column-gap: 0.55rem;
+   padding: 0.16rem 0;
+   border-radius: 4px;
+}
+.watches-dot {
+   width: 7px;
+   height: 7px;
+   border-radius: 50%;
+   /* Disabled watch: a hollow, faint ring. */
+   background: transparent;
+   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.watches-row.armed .watches-dot {
+   /* Armed (enabled): a filled, lit dot. */
+   background: var(--accent);
+   box-shadow: 0 0 6px color-mix(in srgb, var(--accent-glow) 65%, transparent);
+}
+.watches-row-main {
+   display: flex;
+   flex-direction: column;
+   min-width: 0;
+}
+.watches-row-name {
+   font-size: var(--fs-label);
+   color: var(--text);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.watches-row-cond {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.03em;
+   color: var(--text-faint);
+   /* Wrap to the full sentence rather than truncate - the condition is the useful bit. */
+   overflow-wrap: anywhere;
+}
+.watches-row-current {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
+.watches-row.armed .watches-row-current {
+   color: var(--accent-glow);
+}
+/* No live reading (hardware not reporting): the row recedes - no trustworthy value. */
+.watches-row.no-reading {
+   opacity: 0.45;
+}
+
+/* Enable/disable toggle (same switch as the HA board). */
+.watches-toggle {
+   justify-self: end;
+   position: relative;
+   width: 30px;
+   height: 16px;
+   padding: 0;
+   border: none;
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--accent) 14%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+   cursor: pointer;
+   transition: background 160ms ease, box-shadow 160ms ease;
+}
+.watches-toggle::after {
+   content: "";
+   position: absolute;
+   top: 2px;
+   left: 2px;
+   width: 12px;
+   height: 12px;
+   border-radius: 50%;
+   background: color-mix(in srgb, var(--text-faint) 85%, transparent);
+   transition: transform 160ms ease, background 160ms ease;
+}
+.watches-toggle.on {
+   background: color-mix(in srgb, var(--accent) 42%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+      0 0 8px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+}
+.watches-toggle.on::after {
+   transform: translateX(14px);
+   background: var(--accent-glow);
+}
+
+/* Spike on a discrete transition (enable flip / reading appearing), never on the value. */
+.watches-row.watches-changed {
+   animation: watches-row-spike 2s ease-out;
+}
+@keyframes watches-row-spike {
+   0% {
+      background: color-mix(in srgb, var(--accent) 32%, transparent);
+   }
+   100% {
+      background: transparent;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .watches-row.watches-changed {
+      animation: none;
+   }
+}

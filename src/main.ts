@@ -27,6 +27,7 @@ import "./styles/list-card.css";
 import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
+import "./styles/watches.css";
 import "./styles/library.css";
 import "./styles/docview.css";
 import "./styles/context.css";
@@ -58,6 +59,7 @@ import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
+import { mountWatchesPanel } from "./watches/watches-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
@@ -182,6 +184,20 @@ const haPanel = mountHAPanel(stage, {
    notify: (m) => dawn.notifyUser(m)
 });
 
+/* The Watches board: DAWN's SAGE proactive-alert rules (what it's watching + live readings),
+   the config side of the attention notices. The ingest polls watch_list (no push); the enable
+   toggle is a benign per-watch flip (watch_set_enabled), gated on liveness like the HA board.
+   The global attention flag is display-only (toggling it is out of the read-mostly charter). */
+const watchesPanel = mountWatchesPanel(stage, {
+   onRefresh: () => ingest.requestWatches(),
+   onToggle: (id, enabled) => ingest.setWatchEnabled(id, enabled),
+   /* Opt the 1 Hz live-readings stream in/out with the panel's visibility (subscribe-gated
+      server-side, so DAWN only streams while the board is on screen). */
+   onReadingsSubscribe: (enabled) => ingest.watchReadingsSubscribe(enabled),
+   isLive: () => dawn.isLinkLive(),
+   notify: (m) => dawn.notifyUser(m)
+});
+
 /* The Library panel: a standalone movable view listing DAWN's notes + documents, opening
    any item in a large centered reading overlay. Read-only; the ingest polls doc_library_list
    and the panel fetches a document's original through the ingest (never DAWN directly). */
@@ -277,6 +293,7 @@ const menu = mountMenu(stage, {
          .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
       { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
+      { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "context", label: "Context", enabled: contextPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
@@ -287,6 +304,7 @@ const menu = mountMenu(stage, {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
+      else if (id === "watches") watchesPanel.setVisible(!watchesPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
       else if (id === "clock") hud.clock.setVisible(!hud.clock.isVisible());
@@ -528,6 +546,7 @@ ingest.start({
    music: musicPlayer,
    calendar: calendarPanel,
    ha: haPanel,
+   watches: watchesPanel,
    library: libraryPanel,
    context: contextPanel,
    notifications,
@@ -617,6 +636,7 @@ function dispose(): void {
    musicPlayer.destroy();
    calendarPanel.destroy();
    haPanel.destroy();
+   watchesPanel.destroy();
    libraryPanel.destroy();
    contextPanel.destroy();
    conversationPicker.destroy();

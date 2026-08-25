@@ -31,7 +31,7 @@ ingest  ->  state  ->  choreography  ->  render
 
 - **ingest** (`src/ingest/`) is the single boundary to DAWN. An `Ingest` implementation
   feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
-  HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar,
+  HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar, watches,
   Home Assistant, library, context, notifications, conversation list). `StubIngest` (fake data) and
   `DawnIngest` (the real WebSocket client) are interchangeable; swapping DAWN in is one
   line in `main.ts`.
@@ -145,6 +145,7 @@ src/
   music/             the movable music player view
   calendar/          the movable calendar card
   homeassistant/     the movable Home Assistant board
+  watches/           the movable Watches board (SAGE proactive-alert rules + live readings)
   audio/             TTS playback + FFT tap to the reactor
   hud/               clock + telemetry readout (both movable + Panels-menu toggleable)
   menu/              top menu: panels, display, model, system

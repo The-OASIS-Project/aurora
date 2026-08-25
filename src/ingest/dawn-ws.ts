@@ -39,7 +39,8 @@ import type {
    MusicTrack,
    OutImage,
    UploadedDoc,
-   UploadedImage
+   UploadedImage,
+   WatchItem
 } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import { TtsPlayback } from "../audio/tts.ts";
@@ -375,6 +376,27 @@ function toHAEntity(e: Record<string, unknown>): HAEntity {
    };
 }
 
+/* A watch_list watch object -> our WatchItem. `threshold`/`current` are optional on the wire
+   (omitted when non-finite), so read them independently rather than off `has_current`. */
+function toWatchItem(w: Record<string, unknown>): WatchItem {
+   return {
+      id: Number(w.id ?? 0),
+      name: String(w.name ?? ""),
+      metric: String(w.metric ?? ""),
+      label: String(w.label ?? w.metric ?? ""),
+      unit: String(w.unit ?? ""),
+      ruleType: String(w.rule_type ?? "threshold"),
+      direction: String(w.direction ?? "above"),
+      threshold: typeof w.threshold === "number" ? w.threshold : undefined,
+      absenceAfterSec: Number(w.absence_after_sec ?? 0),
+      notify: String(w.notify ?? ""),
+      enabled: w.enabled === true,
+      source: String(w.source ?? ""),
+      hasCurrent: w.has_current === true,
+      current: typeof w.current === "number" ? w.current : undefined
+   };
+}
+
 /* DAWN's conversation history and transcripts carry raw Anthropic content blocks: a tool
    call is an assistant turn whose `content` is a `[{type:"tool_use",...}]` array (as a JSON
    string), and a tool result is a `user` turn holding `[{type:"tool_result",...}]`. Those
@@ -487,6 +509,8 @@ export class DawnIngest implements Ingest {
       { resolve: (v: { text: string; filename: string; filetype: string } | null) => void; timer: number }
    >();
    private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
+   private watchTimer = 0; // polls watch_list (no push exists); refreshes the rule structure
+   private watchReadingsWanted = false; // Watches panel visible -> subscribe to the 1 Hz gauge stream
    /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
       realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
       re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
@@ -731,6 +755,17 @@ export class DawnIngest implements Ingest {
          this.send({ type: "ha_list_entities" });
          window.clearInterval(this.haTimer);
          this.haTimer = window.setInterval(() => this.send({ type: "ha_refresh_entities" }), 30000);
+         /* SAGE watches (the Watches panel): the rule list + live readings. Poll-only (no
+            push - a watch FIRING arrives as an attention notice), so re-list on a slow
+            backstop to refresh the readings. A read; the panel's toggle is the only write. */
+         this.send({ type: "watch_list" });
+         window.clearInterval(this.watchTimer);
+         this.watchTimer = window.setInterval(() => this.send({ type: "watch_list" }), 30000);
+         /* Re-arm the live-gauge stream if the panel wanted it before this (re)connect - the
+            subscription is per-connection and lost on reconnect. */
+         if (this.watchReadingsWanted) {
+            this.send({ type: "watch_readings_subscribe", payload: { enabled: true } });
+         }
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
@@ -1782,6 +1817,67 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "watch_list_response": {
+            /* The SAGE watch rules + live readings (Watches panel). A FAILED list carries no
+               watches/catalog/attention_enabled, so surface a status error and keep the last
+               rows rather than rendering an empty list (which would read as "nothing watched").
+               Watch strings (label/name/unit/source) are bound via textContent downstream. */
+            if ((p as { success?: boolean }).success === false) {
+               this.sinks.watches.setStatus({
+                  ok: false,
+                  attentionEnabled: false,
+                  error: typeof (p as { error?: string }).error === "string" ? (p as { error?: string }).error : "Couldn't list watches"
+               });
+               break;
+            }
+            const rows = (p.watches ?? []) as Array<Record<string, unknown>>;
+            const catalog = ((p.catalog ?? []) as Array<Record<string, unknown>>).map((c) => ({
+               key: String(c.key ?? ""),
+               label: String(c.label ?? c.key ?? ""),
+               unit: String(c.unit ?? "")
+            }));
+            this.sinks.watches.setWatches(rows.map(toWatchItem), catalog);
+            this.sinks.watches.setStatus({
+               ok: true,
+               attentionEnabled: (p as { attention_enabled?: boolean }).attention_enabled === true
+            });
+            break;
+         }
+
+         case "watch_set_enabled_response": {
+            /* A benign toggle ack. On failure surface the reason; either way re-list so the
+               panel reflects the server-authoritative truth (mirrors the HA reconcile). */
+            if ((p as { success?: boolean }).success === false) {
+               const err = (p as { error?: string }).error;
+               console.warn("[dawn] watch_set_enabled failed:", err);
+               this.spikeNotice("watch-toggle", "attention", err || "Couldn't update the watch", {
+                  tone: "attention",
+                  hold: 6,
+                  x: 0,
+                  y: -0.55
+               });
+            }
+            this.send({ type: "watch_list" });
+            break;
+         }
+
+         case "watch_readings": {
+            /* The ~1 Hz live-gauge stream (only while subscribed + SAGE attention is on).
+               Patch just the volatile values onto the existing rows - no re-list, no spike. */
+            const readings = (p.readings ?? []) as Array<Record<string, unknown>>;
+            this.sinks.watches.setReadings(
+               readings.map((r) => ({
+                  id: Number(r.id ?? 0),
+                  hasCurrent: r.has_current === true,
+                  current: typeof r.current === "number" ? r.current : undefined
+               }))
+            );
+            break;
+         }
+
+         case "watch_readings_subscribe_response":
+            break; // just an ack; the readings frames are what matter
+
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
             this.jobs.clear();
@@ -2353,6 +2449,31 @@ export class DawnIngest implements Ingest {
             ...(call.data ? { data: call.data } : {})
          }
       });
+   }
+
+   /* Re-list the SAGE watches (Watches panel manual refresh / poll). Read-only. */
+   requestWatches(): void {
+      this.send({ type: "watch_list" });
+   }
+
+   /* Toggle one watch on/off. A benign per-watch flip (the sanctioned deliberate-user-action
+      class, like set_pinned); the server reconciles via the re-list in watch_set_enabled_response.
+      Blocked on a dead link so the panel doesn't flip a state that never took (like haControl). */
+   setWatchEnabled(id: number, enabled: boolean): void {
+      if (!this.isLinkLive()) {
+         this.notifyUser("Not connected to DAWN - change not sent.");
+         return;
+      }
+      this.send({ type: "watch_set_enabled", payload: { id, enabled } });
+   }
+
+   /* Opt into / out of the 1 Hz watch_readings gauge stream (driven off panel visibility).
+      Track the intent so a reconnect re-subscribes (the subscription is per-connection); the
+      onopen handler replays it. `send` is a no-op when the socket is down, which is fine -
+      the intent is remembered and re-sent on connect. */
+   watchReadingsSubscribe(enabled: boolean): void {
+      this.watchReadingsWanted = enabled;
+      this.send({ type: "watch_readings_subscribe", payload: { enabled } });
    }
 
    getMusicAudio(): MusicAudio {
@@ -2984,6 +3105,7 @@ export class DawnIngest implements Ingest {
       window.clearInterval(this.calendarTimer);
       window.clearTimeout(this.calendarDebounce);
       window.clearInterval(this.haTimer);
+      window.clearInterval(this.watchTimer);
    }
 
    /* A notification card. Handed to the notification layer, which owns its life: it

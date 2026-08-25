@@ -246,6 +246,63 @@ export interface HASink {
    setStatus(status: HAStatus): void;
 }
 
+/* One SAGE watch (a proactive-alert rule), a camelCased mirror of DAWN's watch_list
+   watch object, enriched with the catalog label/unit and a live reading. `ruleType` is
+   left a plain string (DAWN can emit threshold|slope|absence|match; only two are used
+   today) so an unknown kind renders generically. `current` is guarded independently of
+   `hasCurrent` (DAWN omits it when the reading is non-finite even if hasCurrent). */
+export interface WatchItem {
+   id: number;
+   name: string;
+   metric: string;
+   label: string; // catalog label, e.g. "system temperature"
+   unit: string; // literal UTF-8 on the wire ("°C", "%", "ppm", "" for counts)
+   ruleType: string; // "threshold" | "absence" | ...
+   direction: string; // "above" | "below" | "rising"
+   threshold?: number; // omitted when non-finite
+   absenceAfterSec: number;
+   notify: string; // "alert" | "ambient" | "digest"
+   enabled: boolean;
+   source: string; // source_tag, the group key: "stat" | "suit" | "component" | ...
+   hasCurrent: boolean;
+   current?: number;
+}
+
+/* A watchable metric (powers the Phase-2 add modal). The wire catalog is key/label/unit
+   only - no rule_type or defaults. */
+export interface WatchCatalogEntry {
+   key: string;
+   label: string;
+   unit: string;
+}
+
+/* List outcome, so the panel shows a real "couldn't list" state instead of an empty one
+   (a failed watch_list_response carries no watches/catalog/attention_enabled), and the
+   display-only armed/disarmed flag. */
+export interface WatchesStatus {
+   ok: boolean; // the last watch_list succeeded
+   attentionEnabled: boolean; // global SAGE attention flag - DISPLAY ONLY (not togglable here)
+   error?: string;
+}
+
+/* One live reading from the ~1 Hz watch_readings stream: just the volatile value, keyed by
+   watch id. `current` omitted when non-finite/absent (hasCurrent:false). */
+export interface WatchReading {
+   id: number;
+   hasCurrent: boolean;
+   current?: number;
+}
+
+export interface WatchesSink {
+   /* Full watch set + the metric catalog (success path). */
+   setWatches(watches: WatchItem[], catalog: WatchCatalogEntry[]): void;
+   /* List status + armed/disarmed; on failure keeps the last rows and shows the error. */
+   setStatus(status: WatchesStatus): void;
+   /* Patch just the live readings (from the watch_readings stream) onto the existing rows -
+      updates the numbers in place, no re-render of the rule structure. */
+   setReadings(readings: WatchReading[]): void;
+}
+
 /* A transient attention card: a proactive alert, a ringing alarm, a job/observation
    toast. `tone:"attention"` is the warm needs-you channel. `persist` marks a needs-you
    notice that settles to a quiet float instead of auto-dismissing when left unsnapped.
@@ -358,6 +415,7 @@ export interface IngestSinks {
    music: MusicSink;
    calendar: CalendarSink;
    ha: HASink;
+   watches: WatchesSink;
    library: LibrarySink;
    context: ContextSink;
    notifications: NotificationsSink;
@@ -430,6 +488,17 @@ export interface Ingest {
       ha_call_service to DAWN (signal-map §9.4 #8), a Tier-C write treated like music
       transport. The server reconciles by broadcasting fresh state. See DawnIngest.haControl. */
    haControl(call: HAServiceCall): void;
+   /* Re-request the SAGE watch list (watch_list). Poll-only - there is no push; a watch
+      FIRING arrives via the attention_alert / silent_observation notices instead. */
+   requestWatches(): void;
+   /* Enable/disable one watch (watch_set_enabled): a benign per-watch flip, the sanctioned
+      deliberate-user-action class (like set_pinned). The server reconciles via a re-list.
+      Blocked (with a notice) on a dead link, like haControl. */
+   setWatchEnabled(id: number, enabled: boolean): void;
+   /* Opt into (or out of) the ~1 Hz watch_readings live-gauge stream. Driven off Watches
+      panel visibility: subscribe when shown, unsubscribe when hidden - so DAWN only pushes
+      readings when a client is actually looking. Re-subscribed on reconnect if still wanted. */
+   watchReadingsSubscribe(enabled: boolean): void;
    /* --- Conversation picker (request/response). listConversations paginates; searchConversations
       filters (title, or message content when `content`). loadConversation / newConversation are
       the already-sanctioned reads/opens. rename / delete / setPinned are deliberate, user-initiated

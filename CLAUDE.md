@@ -32,7 +32,11 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   `always_on_disable` to arm/disarm DAWN's server-side VAD + wake word - all user-initiated
   conversation input, the same sanctioned class as chat submit), and the conversation
   picker's management verbs (`rename_conversation`, `set_pinned`, and the confirm-gated
-  **`delete_conversation`**). Rename and pin are benign metadata flips like `set_private`;
+  **`delete_conversation`**), and the **Watches panel**'s `watch_set_enabled` (a benign
+  per-watch enable/disable flip, same class as `set_pinned`; Phase 2 will add the
+  confirm-gated `watch_add`/`watch_update`/`watch_remove` CRUD). The SAGE **global attention
+  flag is display-only** in Aurora - toggling it is a `set_config` (admin/global), over the
+  read-mostly line. Rename and pin are benign metadata flips like `set_private`;
   **delete is the one write that permanently destroys DAWN-side data** (it cascade-deletes
   the conversation's images + child background jobs and refuses on a running job), so it is
   gated behind a named, cascade-explicit confirm dialog and only ever reachable from a

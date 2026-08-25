@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -53,6 +53,7 @@ export class StubIngest implements Ingest {
       this.sinks = sinks;
       this.seed(sinks.store);
       this.seedLibrary();
+      this.requestWatches(); // populate the Watches panel offline
       this.startPanelEvents();
       this.startTelemetry();
       this.startReactorDemo();
@@ -88,6 +89,44 @@ export class StubIngest implements Ingest {
    /* No Home Assistant behind the stub (the HA board stays "not configured"). */
    refreshHA(): void {}
    haControl(): void {}
+
+   /* A fake SAGE watch set so the Watches panel is exercised offline (stat/suit/component,
+      mixed enabled, one with no live reading, one absence rule). */
+   private fakeWatches: WatchItem[] = [
+      { id: 1, name: "", metric: "stat.system_temp", label: "system temperature", unit: "°C", ruleType: "threshold", direction: "above", threshold: 80, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 61 },
+      { id: 2, name: "", metric: "stat.battery.soc", label: "battery level", unit: "%", ruleType: "threshold", direction: "below", threshold: 15, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 88 },
+      { id: 3, name: "", metric: "stat.cpu_usage", label: "CPU usage", unit: "%", ruleType: "threshold", direction: "above", threshold: 90, absenceAfterSec: 0, notify: "ambient", enabled: false, source: "stat", hasCurrent: true, current: 34 },
+      { id: 4, name: "", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1500, absenceAfterSec: 0, notify: "alert", enabled: true, source: "suit", hasCurrent: false },
+      { id: 5, name: "", metric: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", direction: "above", absenceAfterSec: 120, notify: "alert", enabled: true, source: "component", hasCurrent: true, current: 3 }
+   ];
+   requestWatches(): void {
+      this.sinks.watches.setWatches([...this.fakeWatches], []);
+      this.sinks.watches.setStatus({ ok: true, attentionEnabled: true });
+   }
+   setWatchEnabled(id: number, enabled: boolean): void {
+      const w = this.fakeWatches.find((x) => x.id === id);
+      if (w) w.enabled = enabled;
+      this.requestWatches();
+   }
+   private watchReadingsTimer = 0;
+   /* Fake 1 Hz gauge: jitter the fake readings so the panel visibly ticks offline. */
+   watchReadingsSubscribe(enabled: boolean): void {
+      window.clearInterval(this.watchReadingsTimer);
+      this.watchReadingsTimer = 0;
+      if (!enabled) return;
+      this.watchReadingsTimer = window.setInterval(() => {
+         const readings = this.fakeWatches.map((w) => {
+            if (!w.hasCurrent || typeof w.current !== "number") {
+               return { id: w.id, hasCurrent: w.hasCurrent, current: w.current };
+            }
+            const span = w.unit === "%" || w.unit === "°C" ? 1.2 : w.ruleType === "absence" ? 1 : 6;
+            const next = Math.max(0, w.current + (Math.random() - 0.5) * span);
+            w.current = next;
+            return { id: w.id, hasCurrent: true, current: Math.round(next * 10) / 10 };
+         });
+         this.sinks.watches.setReadings(readings);
+      }, 1000);
+   }
 
    /* --- Conversation picker (fake data so offline dev shows the panel) ------- */
    listConversations(_opts: { limit: number; offset: number }): void {
@@ -185,6 +224,8 @@ export class StubIngest implements Ingest {
    stop(): void {
       this.intervals.forEach((t) => window.clearInterval(t));
       this.timeouts.forEach((t) => window.clearTimeout(t));
+      window.clearInterval(this.watchReadingsTimer);
+      this.watchReadingsTimer = 0;
       this.intervals = [];
       this.timeouts = [];
    }

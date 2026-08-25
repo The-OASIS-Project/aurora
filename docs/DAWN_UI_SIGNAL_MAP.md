@@ -788,6 +788,39 @@ Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin pane
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
 channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
 
+### 9.8 Watches panel (SAGE watch rules) - consumed 2026-08-24 (Phase 1)
+
+The Watches board (`src/watches/`) parallels the HA board over the SAGE watch API. Verified
+against `dawn/src/webui/webui_attention.c` + `attention_catalog.c`.
+
+- **Read (poll):** `{type:"watch_list"}` → `watch_list_response` `{success, error?,
+  attention_enabled, watches[], catalog[]}`. **Poll-only - no push**; a watch *firing* arrives
+  via `attention_alert` / `silent_observation` (already consumed). Each `watches[]` row carries
+  `id/name/metric/label/unit/rule_type/direction/threshold?/absence_after_sec/notify/enabled/
+  source/has_current/current?` - `threshold`/`current` are omitted when non-finite (read
+  independently of `has_current`); `unit` is literal UTF-8 (`°C`). A **failed** list carries
+  `{success:false, error}` ONLY (no watches/catalog/attention_enabled) - the panel keeps the
+  last rows + shows the error, never an empty state. `catalog[]` is `{key,label,unit}` only (no
+  `rule_type`/defaults - a Phase-2 gap; see below). Ingest polls it on connect + a 30s backstop.
+- **Write (Phase 1):** `watch_set_enabled {id, enabled}` → `watch_set_enabled_response
+  {success, error?}`. A **benign per-watch flip** (sanctioned deliberate-user-action class, like
+  `set_pinned`); gated on link-liveness, and the ingest re-lists on the response to reconcile
+  (server-authoritative). Grouped in the panel by **metric family** (the `metric` key prefix:
+  `stat.*`/`suit.*`/`component.*` → System/Suit/Components), NOT the watch `source` tag (that is
+  provenance - seed/other).
+- **Display-only:** `attention_enabled` = DAWN's GLOBAL `g_config.attention.enabled`. The panel
+  surfaces a disarmed note ("enable in DAWN settings") but never toggles it - that is a
+  `set_config`, over the read-mostly line. (Matches the backend author's intent, per the
+  `webui_attention.c` comment.)
+- **Phase 2 (planned):** `watch_add {metric, direction?, threshold?, notify?}` (one-watch-per-
+  metric upsert - sends FULL field state to avoid clobbering catalog-default resets),
+  `watch_update {id, ...}`, and confirm-gated `watch_remove {id}`. Needs the catalog to carry
+  `rule_type` + defaults (a small backend ask) OR a no-backend add-then-edit flow. `absence`
+  watches DO take a `threshold` override (it maps to `absence_after_sec`, 0..604800). Max 64
+  watches/user (`SAGE_MAX_WATCHES_PER_USER`).
+- **Backend-doc gap:** the whole `watch_*` family is **absent from `WEBSOCKET_PROTOCOL.md`**
+  (same class as the `doc_library_*` gap in §9.5) - flag to the protocol-doc owner.
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
