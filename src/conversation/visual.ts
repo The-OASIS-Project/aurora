@@ -140,9 +140,11 @@ function visualClasses(): string {
 /* Read the aspect ratio from an SVG viewBox, for an initial iframe height before the resize
    bridge refines it. */
 function parseViewBox(code: string): { width: number; height: number } | null {
-   const m = code.match(/viewBox\s*=\s*"([^"]*)"/);
+   /* Quote-agnostic: the model now prefers single-quoted attributes (its code rides inside a
+      JSON string, so single quotes avoid escaping). */
+   const m = code.match(/viewBox\s*=\s*(["'])([^"']*)\1/);
    if (!m) return null;
-   const p = m[1].trim().split(/\s+/);
+   const p = m[2].trim().split(/\s+/);
    if (p.length >= 4) return { width: parseFloat(p[2]), height: parseFloat(p[3]) };
    return null;
 }
@@ -167,13 +169,17 @@ const BRIDGE_SCRIPT =
 
 /* Replace <script src="/js/vendor/X"> with the inlined vendor code (a sandboxed srcdoc
    iframe has no base URL, so it can't load external scripts). Fetched once, cached, and
-   </script>-escaped so the vendor body can't close the tag early. */
+   </script>-escaped so the vendor body can't close the tag early.
+
+   Quote-agnostic (single OR double): the model reaches for single-quoted HTML attributes to
+   avoid escaping inside render_visual's JSON, so a "-only match would silently skip inlining
+   and leave a dead external <script> - blanking the chart. (Mirrors DAWN's visual-render.js.) */
 async function inlineVendor(content: string): Promise<string> {
-   const tags = content.match(/<script src="(\/js\/vendor\/[^"]+)"><\/script>/g);
+   const tags = content.match(/<script\s+src=(["'])(\/js\/vendor\/[^"']+)\1\s*>\s*<\/script>/gi);
    if (!tags) return content;
    let out = content;
    for (const tag of tags) {
-      const src = tag.match(/src="([^"]+)"/)?.[1];
+      const src = tag.match(/src=(["'])([^"']+)\1/)?.[2];
       if (!src) continue;
       let code = vendorCache.get(src);
       if (code === undefined) {
