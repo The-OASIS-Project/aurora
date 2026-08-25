@@ -152,12 +152,17 @@ export class StubIngest implements Ingest {
       this.watchReadingsTimer = window.setInterval(() => {
          const readings = this.fakeWatches.map((w) => {
             if (!w.hasCurrent || typeof w.current !== "number") {
-               return { id: w.id, hasCurrent: w.hasCurrent, current: w.current };
+               return { id: w.id, hasCurrent: w.hasCurrent, current: w.current, breaching: false };
             }
             const span = w.unit === "%" || w.unit === "°C" ? 1.2 : w.ruleType === "absence" ? 1 : 6;
             const next = Math.max(0, w.current + (Math.random() - 0.5) * span);
             w.current = next;
-            return { id: w.id, hasCurrent: true, current: Math.round(next * 10) / 10 };
+            /* Fake breach compute (the real bool comes from DAWN): current past the threshold. */
+            const t = w.threshold;
+            const breaching =
+               typeof t === "number" &&
+               (w.ruleType === "absence" ? next > t : w.direction === "below" ? next < t : next > t);
+            return { id: w.id, hasCurrent: true, current: Math.round(next * 10) / 10, breaching };
          });
          this.sinks.watches.setReadings(readings);
       }, 1000);

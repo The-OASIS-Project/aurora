@@ -199,6 +199,37 @@
    opacity: 0.45;
 }
 
+/* Breaching: DAWN says the watch's condition is currently met - a warm "needs you" tint
+   (feature-detected; only added when the breaching bool is present). */
+.watches-row.breaching {
+   background: color-mix(in srgb, var(--alert) 12%, transparent);
+   box-shadow: inset 2px 0 0 var(--alert);
+}
+.watches-row.breaching .watches-row-current {
+   color: var(--alert-glow);
+}
+.watches-row.breaching .watches-dot {
+   background: var(--alert);
+   box-shadow: 0 0 6px color-mix(in srgb, var(--alert-glow) 70%, transparent);
+}
+/* Breach onset: a one-shot warmer flash as the condition first goes true. */
+.watches-row.watches-breach-spike {
+   animation: watches-breach-spike 1.2s ease-out;
+}
+@keyframes watches-breach-spike {
+   0% {
+      background: color-mix(in srgb, var(--alert) 40%, transparent);
+   }
+   100% {
+      background: color-mix(in srgb, var(--alert) 12%, transparent);
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .watches-row.watches-breach-spike {
+      animation: none;
+   }
+}
+
 /* Enable/disable toggle (same switch as the HA board). */
 .watches-toggle {
    justify-self: end;

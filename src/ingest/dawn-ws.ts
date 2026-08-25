@@ -393,7 +393,8 @@ function toWatchItem(w: Record<string, unknown>): WatchItem {
       enabled: w.enabled === true,
       source: String(w.source ?? ""),
       hasCurrent: w.has_current === true,
-      current: typeof w.current === "number" ? w.current : undefined
+      current: typeof w.current === "number" ? w.current : undefined,
+      breaching: typeof w.breaching === "boolean" ? w.breaching : undefined
    };
 }
 
@@ -1869,7 +1870,8 @@ export class DawnIngest implements Ingest {
                readings.map((r) => ({
                   id: Number(r.id ?? 0),
                   hasCurrent: r.has_current === true,
-                  current: typeof r.current === "number" ? r.current : undefined
+                  current: typeof r.current === "number" ? r.current : undefined,
+                  breaching: typeof r.breaching === "boolean" ? r.breaching : undefined
                }))
             );
             break;

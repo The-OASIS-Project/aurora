@@ -174,6 +174,12 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
    };
 
    const live = (): boolean => !opts.isLive || opts.isLive();
+   /* A watch tints warm only when it is enabled, has a live reading, AND DAWN says its
+      condition is currently met (authoritative, hysteresis-aware). The has-reading gate
+      matters because DAWN keeps `breaching` at its last-known value when a threshold watch's
+      feed goes silent, and an unreadable row can't be trusted (it also dims via no-reading).
+      Feature-detected: undefined breaching -> never tints. */
+   const isBreaching = (w: WatchItem): boolean => w.enabled && w.hasCurrent && w.breaching === true;
 
    /* Group by metric family; preferred order (System/Suit/Components) first, unknown
       families after alphabetically. Within a group, order by label then id. */
@@ -282,6 +288,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       row.className = "watches-row";
       if (w.enabled) row.classList.add("armed");
       if (!w.hasCurrent) row.classList.add("no-reading"); // dim: no live value to show
+      if (isBreaching(w)) row.classList.add("breaching"); // warm: condition currently met
       if (changed.has(w.id)) row.classList.add("watches-changed");
 
       const dot = document.createElement("span");
@@ -454,10 +461,20 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
             if (!w) continue;
             w.hasCurrent = r.hasCurrent;
             w.current = r.current;
+            if (r.breaching !== undefined) w.breaching = r.breaching; // feature-detected
             const els = rowEls.get(r.id);
             if (els) {
                els.reading.textContent = currentText(w);
                els.row.classList.toggle("no-reading", !w.hasCurrent);
+               const nowBreach = isBreaching(w);
+               const wasBreach = els.row.classList.contains("breaching");
+               els.row.classList.toggle("breaching", nowBreach);
+               if (nowBreach && !wasBreach) {
+                  /* Breach onset: a discrete "just started breaching" event - spike once. */
+                  els.row.classList.remove("watches-breach-spike");
+                  void els.row.offsetWidth; // restart the animation
+                  els.row.classList.add("watches-breach-spike");
+               }
             }
          }
       },

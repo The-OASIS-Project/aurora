@@ -266,6 +266,9 @@ export interface WatchItem {
    source: string; // source_tag, the group key: "stat" | "suit" | "component" | ...
    hasCurrent: boolean;
    current?: number;
+   /* Authoritative "condition currently met" from DAWN (hysteresis-aware). Optional/
+      feature-detected: absent on older servers -> no breach tint. */
+   breaching?: boolean;
 }
 
 /* A watchable metric (powers the Phase-2 add modal). The wire catalog is key/label/unit
@@ -291,6 +294,7 @@ export interface WatchReading {
    id: number;
    hasCurrent: boolean;
    current?: number;
+   breaching?: boolean; // authoritative breach state, ticks with the value (feature-detected)
 }
 
 export interface WatchesSink {
