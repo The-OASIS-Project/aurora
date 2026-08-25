@@ -194,6 +194,10 @@ const watchesPanel = mountWatchesPanel(stage, {
    /* Opt the 1 Hz live-readings stream in/out with the panel's visibility (subscribe-gated
       server-side, so DAWN only streams while the board is on screen). */
    onReadingsSubscribe: (enabled) => ingest.watchReadingsSubscribe(enabled),
+   /* Phase-2 CRUD - deliberate per-user rule edits (remove is confirm-gated in the panel). */
+   onAdd: (metric) => ingest.addWatch(metric),
+   onUpdate: (id, fields) => ingest.updateWatch(id, fields),
+   onRemove: (id) => ingest.removeWatch(id),
    isLive: () => dawn.isLinkLive(),
    notify: (m) => dawn.notifyUser(m)
 });

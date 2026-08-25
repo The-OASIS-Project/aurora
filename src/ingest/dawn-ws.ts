@@ -1878,6 +1878,26 @@ export class DawnIngest implements Ingest {
          case "watch_readings_subscribe_response":
             break; // just an ack; the readings frames are what matter
 
+         case "watch_add_response":
+         case "watch_update_response":
+         case "watch_remove_response": {
+            /* Phase-2 CRUD acks. Surface a failure; re-list either way so the panel reflects
+               the server-authoritative truth (add upserts + re-enables, update/remove change
+               the row). */
+            const r = p as { success?: boolean; error?: string };
+            if (r.success === false) {
+               console.warn("[dawn] watch mutation failed:", type, r.error);
+               this.spikeNotice("watch-mutate", "attention", r.error || "Couldn't update the watch", {
+                  tone: "attention",
+                  hold: 6,
+                  x: 0,
+                  y: -0.55
+               });
+            }
+            this.send({ type: "watch_list" });
+            break;
+         }
+
          case "jobs_snapshot": {
             /* The complete active set — replace ours wholesale. */
             this.jobs.clear();
@@ -2474,6 +2494,32 @@ export class DawnIngest implements Ingest {
    watchReadingsSubscribe(enabled: boolean): void {
       this.watchReadingsWanted = enabled;
       this.send({ type: "watch_readings_subscribe", payload: { enabled } });
+   }
+
+   /* Phase-2 watch CRUD. Per-user proactive rules (deliberate user actions), gated on link
+      liveness; each reconciles via the re-list in its *_response handler. `updateWatch` sends
+      the full field state (a partial send would reset omitted fields to catalog defaults).
+      `removeWatch` is only ever invoked from the panel's confirm-gated gesture. */
+   addWatch(metric: string): void {
+      if (!this.isLinkLive()) {
+         this.notifyUser("Not connected to DAWN - not sent.");
+         return;
+      }
+      this.send({ type: "watch_add", payload: { metric } });
+   }
+   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void {
+      if (!this.isLinkLive()) {
+         this.notifyUser("Not connected to DAWN - not sent.");
+         return;
+      }
+      this.send({ type: "watch_update", payload: { id, ...fields } });
+   }
+   removeWatch(id: number): void {
+      if (!this.isLinkLive()) {
+         this.notifyUser("Not connected to DAWN - not sent.");
+         return;
+      }
+      this.send({ type: "watch_remove", payload: { id } });
    }
 
    getMusicAudio(): MusicAudio {

@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -99,9 +99,44 @@ export class StubIngest implements Ingest {
       { id: 4, name: "", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1500, absenceAfterSec: 0, notify: "alert", enabled: true, source: "suit", hasCurrent: false },
       { id: 5, name: "", metric: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", direction: "above", absenceAfterSec: 120, notify: "alert", enabled: true, source: "component", hasCurrent: true, current: 3 }
    ];
+   private fakeCatalog: WatchCatalogEntry[] = [
+      { key: "stat.cpu_usage", label: "CPU usage", unit: "%" },
+      { key: "stat.system_temp", label: "system temperature", unit: "°C" },
+      { key: "stat.battery.soc", label: "battery level", unit: "%" },
+      { key: "stat.memory_usage", label: "memory usage", unit: "%" },
+      { key: "suit.co2_ppm", label: "CO2", unit: "ppm" },
+      { key: "suit.temp", label: "helmet temperature", unit: "°C" },
+      { key: "component.hud", label: "helmet HUD link", unit: "s" }
+   ];
    requestWatches(): void {
-      this.sinks.watches.setWatches([...this.fakeWatches], []);
+      this.sinks.watches.setWatches([...this.fakeWatches], this.fakeCatalog);
       this.sinks.watches.setStatus({ ok: true, attentionEnabled: true });
+   }
+   addWatch(metric: string): void {
+      if (!this.fakeWatches.some((w) => w.metric === metric)) {
+         const cat = this.fakeCatalog.find((c) => c.key === metric);
+         const id = Math.max(0, ...this.fakeWatches.map((w) => w.id)) + 1;
+         this.fakeWatches.push({
+            id, name: "", metric, label: cat?.label ?? metric, unit: cat?.unit ?? "",
+            ruleType: metric === "component.hud" ? "absence" : "threshold",
+            direction: "above", threshold: 50, absenceAfterSec: 120, notify: "alert",
+            enabled: true, source: metric.split(".")[0], hasCurrent: false
+         });
+      }
+      this.requestWatches();
+   }
+   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void {
+      const w = this.fakeWatches.find((x) => x.id === id);
+      if (w) {
+         if (fields.direction !== undefined) w.direction = fields.direction;
+         if (fields.threshold !== undefined) w.threshold = fields.threshold;
+         if (fields.notify !== undefined) w.notify = fields.notify;
+      }
+      this.requestWatches();
+   }
+   removeWatch(id: number): void {
+      this.fakeWatches = this.fakeWatches.filter((w) => w.id !== id);
+      this.requestWatches();
    }
    setWatchEnabled(id: number, enabled: boolean): void {
       const w = this.fakeWatches.find((x) => x.id === id);

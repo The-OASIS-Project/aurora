@@ -24,6 +24,8 @@ import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
 import { makeVisibility } from "../render/visibility.ts";
+import { openDialog } from "../menu/dialog.ts";
+import { openEditWatch, closeWatchModal } from "./watch-modal.ts";
 
 export interface WatchesPanelController extends WatchesSink {
    isVisible(): boolean;
@@ -39,6 +41,12 @@ export interface WatchesPanelOpts {
    /* Opt into / out of the 1 Hz live-readings stream. Called with the panel's visibility so
       DAWN only streams while the board is on screen. */
    onReadingsSubscribe?(enabled: boolean): void;
+   /* Phase-2 CRUD (deliberate user actions). `onAdd` starts watching a metric (defaults);
+      `onUpdate` sends the full field state of an existing watch; `onRemove` is only ever
+      reached from the confirm-gated gesture here. Optional so Phase-1 hosts still work. */
+   onAdd?(metric: string): void;
+   onUpdate?(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void;
+   onRemove?(id: number): void;
    /* Is the DAWN link usable right now? When not, the flip is neither sent nor shown
       (it would lie), and `notify` says why. Optional -> treated as always-live. */
    isLive?(): boolean;
@@ -97,11 +105,17 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
    titleEl.textContent = "Watches";
    const statusEl = document.createElement("div");
    statusEl.className = "watches-status";
+   const addBtn = document.createElement("button");
+   addBtn.type = "button";
+   addBtn.className = "watches-add"; // also the drag-ignore hook
+   addBtn.setAttribute("aria-label", "Add a watch");
+   addBtn.title = "Add a watch";
+   addBtn.textContent = "+";
    const refreshBtn = document.createElement("button");
    refreshBtn.type = "button";
    refreshBtn.className = "watches-refresh panel-refresh"; // watches-refresh is the drag-ignore hook
    refreshBtn.setAttribute("aria-label", "Refresh watches now");
-   head.append(titleEl, statusEl, refreshBtn);
+   head.append(titleEl, statusEl, addBtn, refreshBtn);
 
    const list = document.createElement("div");
    list.className = "watches-list";
@@ -122,7 +136,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
    const disposeMovable = makeMovable(el, {
       storageKey: POS_KEY,
       handle: ".watches-head",
-      ignore: ".watches-refresh"
+      ignore: ".watches-refresh, .watches-add"
    });
    const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "watches-off" });
    /* Show/hide (from the Panels menu) also opts the 1 Hz readings stream in/out - it is only
@@ -134,6 +148,8 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
 
    /* --- state ------------------------------------------------------------- */
    let watches: WatchItem[] = [];
+   let catalog: WatchCatalogEntry[] = []; // watchable metrics (Phase-2 add picker)
+   let pendingEditMetric = ""; // just-added metric: open its edit form when the re-list arrives
    let status: WatchesStatus = { ok: true, attentionEnabled: true };
    let loaded = false; // suppress the transition-spike on the first list
    let changed = new Set<number>(); // watch ids whose enabled / has-reading flipped this list
@@ -181,6 +197,60 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          items: (groups.get(family) as WatchItem[]).sort((a, b) => a.label.localeCompare(b.label) || a.id - b.id)
       }));
    };
+
+   /* --- Phase-2 CRUD (add / edit / remove) -------------------------------- */
+
+   const confirmRemove = (w: WatchItem): void => {
+      /* A watch is cheap to recreate (no cascade, unlike delete_conversation), so the confirm
+         is proportionate - not cascade-gravity. Reachable only from this gesture. */
+      openDialog({
+         title: "Remove watch",
+         sub: `Stop watching ${w.label || w.metric}?`,
+         actions: [
+            { label: "Cancel", onClick: () => {} },
+            { label: "Remove", danger: true, onClick: () => opts.onRemove?.(w.id) }
+         ]
+      });
+   };
+
+   const openEdit = (w: WatchItem): void => {
+      openEditWatch({
+         watch: w,
+         onSave: (fields) => opts.onUpdate?.(w.id, fields),
+         onRemove: () => confirmRemove(w)
+      });
+   };
+
+   /* Add: a catalog picker of not-yet-watched metrics (grouped label prefix). Choosing one
+      adds it with defaults, then we drop into its edit form when the re-list lands, so the
+      user can set the threshold immediately (no-backend add-then-edit). */
+   const openAdd = (): void => {
+      const watched = new Set(watches.map((w) => w.metric));
+      const choices = catalog
+         .filter((c) => !watched.has(c.key))
+         .map((c) => {
+            const fam = c.key.split(".")[0];
+            const famLabel = fam === "stat" ? "System" : fam === "suit" ? "Suit" : fam === "component" ? "Components" : fam;
+            return { label: `${famLabel} · ${c.label}`, value: c.key };
+         });
+      if (choices.length === 0) {
+         openDialog({ title: "Add a watch", sub: "Everything in the catalog is already watched." });
+         return;
+      }
+      openDialog({
+         title: "Add a watch",
+         sub: "Pick a metric to watch.",
+         choices,
+         onChoose: (metric) => {
+            pendingEditMetric = metric;
+            opts.onAdd?.(metric);
+         }
+      });
+   };
+   addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openAdd();
+   });
 
    const toggleWatch = (w: WatchItem): void => {
       if (!live()) {
@@ -232,6 +302,9 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       reading.textContent = currentText(w);
 
       row.append(dot, main, reading, buildToggle(w));
+      /* Click the row (anywhere but the toggle, which stops propagation) to edit it. */
+      row.classList.add("editable");
+      row.addEventListener("click", () => openEdit(w));
       rowEls.set(w.id, { row, reading }); // for the in-place readings patch
       return row;
    };
@@ -335,7 +408,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
    render();
 
    const controller: WatchesPanelController = {
-      setWatches: (next, _catalog: WatchCatalogEntry[]) => {
+      setWatches: (next, cat: WatchCatalogEntry[]) => {
          /* Spike only on DISCRETE transitions - enable flip or a reading appearing/
             disappearing - NEVER on the current value, which changes every poll. */
          const nextChanged = new Set<number>();
@@ -357,7 +430,15 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          loaded = true;
          changed = nextChanged;
          watches = next;
+         catalog = cat;
          render();
+         /* add-then-edit: a metric we just added has now appeared - open its edit form so the
+            user can set the threshold (the fresh row carries the resolved rule_type/values). */
+         if (pendingEditMetric) {
+            const justAdded = watches.find((w) => w.metric === pendingEditMetric);
+            pendingEditMetric = "";
+            if (justAdded) openEdit(justAdded);
+         }
       },
       setStatus: (s) => {
          status = s;
@@ -384,6 +465,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       setVisible,
       destroy: () => {
          opts.onReadingsSubscribe?.(false); // stop the stream when the panel goes away
+         closeWatchModal(); // an open edit form must not outlive the panel (HMR)
          refreshBtn.removeEventListener("click", onRefreshClick);
          card.destroy();
          disposeMovable();

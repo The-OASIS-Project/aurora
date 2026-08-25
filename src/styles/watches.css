@@ -251,3 +251,195 @@
       animation: none;
    }
 }
+
+/* Header add-a-watch button (Phase 2). Subtle phosphor glyph, like the refresh control. */
+.watches-add {
+   flex: 0 0 auto;
+   align-self: center;
+   padding: 0 0.15rem;
+   border: none;
+   background: none;
+   color: var(--text-faint);
+   font-size: 1.05rem;
+   line-height: 1;
+   cursor: pointer;
+   transition: color 140ms ease;
+}
+.watches-add:hover {
+   color: var(--accent-glow);
+}
+/* A row is click-to-edit (Phase 2); the toggle inside stops propagation. */
+.watches-row.editable {
+   cursor: pointer;
+}
+.watches-row.editable:hover {
+   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* --- Edit-a-watch modal (src/watches/watch-modal.ts) ------------------------ */
+.watch-modal-overlay {
+   position: fixed;
+   inset: 0;
+   z-index: 1100;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   padding: 4vh 3vw;
+   background: color-mix(in srgb, var(--ground) 72%, transparent);
+   backdrop-filter: blur(6px);
+   -webkit-backdrop-filter: blur(6px);
+   animation: watch-modal-in 160ms ease;
+}
+.watch-modal {
+   position: relative;
+   width: min(24rem, 92vw);
+   padding: 1.3rem 1.4rem 1.2rem;
+   border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 2px;
+   background: linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--ground-raise) 60%, transparent) 88%
+   );
+   backdrop-filter: blur(9px);
+   -webkit-backdrop-filter: blur(9px);
+   box-shadow: 0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);
+}
+.watch-modal .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.watch-modal-title {
+   font-size: var(--fs-lead);
+   color: var(--text);
+   overflow-wrap: anywhere;
+   text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.watch-modal-sub {
+   margin-top: 0.15rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+.watch-modal-body {
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   margin: 1rem 0 1.1rem;
+}
+.watch-field {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 1rem;
+}
+.watch-field-label {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-dim);
+}
+.watch-seg {
+   display: flex;
+   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+   border-radius: 2px;
+   overflow: hidden;
+}
+.watch-seg-btn {
+   padding: 0.22rem 0.6rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-dim);
+   background: transparent;
+   border: none;
+   border-left: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+   cursor: pointer;
+   transition: background 120ms ease, color 120ms ease;
+}
+.watch-seg-btn:first-child {
+   border-left: none;
+}
+.watch-seg-btn:hover:not(.active) {
+   background: color-mix(in srgb, var(--accent) 12%, transparent);
+   color: var(--text);
+}
+.watch-seg-btn.active {
+   background: var(--accent);
+   color: var(--ground);
+}
+.watch-num-wrap {
+   display: inline-flex;
+   align-items: baseline;
+   gap: 0.35rem;
+}
+.watch-num {
+   width: 5.5rem;
+   padding: 0.24rem 0.4rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground) 60%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 2px;
+   text-align: right;
+}
+.watch-num:focus {
+   outline: none;
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.watch-num-unit {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text-faint);
+}
+.watch-modal-actions {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+}
+.watch-modal-spacer {
+   flex: 1 1 auto;
+}
+.watch-modal-btn {
+   padding: 0.4rem 0.9rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.1em;
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--accent) 8%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+   transition: border-color 120ms ease, color 120ms ease;
+}
+.watch-modal-btn:hover {
+   color: var(--text);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.watch-modal-btn.primary {
+   color: var(--accent-glow);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.watch-modal-btn.danger {
+   color: var(--alert-glow);
+   border-color: color-mix(in srgb, var(--alert) 40%, transparent);
+   background: color-mix(in srgb, var(--alert) 8%, transparent);
+}
+.watch-modal-btn.danger:hover {
+   border-color: color-mix(in srgb, var(--alert) 70%, transparent);
+}
+@keyframes watch-modal-in {
+   from {
+      opacity: 0;
+   }
+   to {
+      opacity: 1;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .watch-modal-overlay {
+      animation: none;
+   }
+}

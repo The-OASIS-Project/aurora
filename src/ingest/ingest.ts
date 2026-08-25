@@ -499,6 +499,14 @@ export interface Ingest {
       panel visibility: subscribe when shown, unsubscribe when hidden - so DAWN only pushes
       readings when a client is actually looking. Re-subscribed on reconnect if still wanted. */
    watchReadingsSubscribe(enabled: boolean): void;
+   /* Phase-2 watch CRUD - per-user proactive rules, deliberate user actions (same class as
+      the conversation picker's verbs). `addWatch` starts watching a metric (DAWN templates
+      the catalog defaults; one-watch-per-metric, so it upserts). `updateWatch` sends the FULL
+      field state (partial sends would reset omitted fields to defaults). `removeWatch` is only
+      ever called from a confirm-gated gesture. All server-reconciled via a re-list. */
+   addWatch(metric: string): void;
+   updateWatch(id: number, fields: { direction?: string; threshold?: number; notify?: string }): void;
+   removeWatch(id: number): void;
    /* --- Conversation picker (request/response). listConversations paginates; searchConversations
       filters (title, or message content when `content`). loadConversation / newConversation are
       the already-sanctioned reads/opens. rename / delete / setPinned are deliberate, user-initiated

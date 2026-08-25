@@ -812,12 +812,17 @@ against `dawn/src/webui/webui_attention.c` + `attention_catalog.c`.
   surfaces a disarmed note ("enable in DAWN settings") but never toggles it - that is a
   `set_config`, over the read-mostly line. (Matches the backend author's intent, per the
   `webui_attention.c` comment.)
-- **Phase 2 (planned):** `watch_add {metric, direction?, threshold?, notify?}` (one-watch-per-
-  metric upsert - sends FULL field state to avoid clobbering catalog-default resets),
-  `watch_update {id, ...}`, and confirm-gated `watch_remove {id}`. Needs the catalog to carry
-  `rule_type` + defaults (a small backend ask) OR a no-backend add-then-edit flow. `absence`
-  watches DO take a `threshold` override (it maps to `absence_after_sec`, 0..604800). Max 64
-  watches/user (`SAGE_MAX_WATCHES_PER_USER`).
+- **Phase 2 (shipped):** `watch_add {metric}` (one-watch-per-metric upsert; DAWN templates the
+  catalog defaults), `watch_update {id, direction?, threshold?, notify?}` (the edit modal sends
+  the FULL field state to avoid clobbering catalog-default resets), and confirm-gated
+  `watch_remove {id}`. Chosen the **no-backend add-then-edit flow** (the wire catalog is
+  `{key,label,unit}` only - no `rule_type`/defaults): add sends just `metric`, then the panel
+  opens the fresh row's edit form (which carries the resolved `rule_type`/values) so the user
+  can set the threshold. `absence` watches take a `threshold` override that maps to
+  `absence_after_sec` (0..604800) - the edit form shows a "silent for N seconds" field for them.
+  Enums: `direction` ∈ above|below|rising, `notify` ∈ alert|ambient|digest. Max 64 watches/user
+  (`SAGE_MAX_WATCHES_PER_USER`). *(Optional future polish: a catalog-defaults backend ask would
+  enable a one-step add form instead of add-then-edit.)*
 - **Backend-doc gap:** the whole `watch_*` family is **absent from `WEBSOCKET_PROTOCOL.md`**
   (same class as the `doc_library_*` gap in §9.5) - flag to the protocol-doc owner.
 
