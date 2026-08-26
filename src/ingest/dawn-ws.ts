@@ -1539,18 +1539,28 @@ export class DawnIngest implements Ingest {
             this.sinks.conversationList.setActive(0);
             break;
 
-         case "new_conversation_response":
-            /* The fresh conversation the daemon just created — persist to it now. */
+         case "new_conversation_response": {
+            /* The fresh conversation the daemon just created — persist to it now. A
+               `server_initiated` push is DAWN lazily auto-creating+binding a conversation for a
+               voice turn that had none (always-on / push-to-talk); it carries the
+               transcript-derived `title` and OWNS the conversation's privacy (public). So on that
+               path: reflect the pushed title (no blank flicker), and do NOT replay a pending
+               is_private toggle onto it. A normal client-initiated new_conversation has no title
+               yet (DAWN auto-titles later via conversation_renamed) and inherits a pending
+               privacy intent. Feature-detected: older servers omit the flag -> client path. */
+            const np = p as { conversation_id?: number; title?: string; server_initiated?: boolean };
+            const serverInitiated = np.server_initiated === true;
             this.sinks.context.clear(); // fresh conversation: no injected context yet
-            this.setActiveTitle(""); // untitled until DAWN auto-titles (conversation_renamed)
-            this.convId = Number((p as { conversation_id?: number }).conversation_id ?? 0);
+            this.setActiveTitle(serverInitiated ? String(np.title ?? "") : "");
+            this.convId = Number(np.conversation_id ?? 0);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
                this.sinks.conversationList.setActive(this.convId);
                this.requestConversations(); // the new row now exists — refresh the picker list
-               /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
-                  without an id): the new conversation inherits the pending intent. */
-               if (this.isPrivate) {
+               if (!serverInitiated && this.isPrivate) {
+                  /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
+                     without an id): the new conversation inherits the pending intent. Skipped for
+                     a server-initiated voice conv, which is authoritatively public. */
                   this.send({
                      type: "set_private",
                      payload: { conversation_id: this.convId, is_private: true }
@@ -1558,6 +1568,7 @@ export class DawnIngest implements Ingest {
                }
             }
             break;
+         }
 
          case "state": {
             const st = String(p.state ?? "idle");
