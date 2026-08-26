@@ -396,6 +396,25 @@ function watchFieldsToWire(fields: WatchFields | undefined): Record<string, unkn
    return payload;
 }
 
+/* Compact a token count for the HUD: 12345 -> "12.3k", 200000 -> "200k", 640 -> "640". */
+function abbrevTokens(n: number): string {
+   if (n >= 1000) {
+      const k = n / 1000;
+      // >= 99.95 rounds to a 3-digit k, so drop the decimal (avoids "100.0k").
+      return k >= 99.95 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
+   }
+   return String(Math.round(n));
+}
+
+/* The CONTEXT USAGE readout: token counts first, percent last ("12.3k/200k · 45%"). `usagePct`
+   comes from the live `context` frame; on a conversation load we only have current/max (stored),
+   so it is derived. Falls back to just the percent, then a placeholder, when counts are absent. */
+function formatCtx(current: number, max: number, usagePct?: number): string {
+   if (!(max > 0)) return usagePct !== undefined ? `${Math.round(usagePct)}%` : "--";
+   const pct = usagePct !== undefined ? Math.round(usagePct) : Math.round((current / max) * 100);
+   return `${abbrevTokens(current)}/${abbrevTokens(max)} · ${pct}%`;
+}
+
 function toWatchItem(w: Record<string, unknown>): WatchItem {
    return {
       id: Number(w.id ?? 0),
@@ -1404,6 +1423,13 @@ export class DawnIngest implements Ingest {
                conversation actually runs on rather than the connect-time snapshot. */
             this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
             this.setActiveTitle(String((p as { title?: string }).title ?? ""));
+            /* Seed CONTEXT USAGE from the conversation's STORED last usage, so an opened
+               conversation shows its context fill before the first live `context` frame. */
+            const ctxMax = Number((p as { context_max?: number }).context_max ?? 0);
+            if (ctxMax > 0) {
+               const ctxTokens = Number((p as { context_tokens?: number }).context_tokens ?? 0);
+               this.sinks.telemetry.update({ ctx: formatCtx(ctxTokens, ctxMax) });
+            }
             this.notifyLlm();
             break;
          }
@@ -2081,9 +2107,13 @@ export class DawnIngest implements Ingest {
          }
 
          case "context": {
-            /* Context-window usage %, last known (pushed during turns). */
-            const usage = Number((p as { usage?: number }).usage ?? 0);
-            this.sinks.telemetry.update({ ctx: `${Math.round(usage)}%` });
+            /* Context-window usage, last known (pushed during turns): percent plus the raw
+               token counts (current / max) from the same frame. */
+            const cp = p as { usage?: number; current?: number; max?: number };
+            const usage = cp.usage !== undefined ? Number(cp.usage) : undefined; // let formatCtx derive it if absent
+            const cur = Number(cp.current ?? 0);
+            const max = Number(cp.max ?? 0);
+            this.sinks.telemetry.update({ ctx: formatCtx(cur, max, usage) });
             break;
          }
 
