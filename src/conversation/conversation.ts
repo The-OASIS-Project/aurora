@@ -86,7 +86,7 @@ export function mountConversation(
 ): ConversationController {
    const mount = root.querySelector<HTMLElement>("#convo")!;
    const form = root.querySelector<HTMLFormElement>("#composer")!;
-   const input = root.querySelector<HTMLInputElement>("#composer-input")!;
+   const input = root.querySelector<HTMLTextAreaElement>("#composer-input")!;
    const composerRow = root.querySelector<HTMLElement>(".composer-row")!;
 
    /* Activity chip: what DAWN is doing, parked just above the input bar so it sits
@@ -729,6 +729,13 @@ export function mountConversation(
       attachBtn.hidden = true; // no upload path wired -> hide the control
    }
 
+   /* Auto-grow the composer textarea to fit its content; CSS caps the height at ~4 lines and
+      scrolls past that. Reset to "auto" first so it can also SHRINK as text is deleted. */
+   const autoGrow = (): void => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+   };
+
    const onSubmit = (e: SubmitEvent): void => {
       e.preventDefault();
       /* Expand any typed-but-not-picked `:shortcode:` so the user's bubble and the
@@ -747,6 +754,7 @@ export function mountConversation(
       const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
       const imageIds = pendingImages.map((im) => im.id);
       input.value = "";
+      autoGrow(); // collapse back to one line
       revokePreviews();
       pendingDocs = [];
       pendingImages = [];
@@ -755,7 +763,19 @@ export function mountConversation(
       summon();
       opts.onSubmit?.(sentText, images.length ? { images, imageIds } : undefined);
    };
-   const onInput = (): void => summon(); // typing counts as activity
+   const onInput = (): void => {
+      autoGrow(); // fit the typed text (grows the bar up to the CSS cap)
+      summon(); // typing counts as activity
+   };
+   /* Enter submits; Shift+Enter is a newline (a textarea does not submit a form on Enter, so
+      this is explicit). Skip while an IME is composing, and defer to the emoji-`:shortcode:`
+      picker when it has already claimed the key (it preventDefaults on Enter to accept). */
+   const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !e.defaultPrevented) {
+         e.preventDefault();
+         form.requestSubmit();
+      }
+   };
    const engage = (): void => {
       focused = true;
       summon();
@@ -796,11 +816,15 @@ export function mountConversation(
    /* `:shortcode:` autocomplete over the input; anchored to the composer bar
       (position:relative), it owns its own dropdown + keys and is torn down below. */
    const emojiPicker = attachEmojiPicker(input, form);
+   /* Registered AFTER the picker so its keydown runs first: when the picker is open it
+      preventDefaults Enter to accept, and onKeyDown then sees defaultPrevented and stands down. */
+   input.addEventListener("keydown", onKeyDown);
 
    /* Model-visual bridge (resize + click-to-prompt). A node click inside a sandboxed visual
       fills the composer and submits, the same deliberate user action as typing. */
    const disposeVisuals = initVisuals((text) => {
       input.value = text;
+      autoGrow();
       input.focus();
       form.requestSubmit();
    });
@@ -824,6 +848,7 @@ export function mountConversation(
          if (raf) cancelAnimationFrame(raf);
          form.removeEventListener("submit", onSubmit);
          input.removeEventListener("input", onInput);
+         input.removeEventListener("keydown", onKeyDown);
          input.removeEventListener("focus", engage);
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);

@@ -23,7 +23,7 @@ export interface EmojiPicker {
    followed by 1+ name chars, nothing yet closing it. */
 const OPEN_TOKEN_RE = /(?:^|\s):([a-z0-9_+-]+)$/i;
 
-export function attachEmojiPicker(input: HTMLInputElement, anchor: HTMLElement): EmojiPicker {
+export function attachEmojiPicker(input: HTMLTextAreaElement, anchor: HTMLElement): EmojiPicker {
    const box = document.createElement("div");
    box.className = "emoji-picker";
    box.setAttribute("role", "listbox");

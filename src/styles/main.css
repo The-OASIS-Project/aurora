@@ -633,6 +633,8 @@ body.engaged #docks {
    pointer-events: auto;
    width: 100%;
    display: flex;
+   /* Center on one line; the controls stay centered as the textarea grows (see .composer-input,
+      which caps the growth), so a multi-line box keeps the mic/attach/hint visually balanced. */
    align-items: center;
    gap: 0.8rem;
    padding: 0.7rem 1rem;
@@ -771,6 +773,16 @@ body.engaged #docks {
    font-family: inherit;
    font-size: var(--fs-body);
    letter-spacing: 0.01em;
+   /* Auto-growing multi-line input: JS sets height to scrollHeight on each keystroke; this caps
+      it at ~4 lines and scrolls beyond that. box-sizing/padding:0 keep scrollHeight == content. */
+   display: block;
+   box-sizing: border-box;
+   margin: 0;
+   padding: 0;
+   resize: none;
+   line-height: 1.45;
+   max-height: calc(1.45em * 4);
+   overflow-y: auto;
 }
 .composer-input::placeholder {
    color: var(--text-faint);
