@@ -55,7 +55,7 @@ export interface ConversationSink {
    startReply(): void;
    appendDelta(delta: string): void;
    endReply(): void;
-   showReply(text: string): void;
+   showReply(text: string, messageId?: number): void;
    /* A user turn from DAWN (a voice transcript). Typed turns are appended locally on
       submit, so this is only for spoken input echoed back by the daemon. */
    showUser(text: string, messageId?: number): void;

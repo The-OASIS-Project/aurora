@@ -38,7 +38,7 @@ export interface ConversationController {
    startReply(): void;
    appendDelta(delta: string): void;
    endReply(): void;
-   showReply(text: string): void;
+   showReply(text: string, messageId?: number): void;
    showUser(text: string, messageId?: number): void;
    noteMessageId(messageId: number): void;
    hasMessage(messageId: number): boolean;
@@ -518,9 +518,17 @@ export function mountConversation(
       summon();
    };
 
-   const showReply = (text: string): void => {
+   const showReply = (text: string, messageId = 0): void => {
       streaming = null;
-      lastFinalized = appendMsg("assistant", text); // so ingest can linkStream it for its save-echo
+      const msg = appendMsg("assistant", text);
+      if (messageId > 0) {
+         /* Known DB id: dedup the fan-out via renderedIds; no (conv,streamId) correlation needed,
+            so don't arm lastFinalized (keeps the "non-null only while awaiting linkStream"
+            invariant, since the server-saved path never calls linkStream). */
+         stampId(msg, messageId);
+      } else {
+         lastFinalized = msg; // legacy: ingest linkStreams this for its synthetic save-echo
+      }
       setThinking(false);
       summon();
    };

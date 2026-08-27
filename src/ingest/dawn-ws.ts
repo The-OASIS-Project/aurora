@@ -2177,19 +2177,26 @@ export class DawnIngest implements Ingest {
             const reason = typeof p.reason === "string" ? p.reason : "";
             if (reason !== "tool_iteration") {
                /* Persist the final answer HERE, on the terminal stream_end (mirroring the stock
-                  WebUI's finalizeStream), not only on state:idle. A background-job
-                  reinvoke_parent re-engagement streams its result into the foreground
-                  conversation and is "client-saved" by DAWN (NOT persisted server-side), yet it
-                  drives no state:idle transition - so an idle-only save would lose it (the turn
-                  vanishes on reload; see job_reinvoke.c "LOAD-BEARING CONTRACT"). Save when the
-                  stream is the active conversation. The idle-gated save below stays as a
-                  fallback: whichever fires first clears replyBuf, so never a double-write. */
+                  WebUI's finalizeStream), not on state:idle. A background-job reinvoke_parent
+                  re-engagement streams into the foreground conversation and drives no state:idle
+                  transition - so an idle-only save would lose it (the turn vanishes on reload; see
+                  job_reinvoke.c "LOAD-BEARING CONTRACT"). Save only for the active conversation. */
                const conv = Number(p.conversation_id ?? this.convId); // wire int64; coerce like the rest of the file
                const streamId = Number(p.stream_id ?? 0);
-               /* Register the finalized bubble under (conv, streamId) so DAWN's save-echo
+               /* Register the finalized bubble under (conv, streamId) so DAWN's fan-out
                   (message_appended, arriving after this) adopts it instead of double-rendering. */
                if (conv === this.convId) this.sinks.conversation.linkStream(conv, streamId);
-               if (this.replyBuf.trim() && conv === this.convId) {
+               /* Server-authoritative persistence (Phase 1): `will_persist` means DAWN writes this
+                  row itself, so stand down from the client save - the linkStream above still runs
+                  so the fanned message_appended adopts onto this bubble. Absent (Phase 0 / a path
+                  DAWN won't persist) -> we still client-save. Generic: Phase 2 stamps normal turns
+                  too. Contract: will_persist only accompanies streamed content, so stream_id > 0 -
+                  warn loudly if not, since a 0 there can't correlate the fan-out (would double). */
+               const willPersist = (p as { will_persist?: boolean }).will_persist === true;
+               if (willPersist && !(streamId > 0)) {
+                  console.warn("[dawn] will_persist with no stream_id - fan-out may double-render", conv);
+               }
+               if (this.replyBuf.trim() && conv === this.convId && !willPersist) {
                   this.saveMessage("assistant", this.replyBuf, streamId);
                }
                /* Clear unconditionally (even on a conv mismatch): a leftover buffer must not
@@ -2231,11 +2238,22 @@ export class DawnIngest implements Ingest {
                persist a live (non-replay) one, since it never went through a stream. */
             if (p.role === "assistant" && typeof p.text === "string") {
                const info = interpretMessage(p.text);
+               const messageId = Number((p as { message_id?: number }).message_id ?? 0);
+               const serverSaved = (p as { server_saved?: boolean }).server_saved === true;
+               /* Contract: a server_saved transcript carries the row's message_id (> 0) so the
+                  fan-out dedups against this bubble. Without it we neither save nor can dedup -
+                  warn rather than silently double-render. */
+               if (serverSaved && !(messageId > 0)) {
+                  console.warn("[dawn] server_saved transcript with no message_id - fan-out may double-render");
+               }
                if (info?.text) {
-                  this.sinks.conversation.showReply(info.text);
-                  if (p.replay !== true) {
-                     /* Non-streamed save: correlate its Phase-0 save-echo with a synthetic
-                        (high-positive) stream_id so we adopt our own echo, never double-render it. */
+                  /* Stamp the DB id so the fanned message_appended for this same row dedups
+                     against this bubble (the non-streamed twin of the will_persist stand-down). */
+                  this.sinks.conversation.showReply(info.text, messageId);
+                  /* Client-save ONLY when the server didn't (server_saved = DAWN owns the write,
+                     e.g. a non-streaming reinvoke reply). Legacy path correlates its own save-echo
+                     with a synthetic high-positive stream_id so we adopt it, never double-render. */
+                  if (p.replay !== true && !serverSaved) {
                      const sid = DawnIngest.SYNTH_STREAM_BASE + this.saveCorrelationSeq++;
                      this.sinks.conversation.linkStream(this.convId, sid);
                      this.saveMessage("assistant", info.text, sid);
