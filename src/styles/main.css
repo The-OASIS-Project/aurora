@@ -329,6 +329,12 @@ body.engaged #docks {
    separates it from the live perf metrics below. */
 .tel-model .tel-val {
    color: var(--accent-glow);
+   /* Hard backstop so a long local model name/path can't stretch the box; the ingest already
+      strips a path to its filename and front-cuts the length (keeping the distinctive tail), so
+      this end-ellipsis only trims in the rare case that value is still too wide. */
+   max-width: 15rem;
+   overflow: hidden;
+   text-overflow: ellipsis;
 }
 /* Conversation title: identity like the model, but can be long - cap it and ellipsize
    so a wordy auto-title never blows out the readout width. */

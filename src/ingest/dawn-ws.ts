@@ -396,6 +396,31 @@ function watchFieldsToWire(fields: WatchFields | undefined): Record<string, unkn
    return payload;
 }
 
+/* Model name for the HUD readout. A local model is often a filesystem PATH (e.g.
+   /home/user/models/Qwen3-30B-A3B-Q4_K_M.gguf or C:\models\...\model.gguf) whose directory
+   prefix stretches the box; keep just the filename (the meaningful part). Guard the path strip on
+   real path signals - an absolute/drive/~ prefix or a model file extension - so a provider slug
+   like "openai/gpt-5.5" keeps its vendor. Then cap the length, cutting the FRONT (leading
+   ellipsis) so the distinctive tail (a quant suffix / version) survives. Display-only; the raw
+   model string is still what we send to DAWN. */
+function displayModelName(model: string, max = 26): string {
+   let name = model.trim();
+   const looksLikePath =
+      /[\\/]/.test(name) && (/^([a-zA-Z]:[\\/]|[\\/~])/.test(name) || /\.(gguf|bin|safetensors|pt|onnx)$/i.test(name));
+   if (looksLikePath) name = name.split(/[\\/]/).pop() || name;
+   if (name.length > max) name = `…${name.slice(name.length - (max - 1))}`;
+   return name;
+}
+
+/* A conversation title from its first message (mirrors the WebUI's generateTitleFromMessage):
+   the first non-empty line, trimmed, capped at 50 chars with an ellipsis. Empty -> "" (which the
+   HUD + DAWN both render as the "New conversation" placeholder). */
+function titleFromMessage(content: string): string {
+   const firstLine = (content.split("\n")[0] ?? "").trim();
+   if (!firstLine) return "";
+   return firstLine.length <= 50 ? firstLine : `${firstLine.slice(0, 47)}...`;
+}
+
 /* Compact a token count for the HUD: 12345 -> "12.3k", 200000 -> "200k", 640 -> "640". */
 function abbrevTokens(n: number): string {
    if (n >= 1000) {
@@ -519,13 +544,12 @@ export class DawnIngest implements Ingest {
    private conversationsLoading = false; // single-flight latch: one list/search request at a time
    private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
-   private convId = 0; // active conversation; save_message targets persist to it
+   private convId = 0; // the active conversation id (turns are tagged to it; DAWN persists them)
    /* Vision capability, per provider-type, from get_config (llm.cloud/local.vision_enabled).
       isVisionCapable() picks by the active mode, so it tracks a cloud<->local switch. Gates
       the composer's image attach - images only go to a model that can see them. */
    private cloudVision = false;
    private localVision = false;
-   private replyBuf = ""; // final assistant answer, accumulated to persist on idle
    /* Texts submitted from the composer, awaiting DAWN's user-transcript echo. DAWN echoes
       every user turn (typed AND voice); we append typed turns locally on submit, so these
       let us dedupe the echo of our own typing. What is left unmatched is spoken input. Each
@@ -653,13 +677,8 @@ export class DawnIngest implements Ingest {
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
-   /* Correlation ids for NON-streamed client saves (the transcript path). DAWN echoes the id
-      back on the Phase-0 message_appended so we adopt our own save instead of double-rendering
-      it. DAWN accepts only 0 < stream_id <= UINT32_MAX (webui_history.c), and real stream_ids
-      are small per-session counters, so a high positive base can't collide and round-trips. */
-   private static readonly SYNTH_STREAM_BASE = 1_000_000_000;
-   private saveCorrelationSeq = 0;
    private localModels: string[] = [];
+   private pendingNewConvTitle = ""; // title derived from the first message, applied on new_conversation_response
    private isPrivate = false;
    private readonly llmListeners: Array<() => void> = [];
    private readonly seenUnhandled = new Set<string>();
@@ -1501,7 +1520,6 @@ export class DawnIngest implements Ingest {
             if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
                this.convId = 0;
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
-               this.replyBuf = "";
                this.sinks.conversation.clear();
                this.sinks.context.clear();
                this.setActiveTitle(""); // fresh chat
@@ -1559,7 +1577,12 @@ export class DawnIngest implements Ingest {
             const np = p as { conversation_id?: number; title?: string; server_initiated?: boolean };
             const serverInitiated = np.server_initiated === true;
             this.sinks.context.clear(); // fresh conversation: no injected context yet
-            this.setActiveTitle(serverInitiated ? String(np.title ?? "") : "");
+            /* Reflect the real title: a server-initiated (voice) create pushes it; a client
+               create derives it from the first message (DAWN doesn't echo it, so we remembered
+               it). Without this the HUD shows the "New conversation" placeholder until the
+               later auto-title, while the picker already shows the real title. */
+            this.setActiveTitle(serverInitiated ? String(np.title ?? "") : this.pendingNewConvTitle);
+            this.pendingNewConvTitle = "";
             this.convId = Number(np.conversation_id ?? 0);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
@@ -1589,10 +1612,9 @@ export class DawnIngest implements Ingest {
             this.sinks.reactor.setState(toReactorState(st));
             this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
             this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
-            /* No idle-gated persist: the final answer is saved on the terminal stream_end (which
-               DAWN always emits before state:idle), so an idle save would only ever fire on
-               leftover replyBuf - intermediate tool-turn text DAWN already persists server-side -
-               and, being uncorrelated (no stream_id), its own echo would double-render. Removed. */
+            /* No client-side persist on idle (or anywhere): DAWN is the sole writer of the turn
+               (server-authoritative persistence); the client only renders + reconciles the fanned
+               message_appended. `state` here just drives the reactor / activity chip. */
             break;
          }
 
@@ -2157,16 +2179,11 @@ export class DawnIngest implements Ingest {
          }
 
          case "stream_start":
-            /* Reset per stream so replyBuf holds the LAST stream (the final answer)
-               when the turn settles to idle. */
-            this.replyBuf = "";
             this.sinks.conversation.startReply();
             break;
 
          case "stream_delta": {
-            const delta = String(p.delta ?? "");
-            this.replyBuf += delta;
-            this.sinks.conversation.appendDelta(delta);
+            this.sinks.conversation.appendDelta(String(p.delta ?? ""));
             break;
          }
 
@@ -2176,37 +2193,24 @@ export class DawnIngest implements Ingest {
                stream_start/end per iteration); only a TERMINAL end carries the final answer. */
             const reason = typeof p.reason === "string" ? p.reason : "";
             if (reason !== "tool_iteration") {
-               /* Persist the final answer HERE, on the terminal stream_end (mirroring the stock
-                  WebUI's finalizeStream), not on state:idle. A background-job reinvoke_parent
-                  re-engagement streams into the foreground conversation and drives no state:idle
-                  transition - so an idle-only save would lose it (the turn vanishes on reload; see
-                  job_reinvoke.c "LOAD-BEARING CONTRACT"). Save only for the active conversation. */
+               /* DAWN is the sole writer of the turn (server-authoritative persistence): the
+                  client no longer saves the reply. Register the finalized bubble under
+                  (conv, streamId) so the fanned message_appended adopts onto it instead of
+                  re-rendering. A real streamed reply always has streamId > 0; warn if not, since a
+                  0 can't correlate the fan-out (it would double-render). Active conversation only. */
                const conv = Number(p.conversation_id ?? this.convId); // wire int64; coerce like the rest of the file
                const streamId = Number(p.stream_id ?? 0);
-               /* Register the finalized bubble under (conv, streamId) so DAWN's fan-out
-                  (message_appended, arriving after this) adopts it instead of double-rendering. */
-               if (conv === this.convId) this.sinks.conversation.linkStream(conv, streamId);
-               /* Server-authoritative persistence (Phase 1): `will_persist` means DAWN writes this
-                  row itself, so stand down from the client save - the linkStream above still runs
-                  so the fanned message_appended adopts onto this bubble. Absent (Phase 0 / a path
-                  DAWN won't persist) -> we still client-save. Generic: Phase 2 stamps normal turns
-                  too. Contract: will_persist only accompanies streamed content, so stream_id > 0 -
-                  warn loudly if not, since a 0 there can't correlate the fan-out (would double). */
-               const willPersist = (p as { will_persist?: boolean }).will_persist === true;
-               if (willPersist && !(streamId > 0)) {
-                  console.warn("[dawn] will_persist with no stream_id - fan-out may double-render", conv);
+               if (conv === this.convId) {
+                  if (!(streamId > 0)) {
+                     console.warn("[dawn] terminal stream_end with no stream_id - fan-out may double-render", conv);
+                  }
+                  this.sinks.conversation.linkStream(conv, streamId);
                }
-               if (this.replyBuf.trim() && conv === this.convId && !willPersist) {
-                  this.saveMessage("assistant", this.replyBuf, streamId);
-               }
-               /* Clear unconditionally (even on a conv mismatch): a leftover buffer must not
-                  linger to be mis-saved later - there is no idle-gated fallback anymore. */
-               this.replyBuf = "";
-               /* Settle the UI to idle when no voice is (or will be) playing. The same
-                  re-engagement drives no state:idle and carries no TTS, so without this the
-                  reactor hangs in its last state (thinking/speaking). Guard on dawnSpeaking + the
-                  live TTS tail so a NORMAL spoken turn keeps its voice animation until DAWN's real
-                  state:idle arrives (which handles the TTS-tail timing). */
+               /* Settle the UI to idle when no voice is (or will be) playing. A reinvoke
+                  re-engagement drives no state:idle and carries no TTS, so without this the reactor
+                  hangs in its last state (thinking/speaking). Guard on dawnSpeaking + the live TTS
+                  tail so a NORMAL spoken turn keeps its voice animation until DAWN's real state:idle
+                  arrives (which handles the TTS-tail timing). */
                if (!this.dawnSpeaking && !this.tts.isSpeaking()) {
                   this.sinks.reactor.setState("idle");
                   this.sinks.conversation.setThinking(false);
@@ -2234,30 +2238,18 @@ export class DawnIngest implements Ingest {
                );
                break;
             }
-            /* A complete (non-streamed or replayed) message. Show assistant text;
-               persist a live (non-replay) one, since it never went through a stream. */
+            /* A complete (non-streamed or replayed) assistant message. DAWN persists it itself
+               (server-authoritative); the client only renders it, stamping the row's message_id
+               so the fanned message_appended dedups against this bubble. A live non-streamed reply
+               must carry a message_id (> 0) - warn if not, since a 0 can't dedup the fan-out. */
             if (p.role === "assistant" && typeof p.text === "string") {
                const info = interpretMessage(p.text);
                const messageId = Number((p as { message_id?: number }).message_id ?? 0);
-               const serverSaved = (p as { server_saved?: boolean }).server_saved === true;
-               /* Contract: a server_saved transcript carries the row's message_id (> 0) so the
-                  fan-out dedups against this bubble. Without it we neither save nor can dedup -
-                  warn rather than silently double-render. */
-               if (serverSaved && !(messageId > 0)) {
-                  console.warn("[dawn] server_saved transcript with no message_id - fan-out may double-render");
-               }
                if (info?.text) {
-                  /* Stamp the DB id so the fanned message_appended for this same row dedups
-                     against this bubble (the non-streamed twin of the will_persist stand-down). */
-                  this.sinks.conversation.showReply(info.text, messageId);
-                  /* Client-save ONLY when the server didn't (server_saved = DAWN owns the write,
-                     e.g. a non-streaming reinvoke reply). Legacy path correlates its own save-echo
-                     with a synthetic high-positive stream_id so we adopt it, never double-render. */
-                  if (p.replay !== true && !serverSaved) {
-                     const sid = DawnIngest.SYNTH_STREAM_BASE + this.saveCorrelationSeq++;
-                     this.sinks.conversation.linkStream(this.convId, sid);
-                     this.saveMessage("assistant", info.text, sid);
+                  if (p.replay !== true && !(messageId > 0)) {
+                     console.warn("[dawn] assistant transcript with no message_id - fan-out may double-render");
                   }
+                  this.sinks.conversation.showReply(info.text, messageId);
                }
                if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
             }
@@ -2366,14 +2358,14 @@ export class DawnIngest implements Ingest {
       this.send({ type: "clear_session" });
       this.convId = 0;
       localStorage.removeItem(CONV_KEY); // fresh chat: nothing to resume until a message opens one
-      /* Discard any in-flight reply so its idle-save can't land on the next conversation
-         (H1); mirror the reset to the picker's active highlight (both the menu New Chat
-         and the picker "+ New" arrive here). */
-      this.replyBuf = "";
+      /* Finalize any in-flight streamed bubble before wiping (both the menu New Chat and the
+         picker "+ New" arrive here). */
       this.sinks.conversation.endReply();
       this.sinks.conversation.clear();
       this.sinks.context.clear();
       this.sinks.conversationList.setActive(0);
+      this.pendingNewConvTitle = "";
+      this.setActiveTitle(""); // reset the HUD readout to the fresh-chat placeholder (was lingering the old title)
    }
 
    /* Map DAWN's conversation object (list/search) into the picker's ConversationMeta.
@@ -2424,11 +2416,9 @@ export class DawnIngest implements Ingest {
 
    loadConversation(id: number): void {
       if (id <= 0) return;
-      /* Discard any in-flight reply BEFORE switching id, so conversation A's partial
-         answer can't be persisted into B on the next idle transition (H1). Set convId
-         optimistically so a text sent before the response is tagged to the right
-         conversation (M2); load_conversation_response confirms it. */
-      this.replyBuf = "";
+      /* Finalize any in-flight streamed bubble before switching id. Set convId optimistically so
+         a text sent before the response is tagged to the right conversation (M2);
+         load_conversation_response confirms it. */
       this.sinks.conversation.endReply();
       this.convId = id;
       this.sinks.conversationList.setActive(id);
@@ -2926,7 +2916,7 @@ export class DawnIngest implements Ingest {
          effort,
          provider: this.llm.mode === "local" ? "Local" : providerLabel(this.llm.provider)
       };
-      if (this.llm.model) update.model = this.llm.model;
+      if (this.llm.model) update.model = displayModelName(this.llm.model);
       this.sinks.telemetry.update(update);
       for (const cb of this.llmListeners) cb();
    }
@@ -3039,7 +3029,7 @@ export class DawnIngest implements Ingest {
             no-selection state until the echo lands). */
          const opts = effortOptionsForModel(this.llm.model);
          if (!opts.includes(this.llm.effort)) this.llm.effort = opts.includes("medium") ? "medium" : opts[0];
-         this.send({ type: "set_session_llm", payload: { model: this.llm.model } });
+         this.send({ type: "set_session_llm", payload: { type: this.llm.mode, model: this.llm.model } }); // type too (see setProvider)
       }
       this.notifyLlm();
    }
@@ -3065,12 +3055,15 @@ export class DawnIngest implements Ingest {
          },
          setProvider: (provider) => {
             this.llm.provider = provider;
-            this.applyLlm({ provider });
+            /* Send `type` (cloud|local) alongside provider: the daemon tracks type/provider/model
+               as INDEPENDENT fields and `type` WINS at dispatch, so omitting it leaves the session
+               on its prior type - a cloud pick would silently keep routing to the local endpoint. */
+            this.applyLlm({ type: this.llm.mode, provider });
             this.reconcileModel();
          },
          setModel: (model) => {
             this.llm.model = model;
-            this.applyLlm({ model });
+            this.applyLlm({ type: this.llm.mode, model }); // send type too (see setProvider)
          },
          setReasoning: (reasoning) => {
             /* Optimistic; the set_session_llm_response echo confirms or clamps it. */
@@ -3136,14 +3129,14 @@ export class DawnIngest implements Ingest {
          this.notifyUser("Not connected to DAWN - message not sent.");
          return;
       }
-      /* No active conversation (fresh start after a reset): open one BEFORE the text
-         so the daemon tags this turn with the new id and preserves the old thread.
-         new_conversation_response sets convId for the assistant-save. */
+      /* No active conversation (fresh start after a reset): open one BEFORE the text so the
+         daemon tags this turn with the new id and preserves the old thread. Derive a title from
+         the first message (DAWN doesn't echo it back, so remember it to set the HUD readout on the
+         response - otherwise it renders the "New conversation" placeholder until the auto-title). */
       if (this.convId === 0) {
-         this.send({
-            type: "new_conversation",
-            payload: { save_current: true, title: text.slice(0, 48) }
-         });
+         const title = titleFromMessage(text);
+         this.pendingNewConvTitle = title;
+         this.send({ type: "new_conversation", payload: { save_current: true, title } });
       }
       /* Do NOT persist the user turn here. With an active conversation the daemon
          persists the user message itself (text_input_dispatch.c: conv_db_add on
@@ -3409,20 +3402,5 @@ export class DawnIngest implements Ingest {
          return;
       }
       if (!replay) this.sinks.conversation.showUser(text, messageId);
-   }
-
-   private saveMessage(role: "user" | "assistant", content: string, streamId?: number): void {
-      if (this.convId > 0 && content.trim()) {
-         const payload: { conversation_id: number; role: string; content: string; stream_id?: number } = {
-            conversation_id: this.convId,
-            role,
-            content
-         };
-         /* Phase-0 correlation: DAWN echoes this stream_id back on the message_appended it
-            broadcasts from the save handler, so we recognize our OWN save-echo and adopt it onto
-            the already-rendered bubble instead of rendering a second copy. */
-         if (streamId !== undefined) payload.stream_id = streamId;
-         this.send({ type: "save_message", payload });
-      }
    }
 }

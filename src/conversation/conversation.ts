@@ -521,14 +521,9 @@ export function mountConversation(
    const showReply = (text: string, messageId = 0): void => {
       streaming = null;
       const msg = appendMsg("assistant", text);
-      if (messageId > 0) {
-         /* Known DB id: dedup the fan-out via renderedIds; no (conv,streamId) correlation needed,
-            so don't arm lastFinalized (keeps the "non-null only while awaiting linkStream"
-            invariant, since the server-saved path never calls linkStream). */
-         stampId(msg, messageId);
-      } else {
-         lastFinalized = msg; // legacy: ingest linkStreams this for its synthetic save-echo
-      }
+      /* Stamp the DB id so the fanned message_appended for this same row dedups against this
+         bubble (DAWN persists the reply; the client only renders it). */
+      if (messageId > 0) stampId(msg, messageId);
       setThinking(false);
       summon();
    };
