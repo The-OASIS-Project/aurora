@@ -44,6 +44,7 @@ export interface ConversationItem {
    role: "user" | "assistant";
    text?: string;
    tools?: string[];
+   id?: number; // server DB message id, stamped for message_appended dedup (absent on older servers)
 }
 
 /* What ingest can push to the conversation console (a passive view). Streaming
@@ -57,7 +58,12 @@ export interface ConversationSink {
    showReply(text: string): void;
    /* A user turn from DAWN (a voice transcript). Typed turns are appended locally on
       submit, so this is only for spoken input echoed back by the daemon. */
-   showUser(text: string): void;
+   showUser(text: string, messageId?: number): void;
+   /* Phase-0 user fan-out helpers: `noteMessageId` records a DB id for a locally-rendered typed
+      user turn (so the server echo/fan-out dedups); `hasMessage` reports whether a message id is
+      already in the transcript (so the two user frames, arriving in any order, don't both act). */
+   noteMessageId(messageId: number): void;
+   hasMessage(messageId: number): boolean;
    /* A red system error line in the transcript (a failed turn or a server error), shown
       in-context rather than only as a fleeting notice. */
    showError(text: string): void;
@@ -67,6 +73,13 @@ export interface ConversationSink {
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */
    loadHistory(items: ConversationItem[]): void;
+   /* Server-authoritative-persistence (Phase 0) cross-viewer correlation. `linkStream`
+      registers the just-finalized streamed bubble under (conv, streamId); `adoptId` stamps the
+      DB id onto it when the matching `message_appended` arrives (returns true if it was ours);
+      `renderAppended` renders a `message_appended` we did NOT stream, deduped on message id. */
+   linkStream(convId: number, streamId: number): void;
+   adoptId(convId: number, streamId: number, messageId: number): boolean;
+   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number }): void;
    /* A tool reset the conversation — empty the surface. */
    clear(): void;
    /* Current activity (thinking / using tools / ...) or null to clear it. */

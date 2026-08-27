@@ -653,6 +653,12 @@ export class DawnIngest implements Ingest {
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
+   /* Correlation ids for NON-streamed client saves (the transcript path). DAWN echoes the id
+      back on the Phase-0 message_appended so we adopt our own save instead of double-rendering
+      it. DAWN accepts only 0 < stream_id <= UINT32_MAX (webui_history.c), and real stream_ids
+      are small per-session counters, so a high positive base can't collide and round-trips. */
+   private static readonly SYNTH_STREAM_BASE = 1_000_000_000;
+   private saveCorrelationSeq = 0;
    private localModels: string[] = [];
    private isPrivate = false;
    private readonly llmListeners: Array<() => void> = [];
@@ -1403,13 +1409,15 @@ export class DawnIngest implements Ingest {
             /* Switching conversations: the shown context trace belonged to the previous
                one, so clear it now (the next live turn here repopulates it). */
             this.sinks.context.clear();
-            const msgs = (p.messages ?? []) as Array<{ role: string; content: string }>;
+            const msgs = (p.messages ?? []) as Array<{ role: string; content: string; id?: number }>;
             this.sinks.conversation.loadHistory(
                msgs
                   .filter((m) => m.role === "user" || m.role === "assistant")
                   .flatMap((m) => {
                      const info = interpretMessage(m.content);
-                     return info ? [{ role: m.role as "user" | "assistant", ...info }] : [];
+                     /* Stamp the DB id so a late message_appended for a reloaded row can't
+                        re-double it (Phase-0 dedup prereq). */
+                     return info ? [{ role: m.role as "user" | "assistant", ...info, id: Number(m.id ?? 0) || undefined }] : [];
                   })
             );
             this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
@@ -1581,12 +1589,10 @@ export class DawnIngest implements Ingest {
             this.sinks.reactor.setState(toReactorState(st));
             this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
             this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
-            /* Turn complete: persist the final answer once (the last stream's text).
-               Tool-iteration rows are saved server-side; we own the final answer. */
-            if (st === "idle" && this.replyBuf.trim()) {
-               this.saveMessage("assistant", this.replyBuf);
-               this.replyBuf = "";
-            }
+            /* No idle-gated persist: the final answer is saved on the terminal stream_end (which
+               DAWN always emits before state:idle), so an idle save would only ever fire on
+               leftover replyBuf - intermediate tool-turn text DAWN already persists server-side -
+               and, being uncorrelated (no stream_id), its own echo would double-render. Removed. */
             break;
          }
 
@@ -2164,9 +2170,44 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "stream_end":
+         case "stream_end": {
             this.sinks.conversation.endReply();
+            /* A tool_iteration end is a mid-turn bubble seal (the tool loop re-issues
+               stream_start/end per iteration); only a TERMINAL end carries the final answer. */
+            const reason = typeof p.reason === "string" ? p.reason : "";
+            if (reason !== "tool_iteration") {
+               /* Persist the final answer HERE, on the terminal stream_end (mirroring the stock
+                  WebUI's finalizeStream), not only on state:idle. A background-job
+                  reinvoke_parent re-engagement streams its result into the foreground
+                  conversation and is "client-saved" by DAWN (NOT persisted server-side), yet it
+                  drives no state:idle transition - so an idle-only save would lose it (the turn
+                  vanishes on reload; see job_reinvoke.c "LOAD-BEARING CONTRACT"). Save when the
+                  stream is the active conversation. The idle-gated save below stays as a
+                  fallback: whichever fires first clears replyBuf, so never a double-write. */
+               const conv = Number(p.conversation_id ?? this.convId); // wire int64; coerce like the rest of the file
+               const streamId = Number(p.stream_id ?? 0);
+               /* Register the finalized bubble under (conv, streamId) so DAWN's save-echo
+                  (message_appended, arriving after this) adopts it instead of double-rendering. */
+               if (conv === this.convId) this.sinks.conversation.linkStream(conv, streamId);
+               if (this.replyBuf.trim() && conv === this.convId) {
+                  this.saveMessage("assistant", this.replyBuf, streamId);
+               }
+               /* Clear unconditionally (even on a conv mismatch): a leftover buffer must not
+                  linger to be mis-saved later - there is no idle-gated fallback anymore. */
+               this.replyBuf = "";
+               /* Settle the UI to idle when no voice is (or will be) playing. The same
+                  re-engagement drives no state:idle and carries no TTS, so without this the
+                  reactor hangs in its last state (thinking/speaking). Guard on dawnSpeaking + the
+                  live TTS tail so a NORMAL spoken turn keeps its voice animation until DAWN's real
+                  state:idle arrives (which handles the TTS-tail timing). */
+               if (!this.dawnSpeaking && !this.tts.isSpeaking()) {
+                  this.sinks.reactor.setState("idle");
+                  this.sinks.conversation.setThinking(false);
+                  this.sinks.conversation.setStatus(this.activityFor("idle", undefined, undefined));
+               }
+            }
             break;
+         }
 
          case "transcript":
             /* DAWN smuggles llm_state_update inside a transcript with this role
@@ -2179,15 +2220,11 @@ export class DawnIngest implements Ingest {
                appended the typed bubble locally (recorded in typedEchoes), so dedupe that
                and display only what has no local counterpart - i.e. spoken input. */
             if (p.role === "user" && typeof p.text === "string") {
-               const text = p.text.trim();
-               /* Match a recently-typed turn (within the TTL) to skip re-showing its echo;
-                  a stale entry is ignored, so an identical later spoken turn still shows. */
-               const now = performance.now();
-               const echoIdx = this.typedEchoes.findIndex(
-                  (e) => e.text === text && now - e.at < TYPED_ECHO_TTL_MS
+               this.handleIncomingUser(
+                  p.text.trim(),
+                  Number((p as { message_id?: number }).message_id ?? 0),
+                  p.replay === true
                );
-               if (echoIdx >= 0) this.typedEchoes.splice(echoIdx, 1);
-               else if (text && p.replay !== true) this.sinks.conversation.showUser(text);
                break;
             }
             /* A complete (non-streamed or replayed) message. Show assistant text;
@@ -2196,21 +2233,49 @@ export class DawnIngest implements Ingest {
                const info = interpretMessage(p.text);
                if (info?.text) {
                   this.sinks.conversation.showReply(info.text);
-                  if (p.replay !== true) this.saveMessage("assistant", info.text);
+                  if (p.replay !== true) {
+                     /* Non-streamed save: correlate its Phase-0 save-echo with a synthetic
+                        (high-positive) stream_id so we adopt our own echo, never double-render it. */
+                     const sid = DawnIngest.SYNTH_STREAM_BASE + this.saveCorrelationSeq++;
+                     this.sinks.conversation.linkStream(this.convId, sid);
+                     this.saveMessage("assistant", info.text, sid);
+                  }
                }
                if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
             }
             break;
 
          case "message_appended": {
-            /* A message persisted to a NON-active conversation (chiefly a completed
-               background job's answer). Rather than inject it into whatever transcript is
-               open (it would read as if the open conversation replied), mark that row
-               unread; the answer renders when the user opens it, and a job answer also
-               surfaces via its job_notification toast. The active conversation's own rows
-               arrive via the stream path, so they are skipped here. */
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
-            if (cid && cid !== this.convId) this.sinks.conversationList.markAppended(cid);
+            /* A NON-active conversation's message: mark its row unread; it renders on open, and a
+               job answer also surfaces via its job_notification toast. */
+            if (cid && cid !== this.convId) {
+               this.sinks.conversationList.markAppended(cid);
+               break;
+            }
+            if (!cid) break;
+            /* The ACTIVE conversation (server-authoritative-persistence, Phase 0 cross-viewer
+               render). Correlate on (conv, stream_id):
+               - our OWN streamed reply's save-echo -> adopt the DB id onto the bubble we already
+                 rendered (no duplicate); this also confirms the server persisted it.
+               - a turn we did NOT stream (another open viewer's turn, or a server-side turn with
+                 stream_id 0) -> render it inline, deduped on message_id. This is what fixes the
+                 two-viewers-on-one-conversation gap: the second viewer now sees the reply. */
+            const messageId = Number((p as { message_id?: number }).message_id ?? 0);
+            const streamId = Number((p as { stream_id?: number }).stream_id ?? 0);
+            const role = (p as { role?: string }).role === "user" ? "user" : "assistant";
+            if (streamId && this.sinks.conversation.adoptId(cid, streamId, messageId)) break; // our streamed reply's echo
+            /* User fan-out (stream_id 0): route through the same order-independent handler as the
+               transcript echo, so the origin's optimistic bubble is recognized (dedup) and a
+               non-origin viewer renders it as a user bubble. */
+            if (role === "user") {
+               this.handleIncomingUser(String((p as { text?: string }).text ?? "").trim(), messageId, false);
+               break;
+            }
+            const info = interpretMessage(String((p as { text?: string }).text ?? ""));
+            const text = info?.text ?? "";
+            if (text) this.sinks.conversation.renderAppended({ role, text, messageId });
+            if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
             break;
          }
 
@@ -3303,9 +3368,43 @@ export class DawnIngest implements Ingest {
    /* Persist a turn to the DB. DAWN keeps webui text turns in memory only — the
       client owns the user turn and the final answer rows (webui_history.c message-
       ownership map); without this our conversations never survive a reconnect. */
-   private saveMessage(role: "user" | "assistant", content: string): void {
+   /* A user turn from the server. In Phase 0 it arrives BOTH as the transcript echo AND as the
+      message_appended fan-out, in an unspecified order, so dedup order-independently on message
+      id: already in the transcript -> skip (the other frame handled it); matches a locally-typed
+      echo -> it's our own optimistic bubble, so just record its id (so the other frame dedups)
+      and consume the echo; otherwise -> a spoken turn or another viewer's turn, rendered as a
+      user bubble (unless a history replay, which loadHistory owns).
+      INVARIANT (DAWN contract): when a user turn produces TWO frames (transcript echo +
+      message_appended fan-out) they MUST carry the SAME POSITIVE message_id. The first frame
+      consumes the text-based typedEcho, so the second can only dedup via hasMessage(messageId) -
+      a 0/absent id on either would double the user's own message. DAWN guards the fan-out on
+      message_id > 0 on BOTH the text and voice paths (verified), so a save-failure/id-0 turn
+      emits only the echo (single frame - the splice handles it), never a doubling second frame. */
+   private handleIncomingUser(text: string, messageId: number, replay: boolean): void {
+      if (!text) return;
+      if (this.sinks.conversation.hasMessage(messageId)) return;
+      const now = performance.now();
+      const echoIdx = this.typedEchoes.findIndex((e) => e.text === text && now - e.at < TYPED_ECHO_TTL_MS);
+      if (echoIdx >= 0) {
+         this.typedEchoes.splice(echoIdx, 1);
+         this.sinks.conversation.noteMessageId(messageId);
+         return;
+      }
+      if (!replay) this.sinks.conversation.showUser(text, messageId);
+   }
+
+   private saveMessage(role: "user" | "assistant", content: string, streamId?: number): void {
       if (this.convId > 0 && content.trim()) {
-         this.send({ type: "save_message", payload: { conversation_id: this.convId, role, content } });
+         const payload: { conversation_id: number; role: string; content: string; stream_id?: number } = {
+            conversation_id: this.convId,
+            role,
+            content
+         };
+         /* Phase-0 correlation: DAWN echoes this stream_id back on the message_appended it
+            broadcasts from the save handler, so we recognize our OWN save-echo and adopt it onto
+            the already-rendered bubble instead of rendering a second copy. */
+         if (streamId !== undefined) payload.stream_id = streamId;
+         this.send({ type: "save_message", payload });
       }
    }
 }

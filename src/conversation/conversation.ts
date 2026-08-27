@@ -39,13 +39,23 @@ export interface ConversationController {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string): void;
-   showUser(text: string): void;
+   showUser(text: string, messageId?: number): void;
+   noteMessageId(messageId: number): void;
+   hasMessage(messageId: number): boolean;
    showError(text: string): void;
    showToolUse(tools: string[]): void;
    setAssistantName(name: string): void;
    loadHistory(items: ConversationItem[]): void;
    clear(): void;
    setStatus(status: ActivityStatus | null): void;
+   /* Server-authoritative-persistence (Phase 0) correlation. `linkStream` registers the
+      just-finalized streamed bubble under (conv, streamId) so the matching `message_appended`
+      (which arrives AFTER endReply, carrying the DB id) can `adoptId` it - stamping the id
+      without rendering a duplicate. `renderAppended` renders a `message_appended` we did NOT
+      stream (another viewer's turn) as a fresh bubble, deduped on message id. */
+   linkStream(convId: number, streamId: number): void;
+   adoptId(convId: number, streamId: number, messageId: number): boolean;
+   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number }): void;
    destroy(): void;
 }
 
@@ -71,9 +81,11 @@ export interface ConversationOptions {
 
 interface Msg {
    role: "user" | "assistant";
+   el: HTMLElement; // the .convo-msg root (carries data-message-id once known)
    roleEl: HTMLElement;
    body: HTMLElement;
    text: string;
+   id?: number; // server DB message id, once adopted / loaded (dedup key)
 }
 
 const IDLE_MS = 6000; // pointer off the window + settled -> recede
@@ -114,6 +126,32 @@ export function mountConversation(
 
    const messages: Msg[] = [];
    let streaming: Msg | null = null;
+
+   /* Server-authoritative-persistence correlation (Phase 0). `renderedIds` is every DB message
+      id currently in the transcript - the idempotency key that makes stream / message_appended /
+      reload converge without doubling. `adoptMap` holds recently-finalized streamed bubbles by
+      (conv:streamId), awaiting the message_appended that carries their DB id (it arrives AFTER
+      endReply, so this must OUTLIVE the streaming state). Bounded by a small ring. */
+   const renderedIds = new Set<number>();
+   const adoptMap = new Map<string, Msg>();
+   const adoptOrder: string[] = [];
+   const ADOPT_MAX = 24;
+   let lastFinalized: Msg | null = null; // the bubble endReply just closed, for linkStream
+   const adoptKey = (convId: number, streamId: number): string => `${convId}:${streamId}`;
+   /* Stamp a DB id onto a bubble (dedup set + DOM attribute). Ignores non-positive ids. */
+   const stampId = (msg: Msg, id: number): void => {
+      if (!(id > 0) || msg.id === id) return;
+      msg.id = id;
+      msg.el.setAttribute("data-message-id", String(id));
+      renderedIds.add(id);
+   };
+   /* Drop all correlation state when the transcript is replaced (load / clear). */
+   const resetCorrelation = (): void => {
+      renderedIds.clear();
+      adoptMap.clear();
+      adoptOrder.length = 0;
+      lastFinalized = null;
+   };
    let assistantName = "DAWN"; // replaced by the configured ai_name once known
    let active = false;
    let thinking = false;
@@ -321,7 +359,7 @@ export function mountConversation(
 
       el.append(roleEl, body);
       scroll.appendChild(el);
-      const msg: Msg = { role, roleEl, body, text };
+      const msg: Msg = { role, el, roleEl, body, text };
       messages.push(msg);
       scrollToEnd();
       return msg;
@@ -429,14 +467,60 @@ export function mountConversation(
          raf = 0;
       }
       if (streaming) renderAssistantBody(streaming.body, streaming.text);
+      lastFinalized = streaming; // remember for linkStream (the message_appended lands later)
       streaming = null;
       scrollToEnd(true); // final markdown reflow can change height; ease it, don't snap
       setThinking(false);
    };
 
+   /* Register the bubble endReply just closed under (conv, streamId). The correlating
+      message_appended arrives AFTER finalize, so the entry must survive the null of `streaming`.
+      Called only on a TERMINAL stream_end (not per tool iteration). */
+   const linkStream = (convId: number, streamId: number): void => {
+      if (!lastFinalized) return;
+      const key = adoptKey(convId, streamId);
+      if (adoptMap.has(key)) {
+         /* Same key again (e.g. a reconnect reset the per-session stream_id counter): keep
+            order and map in sync by dropping the stale order entry before re-pushing. */
+         const j = adoptOrder.indexOf(key);
+         if (j >= 0) adoptOrder.splice(j, 1);
+      }
+      adoptMap.set(key, lastFinalized);
+      adoptOrder.push(key);
+      while (adoptOrder.length > ADOPT_MAX) {
+         const old = adoptOrder.shift();
+         if (old !== undefined) adoptMap.delete(old);
+      }
+      lastFinalized = null;
+   };
+
+   /* Origin adopt: a message_appended whose (conv, streamId) matches a bubble we streamed ->
+      stamp its DB id onto that existing bubble and DO NOT render a duplicate. Returns true when
+      it was ours (the caller then also treats it as the server-persisted confirmation). */
+   const adoptId = (convId: number, streamId: number, messageId: number): boolean => {
+      const key = adoptKey(convId, streamId);
+      const msg = adoptMap.get(key);
+      if (!msg) return false;
+      adoptMap.delete(key);
+      const i = adoptOrder.indexOf(key);
+      if (i >= 0) adoptOrder.splice(i, 1);
+      stampId(msg, messageId);
+      return true;
+   };
+
+   /* Non-origin render: a message_appended for the active conversation that we did NOT stream
+      (another viewer's turn, or a server-side turn with no live stream here). Render a fresh
+      bubble, deduped on message id (also guards against a reload + a late echo doubling). */
+   const renderAppended = (item: { role: "user" | "assistant"; text: string; messageId: number }): void => {
+      if (item.messageId > 0 && renderedIds.has(item.messageId)) return; // already in the transcript
+      const msg = appendMsg(item.role, item.text);
+      stampId(msg, item.messageId);
+      summon();
+   };
+
    const showReply = (text: string): void => {
       streaming = null;
-      appendMsg("assistant", text);
+      lastFinalized = appendMsg("assistant", text); // so ingest can linkStream it for its save-echo
       setThinking(false);
       summon();
    };
@@ -444,10 +528,20 @@ export function mountConversation(
    /* A user turn that did NOT originate from the composer here - i.e. a voice
       transcript DAWN sent back. Typed turns are appended locally on submit and deduped
       upstream, so this only carries spoken input. */
-   const showUser = (text: string): void => {
-      appendMsg("user", text);
+   const showUser = (text: string, messageId = 0): void => {
+      const msg = appendMsg("user", text);
+      if (messageId > 0) stampId(msg, messageId); // Phase-0: dedup the user fan-out echo
       summon();
    };
+
+   /* Record a DB id for a bubble we rendered WITHOUT renderAppended (a locally-optimistic typed
+      user turn), so the server's user-turn fan-out / transcript echo for it dedups on message id
+      instead of appending a second copy. `hasMessage` lets ingest skip a frame already handled by
+      the other one (the two arrive in an unspecified order). */
+   const noteMessageId = (messageId: number): void => {
+      if (messageId > 0) renderedIds.add(messageId);
+   };
+   const hasMessage = (messageId: number): boolean => messageId > 0 && renderedIds.has(messageId);
 
    const showToolUse = (tools: string[]): void => {
       appendToolChip(tools);
@@ -511,6 +605,7 @@ export function mountConversation(
       revokeObjectUrls();
       scroll.replaceChildren();
       messages.length = 0;
+      resetCorrelation();
       win.classList.remove("thinking", "receded");
       win.classList.add("empty");
       chip.classList.remove("on");
@@ -528,10 +623,15 @@ export function mountConversation(
       revokeObjectUrls(); // the outgoing transcript's image URLs are about to be dropped
       scroll.replaceChildren();
       messages.length = 0;
+      resetCorrelation(); // fresh transcript: drop stale ids + pending adopt entries
       /* A turn can carry text, a tool chip, or both (spoke then called a tool) - render
-         the text first, then its tool chips, preserving transcript order. */
+         the text first, then its tool chips, preserving transcript order. Stamp each row's DB
+         id so a late message_appended for a reloaded row can't re-double it (spec prereq). */
       for (const it of items) {
-         if (it.text) appendMsg(it.role, it.text);
+         if (it.text) {
+            const msg = appendMsg(it.role, it.text);
+            if (typeof it.id === "number") stampId(msg, it.id);
+         }
          if (it.tools?.length) appendToolChip(it.tools);
       }
       if (messages.length > 0) summon();
@@ -842,6 +942,11 @@ export function mountConversation(
       loadHistory,
       clear,
       setStatus,
+      linkStream,
+      adoptId,
+      renderAppended,
+      noteMessageId,
+      hasMessage,
       destroy: () => {
          window.clearTimeout(shortTimer);
          window.clearTimeout(longTimer);
