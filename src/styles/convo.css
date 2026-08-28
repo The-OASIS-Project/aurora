@@ -241,17 +241,73 @@
    }
 }
 
-/* Tool-use markers: DAWN ran a tool this turn, shown as compact on-theme chips rather
-   than the raw tool_use JSON. A dim phosphor pill row (mono + uppercase like the role
-   labels, a machined cog glyph), indented to sit under the turn it belongs to. */
+/* Tool use: DAWN ran tools this turn, shown as an ordered run of compact on-theme pills
+   (one per invocation, in call order) rather than the raw tool_use JSON. A dim phosphor pill
+   row (mono + uppercase like the role labels, a machined cog glyph), indented under its turn.
+   Each pill expands on click to that call's args + result; a long run collapses to a summary. */
 .convo-tools {
    display: flex;
-   flex-wrap: wrap;
-   gap: 0.35rem;
+   flex-direction: column;
+   gap: 0.25rem;
    padding-left: 0.8rem;
    margin: 0.1rem 0 0.2rem;
 }
+.convo-tools-list {
+   display: flex;
+   flex-wrap: wrap;
+   gap: 0.35rem;
+}
+/* Collapse: a long run shows a "N tools" summary; the list hides until the summary is clicked. */
+.convo-tools-summary {
+   display: none;
+}
+.convo-tools.collapsed .convo-tools-summary {
+   display: inline-flex;
+   align-items: center;
+   gap: 0.34rem;
+   align-self: flex-start;
+   padding: 0.06rem 0.5rem 0.06rem 0.42rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.12em;
+   text-transform: uppercase;
+   color: color-mix(in srgb, var(--accent-glow) 75%, var(--text-dim));
+   background: color-mix(in srgb, var(--accent) 9%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+   border: none;
+   border-radius: 999px;
+   cursor: pointer;
+}
+.convo-tools.collapsed .convo-tools-summary::before {
+   /* machined cog, forced to text (not emoji) presentation */
+   content: "\2699\FE0E";
+   color: var(--accent);
+}
+.convo-tools.collapsed .convo-tools-summary::after {
+   content: "\25B8"; /* right-pointing triangle; rotates down when expanded */
+   transition: transform 0.15s ease;
+}
+.convo-tools.collapsed.expanded .convo-tools-summary::after {
+   transform: rotate(90deg);
+}
+.convo-tools.collapsed .convo-tools-list {
+   display: none;
+}
+.convo-tools.collapsed.expanded .convo-tools-list {
+   display: flex;
+}
+/* A pill wraps its clickable chip and (when open) its detail; open pills take the full row
+   so the detail is readable rather than squeezed into the chip's width. */
 .convo-tool {
+   display: flex;
+   flex-direction: column;
+   align-items: flex-start;
+   gap: 0.2rem;
+}
+.convo-tool:has(.convo-tool-detail:not([hidden])) {
+   flex-basis: 100%;
+}
+.convo-tool-chip {
    display: inline-flex;
    align-items: center;
    gap: 0.34rem;
@@ -263,7 +319,13 @@
    color: color-mix(in srgb, var(--accent-glow) 75%, var(--text-dim));
    background: color-mix(in srgb, var(--accent) 9%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+   border: none;
    border-radius: 999px;
+   cursor: pointer;
+   transition: box-shadow 0.15s ease;
+}
+.convo-tool-chip:hover {
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .convo-tool-icon {
    display: inline-flex;
@@ -274,6 +336,52 @@
    /* monochrome cog, forced to text (not emoji) presentation */
    content: "\2699\FE0E";
    font-size: 0.92em;
+}
+.convo-tool-detail {
+   max-width: 100%;
+   max-height: 12rem;
+   overflow: auto;
+   margin-left: 0.42rem;
+   padding: 0.4rem 0.55rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   line-height: 1.45;
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--accent) 5%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+   border-radius: 4px;
+}
+/* Call (args) vs result: distinct labels + a coloured rail so the two read apart at a glance.
+   Call = phosphor teal (--accent), result = cool blue (--cool); both stay clear of the warm
+   amber reserved for "needs you". */
+.convo-tool-part + .convo-tool-part {
+   margin-top: 0.5rem;
+}
+.convo-tool-part-label {
+   display: block;
+   font-size: var(--fs-nano);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   margin-bottom: 0.15rem;
+}
+.convo-tool-part-body {
+   display: block;
+   padding-left: 0.5rem;
+   border-left: 2px solid transparent;
+   white-space: pre-wrap;
+   word-break: break-word;
+}
+.convo-tool-part-call .convo-tool-part-label {
+   color: var(--accent-glow);
+}
+.convo-tool-part-call .convo-tool-part-body {
+   border-left-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.convo-tool-part-result .convo-tool-part-label {
+   color: var(--cool-glow);
+}
+.convo-tool-part-result .convo-tool-part-body {
+   border-left-color: color-mix(in srgb, var(--cool) 40%, transparent);
 }
 
 /* Markdown inside an assistant body. */

@@ -37,13 +37,24 @@ export interface ActivityStatus {
    tone?: "alert";
 }
 
-/* One entry in a loaded transcript: a text turn, a tool-use chip, or both (a turn
-   that spoke and then called a tool). `tools` is the tool names invoked, rendered as
-   compact chips instead of the raw tool_use JSON DAWN persists in history. */
+/* One tool invocation, rendered as an ordered, expandable pill. `id` is DAWN's
+   `tool_call_id` (the same key live `tool_step` frames and reloaded `tool_calls` / `role:tool`
+   rows share), used to pair a result to its call and to update a pill idempotently; "" when a
+   server predates it. `args`/`result` are the opaque, redacted detail shown on expand. */
+export interface ToolCall {
+   id: string;
+   name: string;
+   args?: string;
+   result?: string;
+}
+
+/* One entry in a loaded transcript: a text turn, a run of tool calls, or both (a turn
+   that spoke and then called tools). `tools` is the ordered invocations, rendered as
+   compact expandable pills instead of the raw tool_use JSON DAWN persists in history. */
 export interface ConversationItem {
    role: "user" | "assistant";
    text?: string;
-   tools?: string[];
+   tools?: ToolCall[];
    id?: number; // server DB message id, stamped for message_appended dedup (absent on older servers)
 }
 
@@ -70,8 +81,12 @@ export interface ConversationSink {
    /* A red system error line in the transcript (a failed turn or a server error), shown
       in-context rather than only as a fleeting notice. */
    showError(text: string): void;
-   /* A tool call surfaced as a compact chip (the tool names), not raw tool_use JSON. */
-   showToolUse(tools: string[]): void;
+   /* Live tool use, surfaced as ordered expandable pills (one per invocation), NOT raw
+      tool_use JSON. `toolCall` appends/updates a pill (idempotent by `id`); `toolResult`
+      attaches the result to the pill with the matching `tool_call_id` for the expand panel.
+      A subsequent text turn closes the current run so the next tools start a fresh group. */
+   toolCall(call: ToolCall): void;
+   toolResult(id: string, result: string): void;
    /* The configured assistant display name (ai_name), for the reply header. */
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */

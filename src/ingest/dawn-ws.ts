@@ -38,6 +38,7 @@ import type {
    MusicState,
    MusicTrack,
    OutImage,
+   ToolCall,
    UploadedDoc,
    UploadedImage,
    WatchFields,
@@ -471,8 +472,10 @@ function toWatchItem(w: Record<string, unknown>): WatchItem {
    into what the console should show: its human text and/or the tool names it invoked (as
    chips). tool_result blocks are the data returning to the model - nothing to display. Mixed
    turns (a text block beside a tool_use) return both. Returns null when there is nothing to
-   show (a pure tool_result, empty); a message that isn't a content-block array is plain text. */
-function interpretMessage(raw: string): { text?: string; tools?: string[] } | null {
+   show (a pure tool_result, empty); a message that isn't a content-block array is plain text.
+   NOTE: the CURRENT DAWN persists tools in a SEPARATE `tool_calls` column (parseToolCalls
+   below), not inside content - this block-array path is a legacy fallback (name-only, no id). */
+function interpretMessage(raw: string): { text?: string; tools?: ToolCall[] } | null {
    const text = (raw ?? "").trim();
    if (!text) return null;
    /* Only structured content starts with [ or { ; a normal answer is plain text. */
@@ -491,14 +494,44 @@ function interpretMessage(raw: string): { text?: string; tools?: string[] } | nu
    );
    if (!looksLikeBlocks) return { text: raw };
    const textParts: string[] = [];
-   const tools: string[] = [];
-   for (const b of blocks as Array<{ type?: string; text?: unknown; name?: unknown }>) {
+   const tools: ToolCall[] = [];
+   for (const b of blocks as Array<{ type?: string; text?: unknown; name?: unknown; id?: unknown }>) {
       if (b.type === "text" && typeof b.text === "string") textParts.push(b.text);
-      else if (b.type === "tool_use") tools.push(typeof b.name === "string" && b.name ? b.name : "tool");
+      else if (b.type === "tool_use") {
+         tools.push({ id: typeof b.id === "string" ? b.id : "", name: typeof b.name === "string" && b.name ? b.name : "tool" });
+      }
    }
    const joined = textParts.join("").trim();
    if (!joined && !tools.length) return null; // pure tool_result / unknown blocks -> skip
    return { text: joined || undefined, tools: tools.length ? tools : undefined };
+}
+
+/* Parse DAWN's persisted `tool_calls` column (an OpenAI-format JSON array:
+   [{id, type:"function", function:{name, arguments}}]) into ordered ToolCall pills for reload.
+   `results` maps a tool_call_id to its result text (from the paired `role:"tool"` rows). This is
+   the REAL reload tool source (content-block tool_use in interpretMessage is a legacy fallback).
+   Untrusted -> parsed defensively; the view binds every field via textContent. */
+function parseToolCalls(raw: unknown, results: Map<string, string>): ToolCall[] {
+   if (raw == null) return [];
+   let arr: unknown = raw;
+   if (typeof raw === "string") {
+      try {
+         arr = JSON.parse(raw);
+      } catch {
+         return [];
+      }
+   }
+   if (!Array.isArray(arr)) return [];
+   const out: ToolCall[] = [];
+   for (const el of arr as Array<{ id?: unknown; function?: { name?: unknown; arguments?: unknown } }>) {
+      if (el == null || typeof el !== "object") continue;
+      const id = typeof el.id === "string" ? el.id : "";
+      const fn = el.function ?? {};
+      const name = typeof fn.name === "string" && fn.name ? fn.name : "tool";
+      const args = typeof fn.arguments === "string" ? fn.arguments : undefined;
+      out.push({ id, name, args, result: id ? results.get(id) : undefined });
+   }
+   return out;
 }
 
 export class DawnIngest implements Ingest {
@@ -773,7 +806,12 @@ export class DawnIngest implements Ingest {
          this.tts.setOpus(useOpus);
          const caps = {
             capabilities: { audio_codecs: useOpus ? ["opus", "pcm"] : ["pcm"] },
-            tts_enabled: this.ttsEnabled
+            tts_enabled: this.ttsEnabled,
+            /* Opt in to receiving our OWN turn's tool_step frames (living tool pills). Aurora
+               has no stream-derived tool render, so this is its only live tool signal; the server
+               keeps the origin EXCLUDED by default (so stock www doesn't double-render). Harmless
+               on a daemon that predates the flag - it's simply ignored. */
+            tool_step_origin: true
          };
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
@@ -1428,15 +1466,43 @@ export class DawnIngest implements Ingest {
             /* Switching conversations: the shown context trace belonged to the previous
                one, so clear it now (the next live turn here repopulates it). */
             this.sinks.context.clear();
-            const msgs = (p.messages ?? []) as Array<{ role: string; content: string; id?: number }>;
+            const msgs = (p.messages ?? []) as Array<{
+               role: string;
+               content: string;
+               id?: number;
+               tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
+               tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
+            }>;
+            /* First pass: map each tool_call_id -> its result text from the `role:"tool"` rows,
+               so a reloaded assistant pill can carry its result (for the expand panel). These rows
+               are filtered out of the rendered items below; they exist only for this correlation. */
+            const toolResults = new Map<string, string>();
+            for (const m of msgs) {
+               if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
+                  toolResults.set(m.tool_call_id, m.content ?? "");
+               }
+            }
             this.sinks.conversation.loadHistory(
                msgs
                   .filter((m) => m.role === "user" || m.role === "assistant")
                   .flatMap((m) => {
                      const info = interpretMessage(m.content);
+                     /* The REAL tool source is the separate `tool_calls` column (ordered,
+                        id'd, with args + correlated results); interpretMessage's content-block
+                        tools are a legacy fallback. Prefer tool_calls when present. */
+                     const structured = parseToolCalls(m.tool_calls, toolResults);
+                     const tools = structured.length ? structured : info?.tools;
+                     if (!info && !tools) return [];
                      /* Stamp the DB id so a late message_appended for a reloaded row can't
                         re-double it (Phase-0 dedup prereq). */
-                     return info ? [{ role: m.role as "user" | "assistant", ...info, id: Number(m.id ?? 0) || undefined }] : [];
+                     return [
+                        {
+                           role: m.role as "user" | "assistant",
+                           text: info?.text,
+                           tools,
+                           id: Number(m.id ?? 0) || undefined
+                        }
+                     ];
                   })
             );
             this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
@@ -2224,6 +2290,41 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "tool_step": {
+            /* Live tool use, fanned to every viewer of the active conversation - the ORIGIN too,
+               since Aurora advertised `tool_step_origin` (it has no stream-derived tool render, so
+               this is its ONLY live tool signal; the server includes us). Ephemeral: NOT persisted,
+               NOT message_appended-fanned - a reload rebuilds the same pills from the `tool_calls`
+               column, so a missed frame loses nothing. Renders ordered per-call pills: a `tool_call`
+               opens/updates a pill keyed on `tool_call_id`; a `tool_result` attaches its result to
+               that pill. stream_id is informational - key nothing on it. See the frozen contract in
+               docs/DAWN_UI_SIGNAL_MAP.md and [[living-tool-pills-plan]]. */
+            const conv = Number(p.conversation_id ?? 0);
+            if (!conv || conv !== this.convId) break; // not the conversation on screen (or none) -> ignore
+            /* The inner `payload` is an opaque, redacted JSON string - untrusted. tool_call_id
+               rides INSIDE it (same place `tool` does), byte-identical to load_conversation's key
+               so live + reload pair on one implementation; omitted when the provider gave none. All
+               fields reach the DOM via textContent (never innerHTML). */
+            let obj: { tool?: unknown; args?: unknown; result?: unknown; tool_call_id?: unknown } = {};
+            try {
+               obj = JSON.parse(String(p.payload ?? "")) as typeof obj;
+            } catch {
+               /* garbled / non-JSON payload -> treat as empty (generic label, no detail) */
+            }
+            const id = typeof obj.tool_call_id === "string" ? obj.tool_call_id : "";
+            const detailStr = (v: unknown): string | undefined =>
+               v == null ? undefined : typeof v === "string" ? v : JSON.stringify(v);
+            if (p.kind === "tool_result") {
+               const result = detailStr(obj.result);
+               if (id) this.sinks.conversation.toolResult(id, result ?? "");
+               break;
+            }
+            /* default: a tool_call (open/update the pill) */
+            const name = typeof obj.tool === "string" && obj.tool ? obj.tool : "tool";
+            this.sinks.conversation.toolCall({ id, name, args: detailStr(obj.args) });
+            break;
+         }
+
          case "transcript":
             /* DAWN smuggles llm_state_update inside a transcript with this role
                (webui_server.c). Intercept it — it is not a message. */
@@ -2255,7 +2356,7 @@ export class DawnIngest implements Ingest {
                   }
                   this.sinks.conversation.showReply(info.text, messageId);
                }
-               if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
+               if (info?.tools) for (const c of info.tools) this.sinks.conversation.toolCall(c);
             }
             break;
 
@@ -2289,7 +2390,7 @@ export class DawnIngest implements Ingest {
             const info = interpretMessage(String((p as { text?: string }).text ?? ""));
             const text = info?.text ?? "";
             if (text) this.sinks.conversation.renderAppended({ role, text, messageId });
-            if (info?.tools) this.sinks.conversation.showToolUse(info.tools);
+            if (info?.tools) for (const c of info.tools) this.sinks.conversation.toolCall(c);
             break;
          }
 

@@ -15,7 +15,7 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus, ConversationItem, OutImage, UploadedDoc } from "../ingest/ingest.ts";
+import type { ActivityStatus, ConversationItem, OutImage, ToolCall, UploadedDoc } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
 import { renderMarkdown } from "./format.ts";
@@ -44,7 +44,8 @@ export interface ConversationController {
    noteMessageId(messageId: number): void;
    hasMessage(messageId: number): boolean;
    showError(text: string): void;
-   showToolUse(tools: string[]): void;
+   toolCall(call: ToolCall): void;
+   toolResult(id: string, result: string): void;
    setAssistantName(name: string): void;
    loadHistory(items: ConversationItem[]): void;
    clear(): void;
@@ -339,6 +340,7 @@ export function mountConversation(
    };
 
    const appendMsg = (role: "user" | "assistant", rawText: string): Msg => {
+      closeToolGroup(); // a text turn ends the current tool run; the next tools open a fresh group
       win.classList.remove("empty");
       const el = document.createElement("div");
       el.className = `convo-msg ${role}`;
@@ -371,25 +373,142 @@ export function mountConversation(
       (a cog glyph + the tool name) rather than the raw tool_use JSON. Tool names are
       DAWN-supplied data, so bind via textContent. Not a conversational turn, so it
       stays out of `messages` (the recede/hover logic keys on real turns). */
-   const appendToolChip = (tools: string[]): void => {
-      if (!tools.length) return;
+   /* Tool use renders as an ordered run of expandable pills (one per invocation, in call
+      order, repeats shown as repeats). A run is one `convo-tools` group; a text turn closes it
+      (closeToolGroup on appendMsg) so the next tools open a fresh group. When a run grows past
+      TOOL_COLLAPSE_AT the group collapses to a "N tools" summary that expands on click - a
+      tool-heavy turn stays calm. Each pill expands to that call's args + result. All strings are
+      DAWN-supplied (opaque, redacted) data -> bound via textContent, never innerHTML. */
+   const TOOL_COLLAPSE_AT = 4;
+   const TOOL_DETAIL_CAP = 4000; // chars per args/result blob: a pathological tool output can't bloat the DOM
+   interface ToolPill {
+      call: ToolCall;
+      label: HTMLElement;
+      detail: HTMLElement;
+   }
+   interface ToolGroupEl {
+      el: HTMLElement;
+      summary: HTMLButtonElement;
+      list: HTMLElement;
+      pills: ToolPill[];
+      byId: Map<string, ToolPill>;
+   }
+   let toolGroup: ToolGroupEl | null = null;
+   let bulkLoadingTools = false; // set during loadHistory so per-pill scroll/summon doesn't thrash
+
+   const closeToolGroup = (): void => {
+      toolGroup = null; // the group stays in the DOM; new tools just start a fresh one
+   };
+
+   const capDetail = (s: string): string =>
+      s.length > TOOL_DETAIL_CAP ? `${s.slice(0, TOOL_DETAIL_CAP)}\n…(${s.length - TOOL_DETAIL_CAP} more chars)` : s;
+
+   /* One labelled, colour-coded section of a pill's detail: the CALL (args, teal) vs the RESULT
+      (cool-blue) so the two read distinctly. The value is untrusted -> bound via textContent. */
+   const buildToolPart = (kind: "call" | "result", body: string): HTMLElement => {
+      const part = document.createElement("div");
+      part.className = `convo-tool-part convo-tool-part-${kind}`;
+      const label = document.createElement("span");
+      label.className = "convo-tool-part-label";
+      label.textContent = kind;
+      const bodyEl = document.createElement("span");
+      bodyEl.className = "convo-tool-part-body";
+      bodyEl.textContent = body;
+      part.append(label, bodyEl);
+      return part;
+   };
+
+   const renderToolDetail = (pill: ToolPill): void => {
+      const parts: HTMLElement[] = [];
+      if (pill.call.args) parts.push(buildToolPart("call", capDetail(pill.call.args)));
+      if (pill.call.result !== undefined) parts.push(buildToolPart("result", capDetail(pill.call.result)));
+      else if (pill.call.args) parts.push(buildToolPart("result", "(running…)"));
+      if (parts.length) pill.detail.replaceChildren(...parts);
+      else pill.detail.textContent = "(no detail)";
+   };
+
+   const updateToolCollapse = (g: ToolGroupEl): void => {
+      const collapsed = g.pills.length > TOOL_COLLAPSE_AT;
+      g.el.classList.toggle("collapsed", collapsed);
+      if (collapsed) g.summary.textContent = `${g.pills.length} tools`;
+   };
+
+   const ensureToolGroup = (): ToolGroupEl => {
+      if (toolGroup) return toolGroup;
       win.classList.remove("empty");
-      const row = document.createElement("div");
-      row.className = "convo-tools";
-      for (const name of tools) {
-         const chip = document.createElement("span");
-         chip.className = "convo-tool";
-         const icon = document.createElement("span");
-         icon.className = "convo-tool-icon";
-         icon.setAttribute("aria-hidden", "true");
-         const label = document.createElement("span");
-         label.className = "convo-tool-label";
-         label.textContent = name;
-         chip.append(icon, label);
-         row.appendChild(chip);
+      const el = document.createElement("div");
+      el.className = "convo-tools";
+      const summary = document.createElement("button");
+      summary.type = "button";
+      summary.className = "convo-tools-summary";
+      const list = document.createElement("div");
+      list.className = "convo-tools-list";
+      el.append(summary, list);
+      /* ONE delegated click listener per group (not one per pill + one per summary), so a
+         tool-heavy turn on a long-lived transcript can't accumulate a listener per invocation.
+         Clicking the summary toggles the collapse; clicking a chip toggles its detail panel. */
+      el.addEventListener("click", (e) => {
+         const target = e.target as HTMLElement;
+         /* Toggle in place - do NOT scrollToEnd: expanding a pill high in the history must not
+            yank the view to the bottom. Scroll anchoring keeps the position stable as it grows. */
+         if (summary.contains(target)) {
+            el.classList.toggle("expanded");
+            return;
+         }
+         const chip = target.closest(".convo-tool-chip");
+         const detail = chip?.parentElement?.querySelector<HTMLElement>(".convo-tool-detail");
+         if (detail) detail.hidden = !detail.hidden;
+      });
+      scroll.appendChild(el);
+      toolGroup = { el, summary, list, pills: [], byId: new Map() };
+      return toolGroup;
+   };
+
+   const toolCall = (call: ToolCall): void => {
+      const g = ensureToolGroup();
+      /* Idempotent by id: a redelivered frame, or a reloaded pill that already carries its
+         result, updates in place instead of duplicating. */
+      const existing = call.id ? g.byId.get(call.id) : undefined;
+      if (existing) {
+         existing.call = { ...existing.call, ...call };
+         existing.label.textContent = existing.call.name || "tool";
+         renderToolDetail(existing);
+         return;
       }
-      scroll.appendChild(row);
-      scrollToEnd();
+      const el = document.createElement("div");
+      el.className = "convo-tool";
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "convo-tool-chip";
+      const icon = document.createElement("span");
+      icon.className = "convo-tool-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.className = "convo-tool-label";
+      label.textContent = call.name || "tool";
+      chip.append(icon, label);
+      const detail = document.createElement("div");
+      detail.className = "convo-tool-detail";
+      detail.hidden = true; // the group's delegated listener toggles this on a chip click
+      el.append(chip, detail);
+      g.list.appendChild(el);
+      const pill: ToolPill = { call: { ...call }, label, detail };
+      renderToolDetail(pill);
+      g.pills.push(pill);
+      if (call.id) g.byId.set(call.id, pill);
+      updateToolCollapse(g);
+      if (!bulkLoadingTools) {
+         scrollToEnd();
+         summon(); // a live tool firing is activity: raise the window (skipped during a bulk reload)
+      }
+   };
+
+   const toolResult = (id: string, result: string): void => {
+      if (!toolGroup || !id) return;
+      const pill = toolGroup.byId.get(id);
+      if (!pill) return; // result before its call, or across a group boundary: skip (reload repairs)
+      pill.call.result = result;
+      renderToolDetail(pill);
    };
 
    /* Streaming markdown: re-render the growing reply at most once per frame so a
@@ -559,10 +678,6 @@ export function mountConversation(
    };
    const hasMessage = (messageId: number): boolean => messageId > 0 && renderedIds.has(messageId);
 
-   const showToolUse = (tools: string[]): void => {
-      appendToolChip(tools);
-      summon();
-   };
 
    /* A red system error line in the transcript - a failed turn or a server error, shown
       in-context like the old WebUI (its DawnTranscript system 'Error: ...' entry) rather
@@ -620,6 +735,7 @@ export function mountConversation(
       closeOverlay();
       revokeObjectUrls();
       scroll.replaceChildren();
+      closeToolGroup(); // the group DOM was just wiped; drop the dangling ref
       messages.length = 0;
       resetCorrelation();
       win.classList.remove("thinking", "receded");
@@ -638,19 +754,33 @@ export function mountConversation(
       closeOverlay();
       revokeObjectUrls(); // the outgoing transcript's image URLs are about to be dropped
       scroll.replaceChildren();
+      closeToolGroup(); // the group DOM was just wiped; drop the dangling ref
       messages.length = 0;
       resetCorrelation(); // fresh transcript: drop stale ids + pending adopt entries
-      /* A turn can carry text, a tool chip, or both (spoke then called a tool) - render
-         the text first, then its tool chips, preserving transcript order. Stamp each row's DB
-         id so a late message_appended for a reloaded row can't re-double it (spec prereq). */
-      for (const it of items) {
-         if (it.text) {
-            const msg = appendMsg(it.role, it.text);
-            if (typeof it.id === "number") stampId(msg, it.id);
+      /* A turn can carry text, a run of tool calls, or both (spoke then called tools) - render
+         the text first, then its tool pills, preserving transcript order. closeToolGroup() per
+         item gives each message's tools their OWN group, matching the live path (which splits
+         groups per stream iteration) even when an intermediate tool-only message has no prose.
+         Each reloaded pill already carries its result (correlated at load), so it expands without
+         a live toolResult. Stamp each row's DB id so a late message_appended can't re-double it.
+         bulkLoadingTools suppresses per-pill scroll/summon so a long reload doesn't thrash. */
+      bulkLoadingTools = true;
+      try {
+         for (const it of items) {
+            closeToolGroup();
+            if (it.text) {
+               const msg = appendMsg(it.role, it.text);
+               if (typeof it.id === "number") stampId(msg, it.id);
+            }
+            if (it.tools?.length) for (const call of it.tools) toolCall(call);
          }
-         if (it.tools?.length) appendToolChip(it.tools);
+      } finally {
+         bulkLoadingTools = false;
       }
-      if (messages.length > 0) summon();
+      if (messages.length > 0) {
+         summon();
+         scrollToEnd(); // land at the end once, since per-pill scrolls were suppressed above
+      }
    };
 
    /* --- user-facing -------------------------------------------------------- */
@@ -954,7 +1084,8 @@ export function mountConversation(
       showReply,
       showUser,
       showError,
-      showToolUse,
+      toolCall,
+      toolResult,
       setAssistantName,
       loadHistory,
       clear,
