@@ -65,6 +65,15 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   component; use or add a token (it is mirrored to CSS custom properties).
 - **Feedback before implementation.** For a question or a design choice, give analysis,
   trade-offs, and a recommendation first; wait for a clear go-ahead before coding.
+- **Review before handoff.** Any change worth reviewing gets a code-review pass BEFORE it is
+  handed over for verification. Build + tsc + browser-verify is not enough on its own. Sequence:
+  build/tsc -> code review -> fix what's real -> hand over -> verify in browser -> commit only on
+  confirmation. Launch the specialist review set in parallel via the Agent tool, scoped to the
+  diff (`git diff <last-reviewed-ref>`): `render-seam-architect` (seam/architecture),
+  `correctness-reviewer` (logic), `web-frontend-security-reviewer` (XSS + read-mostly charter),
+  `browser-runtime-reviewer` (leaks/lifecycle). Scale the SET to the change (a small focused fix
+  may need only the one or two relevant lenses), but running SOMETHING is the default - only
+  genuinely trivial edits (a comment, a token rename, a copy tweak) skip it.
 - **Commit only when asked.** The user runs their own git; do not commit or push unless
   told to.
 - **Verify against DAWN source.** DAWN lives at `../dawn`. Its
