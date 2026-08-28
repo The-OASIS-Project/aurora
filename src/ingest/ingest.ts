@@ -52,6 +52,9 @@ export interface ConversationItem {
    (non-streamed or replayed history) arrives as showReply. */
 export interface ConversationSink {
    setThinking(thinking: boolean): void;
+   /* DAWN is speaking (TTS). Holds the window upright across the gaps between spoken
+      sentences so it does not recede-then-raise (bounce) while waiting on the next text. */
+   setSpeaking(speaking: boolean): void;
    startReply(): void;
    appendDelta(delta: string): void;
    endReply(): void;

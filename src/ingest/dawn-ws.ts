@@ -1611,6 +1611,10 @@ export class DawnIngest implements Ingest {
             this.updateMicMute();
             this.sinks.reactor.setState(toReactorState(st));
             this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
+            /* Keep the window upright while DAWN speaks (persists across sentence gaps), so it
+               doesn't recede-then-raise between spoken bursts. Self-clears when state leaves
+               "speaking" (the next frame passes false -> normal idle recede). */
+            this.sinks.conversation.setSpeaking(this.dawnSpeaking);
             this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
             /* No client-side persist on idle (or anywhere): DAWN is the sole writer of the turn
                (server-authoritative persistence); the client only renders + reconciles the fanned

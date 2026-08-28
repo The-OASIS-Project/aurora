@@ -35,6 +35,7 @@ import {
 
 export interface ConversationController {
    setThinking(thinking: boolean): void;
+   setSpeaking(speaking: boolean): void;
    startReply(): void;
    appendDelta(delta: string): void;
    endReply(): void;
@@ -155,6 +156,7 @@ export function mountConversation(
    let assistantName = "DAWN"; // replaced by the configured ai_name once known
    let active = false;
    let thinking = false;
+   let speaking = false; // DAWN is speaking (TTS); suppress recede across sentence gaps
    let focused = false;
    let hovering = false;
    let shortTimer = 0;
@@ -434,7 +436,7 @@ export function mountConversation(
    function armIdle(): void {
       window.clearTimeout(shortTimer);
       window.clearTimeout(longTimer);
-      if (thinking || messages.length === 0) return;
+      if (thinking || speaking || messages.length === 0) return;
       longTimer = window.setTimeout(recede, LONG_IDLE_MS);
       if (!hovering && !focused) shortTimer = window.setTimeout(recede, IDLE_MS);
    }
@@ -445,6 +447,17 @@ export function mountConversation(
       thinking = t;
       win.classList.toggle("thinking", t);
       if (t) summon();
+      else armIdle();
+   };
+
+   /* Hold the window upright while DAWN speaks. TTS surfaces text in bursts with
+      quiet gaps between sentences; without this the idle countdown fires in a gap
+      and the window leans back, then the next burst summons it upright again -
+      the bounce. Kept in sync with DAWN's speaking state on every state frame, so
+      it self-clears when the turn ends (-> armIdle recedes normally). */
+   const setSpeaking = (s: boolean): void => {
+      speaking = s;
+      if (s) summon();
       else armIdle();
    };
 
@@ -934,6 +947,7 @@ export function mountConversation(
 
    return {
       setThinking,
+      setSpeaking,
       startReply,
       appendDelta,
       endReply,
