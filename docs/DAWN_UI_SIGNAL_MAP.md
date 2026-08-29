@@ -826,6 +826,46 @@ against `dawn/src/webui/webui_attention.c` + `attention_catalog.c`.
 - **Backend-doc gap:** the whole `watch_*` family is **absent from `WEBSOCKET_PROTOCOL.md`**
   (same class as the `doc_library_*` gap in §9.5) - flag to the protocol-doc owner.
 
+### 9.9 Living tool pills (`tool_step` + reload rehydration) - consumed 2026-08-29
+
+The conversation surface (`src/conversation/`, driven by `src/ingest/dawn-ws.ts`) renders tool use
+as an ordered run of per-call **expandable pills**, consistent across three paths: live own-turn,
+live bystander, and reload. Verified against `dawn/src/webui/webui_broadcasts.c`
+(`webui_broadcast_tool_step`), `event_payload.c`, `webui_history.c`, `llm_tool_loop.c`.
+
+- **Live push - `tool_step` (Tier A):** `{conversation_id, stream_id, kind:"tool_call"|"tool_result",
+  payload}`. `payload` is an **opaque, redacted JSON string** (same redaction as the jobs
+  observe-stream - untrusted, bind via `textContent`) carrying `{tool, tool_call_id, iter, args}`
+  (tool_call) or `{tool, tool_call_id, result}` (tool_result). `tool_call_id` lives INSIDE the
+  payload (byte-identical to `load_conversation`'s key); `iter` is the 0-based tool-loop iteration
+  index (present when ≥0, omitted otherwise). `stream_id` is informational - key nothing on it.
+- **Origin inclusion is capability-gated.** By default the origin is EXCLUDED (`tool_step` is for a
+  bystander watching a conversation it did not start). A client that advertises **`tool_step_origin:
+  true`** on its `init`/`reconnect` handshake (a flat bool, sibling to `tts_enabled`/`use_opus`) also
+  receives its OWN turn's `tool_step`. Aurora sets it - it has no stream-derived tool render, so this
+  is its only live tool signal. Stock www leaves it off (it renders tools inline from its stream) to
+  avoid a double-render. This is a benign RECEIVE-capability hint (asks for more inbound data), not a
+  control write - within the read-mostly charter, same class as `tts_enabled`.
+- **Reload rehydration:** `load_conversation` assistant rows carry a SEPARATE **`tool_calls`** field
+  (OpenAI array `[{id, type, function:{name, arguments}}]`), NOT inside `content`; `role:"tool"` rows
+  carry `tool_call_id` + `content` (the result). Aurora's `parseToolCalls` builds ordered `ToolCall[]`
+  and correlates results by `tool_call_id` - the SAME key as the live path, so ONE pairing
+  implementation covers both. (interpretMessage's content-block `tool_use` is now a legacy, name-only
+  fallback - the current daemon puts tools in `tool_calls`.)
+- **Grouping:** one pill group per tool-loop iteration. Live seals a group when `iter` changes (in
+  addition to the existing `stream_start` seal); reload seals per assistant message. A tool-loop
+  iteration maps 1:1 to one persisted assistant message (`persist_appended_tool_turn` runs once per
+  iteration), so live per-iter and reload per-message grouping agree.
+- **View:** ordered per-call pills, **collapse-when-many** to an "N tools" summary, **click-to-expand**
+  each pill to colour-coded CALL (args, teal `--accent`) / RESULT (cool-blue `--cool`) sections. Every
+  tool string reaches the DOM via `textContent`; detail capped at 4KB.
+- **No tool success/error status on the wire (green/red PARKED).** `tool_result` is an opaque string;
+  DAWN does not structurally distinguish a failed tool from a success (both are strings), and a text
+  heuristic would mislabel. Both clients render a single NEUTRAL "done" tone. Real green/red needs a
+  daemon-plumbed status (bool/enum on `tool_result` AND persisted on the `role:tool` row so reload
+  agrees); parked pending a backend greenlight. A CSS rail is staged on both clients for when it lands.
+- **Backend doc:** the `tool_step` frame is now written up in DAWN's `WEBSOCKET_PROTOCOL.md`.
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
@@ -855,3 +895,9 @@ with the DAWN 2a-0→2a→2b arc: `openrouter_available` on all four runtime bui
 `config.llm.cloud.openrouter_models` + `openrouter_default_model_idx`, the `use_openrouter` gateway
 retired via `config_migrate()` so the `CLOUD_PROVIDER_OPENROUTER` enum is the sole authority; Aurora
 treats it as a 4th provider with verbatim vendor-slug model strings; picker only, no config editor).*
+**Living tool pills consumed 2026-08-29 (§9.9; the `tool_step` push - `tool_call`/`tool_result` with an
+opaque payload carrying `tool`/`tool_call_id`/`iter`/`args`/`result` - plus the `tool_step_origin`
+handshake opt-in for origin inclusion, and reload rehydration from the `tool_calls` column +
+`role:tool` rows paired on `tool_call_id`; ordered per-call expandable pills, collapse-when-many,
+per-iteration grouping. Coordinated with the DAWN + stock-www halves; both clients at parity. Green/red
+tool status deferred pending a daemon-plumbed signal.)*

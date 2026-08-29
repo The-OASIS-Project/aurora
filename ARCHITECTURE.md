@@ -136,8 +136,9 @@ src/
   choreography/      importance -> depth / presence
   render/            css3d renderer, RenderNode contract, makeMovable, panel drag
   anchor/            the Three.js reactor (the only WebGL)
-  conversation/      the front window, markdown, the 3D-lean recede, and attachment
-                     display + the composer's attach/upload (attachments.ts)
+  conversation/      the front window, markdown, the 3D-lean recede, attachment
+                     display + the composer's attach/upload (attachments.ts), and the
+                     ordered/expandable tool-use pills (live tool_step + reload rehydration)
   conversation-picker/  the top-band history panel
   context/           the movable "why did it say that" panel (context_injection + gold)
   library/           the movable notes + documents viewer
