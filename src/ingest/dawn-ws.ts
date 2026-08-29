@@ -2305,7 +2305,7 @@ export class DawnIngest implements Ingest {
                rides INSIDE it (same place `tool` does), byte-identical to load_conversation's key
                so live + reload pair on one implementation; omitted when the provider gave none. All
                fields reach the DOM via textContent (never innerHTML). */
-            let obj: { tool?: unknown; args?: unknown; result?: unknown; tool_call_id?: unknown } = {};
+            let obj: { tool?: unknown; args?: unknown; result?: unknown; tool_call_id?: unknown; iter?: unknown } = {};
             try {
                obj = JSON.parse(String(p.payload ?? "")) as typeof obj;
             } catch {
@@ -2319,9 +2319,11 @@ export class DawnIngest implements Ingest {
                if (id) this.sinks.conversation.toolResult(id, result ?? "");
                break;
             }
-            /* default: a tool_call (open/update the pill) */
+            /* default: a tool_call (open/update the pill). `iter` seals the group at a tool-loop
+               iteration boundary (present when >= 0, omitted otherwise); acted on for tool_call only. */
             const name = typeof obj.tool === "string" && obj.tool ? obj.tool : "tool";
-            this.sinks.conversation.toolCall({ id, name, args: detailStr(obj.args) });
+            const iter = typeof obj.iter === "number" ? obj.iter : undefined;
+            this.sinks.conversation.toolCall({ id, name, args: detailStr(obj.args), iter });
             break;
          }
 

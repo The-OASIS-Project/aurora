@@ -46,6 +46,11 @@ export interface ToolCall {
    name: string;
    args?: string;
    result?: string;
+   /* Tool-loop iteration index (0-based) from the live tool_step frame. The view seals a pill
+      group when this changes, so a prose-less tool-only iteration still starts its own group
+      (live grouping then matches reload's per-message split). Absent on the reload path (which
+      seals per message) and on older daemons (which fall back to stream-boundary sealing). */
+   iter?: number;
 }
 
 /* One entry in a loaded transcript: a text turn, a run of tool calls, or both (a turn

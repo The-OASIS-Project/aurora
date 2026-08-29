@@ -394,10 +394,12 @@ export function mountConversation(
       byId: Map<string, ToolPill>;
    }
    let toolGroup: ToolGroupEl | null = null;
+   let lastToolIter: number | undefined; // last tool_step iteration index seen in the open group
    let bulkLoadingTools = false; // set during loadHistory so per-pill scroll/summon doesn't thrash
 
    const closeToolGroup = (): void => {
       toolGroup = null; // the group stays in the DOM; new tools just start a fresh one
+      lastToolIter = undefined;
    };
 
    const capDetail = (s: string): string =>
@@ -465,6 +467,13 @@ export function mountConversation(
    };
 
    const toolCall = (call: ToolCall): void => {
+      /* Per-iteration seal: a tool-loop iteration boundary starts a fresh group even when the
+         iteration emitted no stream_start (a prose-less tool-only iteration), so live grouping
+         matches reload's per-message split. Seal on a DIFFERING iter (a per-turn 3->0 reset is a
+         boundary too), in addition to the stream_start/appendMsg seal. No iter (older daemon /
+         reload) -> this is skipped and the stream-boundary seal governs. */
+      if (call.iter !== undefined && toolGroup && call.iter !== lastToolIter) closeToolGroup();
+      if (call.iter !== undefined) lastToolIter = call.iter;
       const g = ensureToolGroup();
       /* Idempotent by id: a redelivered frame, or a reloaded pill that already carries its
          result, updates in place instead of duplicating. */
