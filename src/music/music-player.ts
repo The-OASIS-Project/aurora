@@ -37,6 +37,9 @@ const SVG = "http://www.w3.org/2000/svg";
    the track-presence fade (`.on`): this is the operator choosing not to show the
    player at all, so a playing track stays hidden until they re-enable it. */
 const VISIBLE_KEY = "dawn.hero.musicShown";
+/* The spectrum's "vivid" color mode: off = the calm single-teal EQ, on = a
+   cool->teal->gold spread across the bars. Persisted like the visibility choice. */
+const COLORFUL_KEY = "dawn.hero.musicColorful";
 
 /* Transport glyphs. Solid (filled) for play/pause/skip; hairline (stroked) for the
    mode + volume affordances, matching the rest of the chrome. */
@@ -55,7 +58,9 @@ const ICONS: Record<string, { solid?: boolean; paths: string[] }> = {
    },
    repeat: { paths: ["M17 2l4 4-4 4", "M3 11v-1a4 4 0 0 1 4-4h14", "M7 22l-4-4 4-4", "M21 13v1a4 4 0 0 1-4 4H3"] },
    volume: { paths: ["M11 5 6 9H3v6h3l5 4z", "M15.5 8.5a5 5 0 0 1 0 7", "M18.5 6a9 9 0 0 1 0 12"] },
-   mute: { paths: ["M11 5 6 9H3v6h3l5 4z", "M22 9l-6 6", "M16 9l6 6"] }
+   mute: { paths: ["M11 5 6 9H3v6h3l5 4z", "M22 9l-6 6", "M16 9l6 6"] },
+   /* Ascending equalizer bars: the "vivid spectrum" affordance. */
+   eq: { solid: true, paths: ["M4 12h3v8H4z", "M10.5 4h3v16h-3z", "M17 9h3v11h-3z"] }
 };
 
 function icon(name: keyof typeof ICONS): SVGSVGElement {
@@ -78,6 +83,37 @@ function icon(name: keyof typeof ICONS): SVGSVGElement {
    return svg;
 }
 
+/* Parse a "#rrggbb" (or "#rgb") string to an [r,g,b] triple; null if it is not a
+   hex color (a palette pivot always mirrors hex into the CSS vars, so that is all
+   we handle). */
+function parseHex(c: string): [number, number, number] | null {
+   let h = c.trim();
+   if (h[0] !== "#") return null;
+   h = h.slice(1);
+   if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+   if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+   const n = parseInt(h, 16);
+   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/* A gradient across the given stops sampled at t in [0,1]. Falls back to the last
+   parseable stop (or grey) if a stop is not hex, so a bad var never throws. */
+function sampleStops(stops: Array<[number, number, number] | null>, t: number): string {
+   const valid = stops.filter((s): s is [number, number, number] => s !== null);
+   if (valid.length === 0) return "#888888";
+   if (valid.length === 1) return `rgb(${valid[0][0]},${valid[0][1]},${valid[0][2]})`;
+   const clamped = Math.min(1, Math.max(0, t));
+   const seg = clamped * (valid.length - 1);
+   const i = Math.min(valid.length - 2, Math.floor(seg));
+   const f = seg - i;
+   const a = valid[i];
+   const b = valid[i + 1];
+   const r = Math.round(a[0] + (b[0] - a[0]) * f);
+   const g = Math.round(a[1] + (b[1] - a[1]) * f);
+   const bl = Math.round(a[2] + (b[2] - a[2]) * f);
+   return `rgb(${r},${g},${bl})`;
+}
+
 function fmtTime(sec: number): string {
    if (!Number.isFinite(sec) || sec < 0) sec = 0;
    const m = Math.floor(sec / 60);
@@ -94,6 +130,14 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    const canvas = document.createElement("canvas");
    canvas.className = "music-viz";
    const ctx = canvas.getContext("2d");
+
+   /* Vivid-spectrum toggle, pinned to the player's upper-right corner. Flips the
+      EQ between the calm single-teal draw and a cool->teal->gold color spread. */
+   const colorBtn = document.createElement("button");
+   colorBtn.type = "button";
+   colorBtn.className = "music-color-btn";
+   colorBtn.setAttribute("aria-label", "Vivid spectrum");
+   colorBtn.appendChild(icon("eq"));
 
    const head = document.createElement("div");
    head.className = "music-head";
@@ -157,7 +201,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
 
    /* Order: title/artist first, then the spectrum meter below it, then transport.
       (The EQ reads as a response to the now-playing line rather than a header.) */
-   el.append(head, canvas, seek, times, controls, volRow);
+   el.append(head, canvas, seek, times, controls, volRow, colorBtn);
    root.appendChild(el);
 
    /* User visibility (Panels menu), persisted. `music-off` force-hides the player
@@ -184,6 +228,40 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       if (c) vizColor = c;
    };
    readAccent();
+
+   /* Vivid mode: a per-bar palette across the frequency axis. Precomputed once (a
+      palette pivot is rare, and readAccent is likewise mount-only) so the frame
+      loop just indexes an array. `null` => calm single-teal draw. */
+   let colorful = localStorage.getItem(COLORFUL_KEY) === "1";
+   let barColors: string[] | null = null;
+   const buildBarColors = (): void => {
+      if (!colorful) {
+         barColors = null;
+         return;
+      }
+      const cs = getComputedStyle(document.documentElement);
+      const stop = (name: string): [number, number, number] | null =>
+         parseHex(cs.getPropertyValue(name).trim());
+      /* Bass cool-blue -> mids teal -> treble gold. Deliberately no alert red: it
+         is reserved strictly for "needs you" (charter), never decoration. */
+      const stops = [stop("--cool"), stop("--accent"), stop("--warn-glow")];
+      barColors = [];
+      for (let i = 0; i < VIZ_BARS; i++) {
+         barColors.push(sampleStops(stops, VIZ_BARS > 1 ? i / (VIZ_BARS - 1) : 0));
+      }
+   };
+   const reflectColorful = (): void => {
+      colorBtn.classList.toggle("active", colorful);
+      colorBtn.setAttribute("aria-pressed", String(colorful));
+   };
+   buildBarColors();
+   reflectColorful();
+   colorBtn.addEventListener("click", () => {
+      colorful = !colorful;
+      localStorage.setItem(COLORFUL_KEY, colorful ? "1" : "0");
+      buildBarColors();
+      reflectColorful();
+   });
 
    const setPlayGlyph = (): void => {
       const playing = Boolean(state?.playing && !state.paused);
@@ -309,7 +387,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       }
 
       /* Spectrum meter. */
-      if (ctx) drawSpectrum(ctx, canvas, opts.audio.getSpectrum(), vizColor);
+      if (ctx) drawSpectrum(ctx, canvas, opts.audio.getSpectrum(), vizColor, barColors);
    };
 
    const controller: MusicPlayerController = {
@@ -335,7 +413,8 @@ function drawSpectrum(
    ctx: CanvasRenderingContext2D,
    canvas: HTMLCanvasElement,
    data: Uint8Array<ArrayBuffer> | null,
-   color: string
+   color: string,
+   barColors: string[] | null
 ): void {
    const dpr = window.devicePixelRatio || 1;
    const w = canvas.clientWidth;
@@ -351,7 +430,8 @@ function drawSpectrum(
    const bins = data?.length ?? 0;
    const gap = 2;
    const bw = (w - gap * (VIZ_BARS - 1)) / VIZ_BARS;
-   ctx.fillStyle = color;
+   /* Calm mode: one fill for the whole meter. Vivid mode: per-bar color set below. */
+   if (!barColors) ctx.fillStyle = color;
    for (let i = 0; i < VIZ_BARS; i++) {
       let v = 0;
       if (data && bins > 0) {
@@ -363,6 +443,7 @@ function drawSpectrum(
          for (let b = lo; b < hi && b < bins; b++) peak = Math.max(peak, data[b]);
          v = peak / 255;
       }
+      if (barColors) ctx.fillStyle = barColors[i];
       const bh = Math.max(1.5, v * h);
       ctx.globalAlpha = 0.35 + v * 0.65;
       ctx.fillRect(i * (bw + gap), h - bh, bw, bh);
