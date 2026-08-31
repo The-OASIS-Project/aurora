@@ -4,8 +4,12 @@
    "version": "0.1.0",
    "type": "module",
    "description": "Aurora: a calm, dark, sci-fi ambient dashboard. Read-mostly client of DAWN's WebSocket streams.",
+   "engines": {
+      "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
+   },
    "scripts": {
       "dev": "vite",
+      "typecheck": "tsc --noEmit",
       "build": "tsc && vite build",
       "preview": "vite preview"
    },

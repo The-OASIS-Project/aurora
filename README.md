@@ -73,6 +73,9 @@ it at your daemon by editing `DAWN_TARGET` in `vite.config.ts` (default
 `https://localhost:3000`). Accept DAWN's cert too, once, by visiting
 `https://localhost:3000` directly.
 
+Working on the code? See **`DEVELOPING.md`** for the dev loop, developing against fake
+data with no DAWN running, and the conventions.
+
 ## Connecting
 
 Log in with your DAWN username and password. Aurora keeps you signed in across refreshes,
@@ -85,6 +88,8 @@ to the latest of the conversation automatically.
 
 ## Documentation
 
+- `DEVELOPING.md` - the developer guide: build, run, the dev loop, developing against
+  fake data without a live DAWN, and the conventions. Start here if you're editing the code.
 - `docs/DAWN_UI_SIGNAL_MAP.md` - which DAWN signals this UI consumes and what each one
   drives, plus small backend additions the UI would benefit from.
 - `ARCHITECTURE.md` - the four-layer design and the render seam.
