@@ -859,11 +859,18 @@ live bystander, and reload. Verified against `dawn/src/webui/webui_broadcasts.c`
 - **View:** ordered per-call pills, **collapse-when-many** to an "N tools" summary, **click-to-expand**
   each pill to colour-coded CALL (args, teal `--accent`) / RESULT (cool-blue `--cool`) sections. Every
   tool string reaches the DOM via `textContent`; detail capped at 4KB.
-- **No tool success/error status on the wire (green/red PARKED).** `tool_result` is an opaque string;
-  DAWN does not structurally distinguish a failed tool from a success (both are strings), and a text
-  heuristic would mislabel. Both clients render a single NEUTRAL "done" tone. Real green/red needs a
-  daemon-plumbed status (bool/enum on `tool_result` AND persisted on the `role:tool` row so reload
-  agrees); parked pending a backend greenlight. A CSS rail is staged on both clients for when it lands.
+- **Tool failure status - RED-on-failure SHIPPED (2026-08-31).** DAWN emits **`error: true`** inside
+  the `tool_result` `tool_step` payload ONLY on a confirmed hard failure (derived at execute time from
+  `!success` OR the tool's own error mark - **never parsed from result text, so it is not
+  attacker-forceable**); omitted on success or unknown. Aurora reds the failed pill (`--alert` rail +
+  cog + label) and reds the collapsed "N tools" summary if a group contains a failure; success/unknown
+  stays NEUTRAL - deliberately no green (fail-safe: a missed failure degrades to neutral, a false-red
+  would mislead). **Live-only in v1:** the reload path leaves it unset (a reloaded pill is neutral),
+  so no reload change is needed; absent `error` -> neutral, back-compat with an older daemon. NB the
+  jobs-observe path persists the payload to `conversation_events`, so a JOB conversation's durable
+  replay WOULD show red - not a concern for Aurora today (its pill transcript rehydrates from
+  `load_conversation`, not `conversation_events`). Persisting error to interactive reload is a clean
+  later follow-up.
 - **Backend doc:** the `tool_step` frame is now written up in DAWN's `WEBSOCKET_PROTOCOL.md`.
 
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
@@ -899,5 +906,7 @@ treats it as a 4th provider with verbatim vendor-slug model strings; picker only
 opaque payload carrying `tool`/`tool_call_id`/`iter`/`args`/`result` - plus the `tool_step_origin`
 handshake opt-in for origin inclusion, and reload rehydration from the `tool_calls` column +
 `role:tool` rows paired on `tool_call_id`; ordered per-call expandable pills, collapse-when-many,
-per-iteration grouping. Coordinated with the DAWN + stock-www halves; both clients at parity. Green/red
-tool status deferred pending a daemon-plumbed signal.)*
+per-iteration grouping. Coordinated with the DAWN + stock-www halves; both clients at parity.)*
+**Tool failure status shipped 2026-08-31 (§9.9; `error:true` on the tool_result payload -> a RED pill,
+neutral on success/unknown, no green; server-derived so not attacker-forceable; live-only v1, reload
+neutral, back-compat. Aurora `9a3a2eb`.)*
