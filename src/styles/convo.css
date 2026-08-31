@@ -102,6 +102,49 @@
    transition: opacity 400ms ease;
 }
 
+/* Grab-to-resize grip: a small centered bar stuck to the top of the (scrolling) window, so it
+   stays visible as the transcript scrolls. Dragging it up/down grows/shrinks the window height
+   (anchored to the fixed bottom edge). A thin phosphor bar, brighter on hover / while resizing. */
+.convo-resize {
+   position: sticky;
+   /* Sit near the top EDGE, not inset by the window's ~1rem top padding. Two offsets are needed
+      because the transcript is usually scrolled: a negative sticky `top` pulls the grip up in the
+      pinned/scrolled state (a margin is clamped by sticky there), and a matching negative
+      margin-top does the same in the unscrolled state. Both land the bar ~4px below the border. */
+   top: -0.9rem;
+   z-index: 3;
+   align-self: center;
+   flex: none;
+   width: 76px;
+   height: 12px;
+   margin-top: -0.9rem;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   cursor: ns-resize;
+   touch-action: none; /* pointer-drag the grip; don't scroll the transcript under it */
+}
+.convo-resize::before {
+   content: "";
+   width: 52px;
+   height: 2px;
+   border-radius: 2px;
+   background: color-mix(in srgb, var(--accent) 28%, transparent);
+   transition: background 0.15s ease;
+}
+.convo-resize:hover::before,
+.convo-window.resizing .convo-resize::before {
+   background: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+/* No drag transition while actively resizing - the height must track the pointer, not ease. */
+.convo-window.resizing {
+   transition: none;
+}
+.convo-window.receded .convo-resize {
+   opacity: 0; /* the grip has no place on a receded, leaned-back window */
+   pointer-events: none;
+}
+
 /* A turn: a colored left rail + a role header, then the body. Cooler than a filled
    box — the rail and a glowing role tick carry the identity. */
 .convo-msg {

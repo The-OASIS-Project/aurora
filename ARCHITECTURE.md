@@ -196,4 +196,7 @@ has no use for change-notification plumbing, and polling has no ordering surpris
   reactor). This is distinct from the store-backed ambient panels, which drag onto the side
   rails through `PanelDrag` (a path only `StubIngest` exercises today). The clock and the
   telemetry readout are also movable + toggleable (grab-to-move + a Panels-menu show/hide,
-  wired in `hud.ts`); the only fixed HUD chrome left is the frame corners and the reticle.
+  wired in `hud.ts`); the only fixed HUD chrome left is the frame corners and the reticle. The
+  conversation picker is movable too (grab its header bar; keeps its top-band spot until dragged),
+  leaving the menubar as the only fixed top-band chrome. The conversation window's height is
+  grab-to-resize (a top-edge grip), persisted like the positions.

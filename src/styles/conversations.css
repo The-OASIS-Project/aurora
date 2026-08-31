@@ -62,10 +62,20 @@
    display: none;
    flex-direction: column;
    padding: 0.4rem;
+   /* JS sets an inline max-height to the space available below (or above); the list flexes and
+      scrolls inside it, so the dropdown never runs off the bottom (or top). */
+   overflow: hidden;
    background: color-mix(in srgb, var(--ground-raise) 72%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
    backdrop-filter: blur(12px);
    -webkit-backdrop-filter: blur(12px);
+}
+/* Too low to open down: flip the panel ABOVE the header instead. */
+.cpick.cpick-up .cpick-panel {
+   top: auto;
+   bottom: 100%;
+   margin-top: 0;
+   margin-bottom: 6px;
 }
 .cpick.open .cpick-panel {
    display: flex;
@@ -78,6 +88,7 @@
    gap: 0.4rem;
    padding: 0.15rem 0.15rem 0.45rem;
    flex-wrap: wrap;
+   flex: none; /* stay fixed when the panel clamps; only the list below shrinks + scrolls */
 }
 .cpick-search {
    position: relative;
@@ -157,7 +168,11 @@
 
 /* --- the list --------------------------------------------------------------- */
 .cpick-list {
+   /* Upper cap when there's room; flex + min-height:0 lets it shrink to fit the panel's
+      clamped max-height (and scroll) when the picker sits near a screen edge. */
    max-height: min(52vh, 30rem);
+   flex: 1 1 auto;
+   min-height: 0;
    overflow-y: auto;
    display: flex;
    flex-direction: column;

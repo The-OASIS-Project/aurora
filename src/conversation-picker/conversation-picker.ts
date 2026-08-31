@@ -17,6 +17,7 @@
 
 import type { ConversationListSink, ConversationMeta } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
+import { makeMovable } from "../render/movable.ts";
 import { onActivate } from "../render/activate.ts";
 import { openDialog } from "../menu/dialog.ts";
 import { relativeTime, dayBucket } from "../util/time.ts";
@@ -37,6 +38,7 @@ export interface ConversationPickerController extends ConversationListSink {
 }
 
 const OPEN_KEY = "dawn.hero.conversationsOpen"; // default collapsed (absent/"false")
+const POS_KEY = "dawn.hero.conversationsPos"; // persisted grab-to-move position (absent = CSS default)
 const SEARCH_DEBOUNCE_MS = 300;
 
 /* The origin badge: a label plus the class that colors it, so voice / messaging /
@@ -120,6 +122,16 @@ export function mountConversationPicker(
    el.append(head, panel);
    root.appendChild(el);
 
+   /* Grab-to-move like the other instruments (it keeps its CSS top-band position until first
+      dragged; makeMovable only restores a stored one). Drag the header bar; the "+ New" button
+      still clicks, and the expanded search/list panel stays fully interactive (not the handle). */
+   const disposeMovable = makeMovable(el, {
+      storageKey: POS_KEY,
+      handle: ".cpick-head",
+      ignore: ".cpick-new",
+      onSnap: () => positionPanel() // recompute open-up/down + clamp after the picker is moved
+   });
+
    /* --- state ------------------------------------------------------------- */
    let listItems: ConversationMeta[] = []; // the paginated full list
    let searchItems: ConversationMeta[] = []; // current search results
@@ -135,9 +147,31 @@ export function mountConversationPicker(
 
    /* Collapse, persisted, default-collapsed (an absent/"false" flag stays closed). */
    let open = localStorage.getItem(OPEN_KEY) === "true";
+   /* The picker is movable, so the dropdown can end up too low for its downward panel to fit.
+      Open UP instead when below is cramped and above is roomier, and clamp the panel to the
+      available space so it never runs off-screen (the list scrolls inside, like the growing
+      panels). Recomputed on open, on a drag-drop (onSnap), and on a viewport resize. */
+   const positionPanel = (): void => {
+      if (!open) {
+         el.classList.remove("cpick-up");
+         panel.style.maxHeight = "";
+         return;
+      }
+      const r = el.getBoundingClientRect();
+      const gap = 12;
+      const spaceBelow = window.innerHeight - r.bottom - gap;
+      const spaceAbove = r.top - gap;
+      const up = spaceBelow < spaceAbove && spaceBelow < 320; // flip up only when below is cramped
+      el.classList.toggle("cpick-up", up);
+      /* Clamp to the actually-available space (no lower floor), so the panel never overflows the
+         edge even on a tiny viewport - it just shrinks and scrolls, like the other growing panels. */
+      panel.style.maxHeight = `${Math.max(0, Math.floor(up ? spaceAbove : spaceBelow))}px`;
+   };
+
    const applyOpen = (): void => {
       el.classList.toggle("open", open);
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      positionPanel();
       if (open) searchInput.focus();
    };
 
@@ -407,6 +441,8 @@ export function mountConversationPicker(
       }
    };
    document.addEventListener("mousedown", onDocDown);
+   /* Keep the open panel on-screen when the viewport changes (positionPanel no-ops when closed). */
+   window.addEventListener("resize", positionPanel);
 
    /* --- sink -------------------------------------------------------------- */
    const controller: ConversationPickerController = {
@@ -454,8 +490,10 @@ export function mountConversationPicker(
       destroy: () => {
          window.clearTimeout(searchTimer);
          document.removeEventListener("mousedown", onDocDown);
+         window.removeEventListener("resize", positionPanel);
          rowDisposers.forEach((d) => d());
          disposeToggle();
+         disposeMovable();
          el.remove();
       }
    };

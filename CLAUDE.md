@@ -57,8 +57,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   sharing one snap set with a central dead zone around the reactor. **The clock and the
   telemetry readout are now movable + toggleable too** (grab-to-move + a Panels-menu
   show/hide, wired in `hud.ts`), so the only remaining fixed HUD chrome is the frame corners
-  and the reticle. Top-band menu chrome (the menubar and the conversation picker, a peer of
-  the menubar) still gets a fixed screen position. Store-backed ambient
+  and the reticle. **The conversation picker is now movable too** (grab its header bar via
+  `makeMovable`; it keeps its top-band position until first dragged). The menubar is the only
+  fixed top-band chrome left. Store-backed ambient
   panels dock to the rails through `PanelDrag` instead - but that path is stub-only today
   (see the notification note below).
 - **Colors and feel only from `src/design/tokens.ts`.** Never hardcode a color in a

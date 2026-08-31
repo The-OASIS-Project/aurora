@@ -92,6 +92,9 @@ interface Msg {
 
 const IDLE_MS = 6000; // pointer off the window + settled -> recede
 const LONG_IDLE_MS = 45000; // no activity at all -> recede even if hovered/focused
+const HEIGHT_KEY = "dawn.hero.convoHeight"; // persisted window height cap, as a viewport fraction
+const MIN_H_FRAC = 0.2; // clamp the resizable height cap to a sane band of the viewport
+const MAX_H_FRAC = 0.85;
 const HOVER_MARGIN = 64; // px slack around the window that still counts as "over"
 
 export function mountConversation(
@@ -125,6 +128,49 @@ export function mountConversation(
    scroll.className = "convo-scroll";
    win.appendChild(scroll);
    mount.appendChild(win);
+
+   /* Grab-to-resize the window height. The window is anchored to a fixed bottom edge and grows
+      UP, so a top-edge handle dragged up makes it taller, down shorter. It adjusts the height
+      CAP (max-height) - the transcript stays content-sized under the cap, matching the calm
+      default. Persisted as a viewport fraction so it survives a viewport resize; re-applied in vh. */
+   const resizeHandle = document.createElement("div");
+   resizeHandle.className = "convo-resize";
+   resizeHandle.setAttribute("aria-hidden", "true");
+   win.insertBefore(resizeHandle, scroll); // sticky top grip: stays visible as the transcript scrolls
+   const applyHeightFrac = (frac: number): void => {
+      win.style.maxHeight = `${(frac * 100).toFixed(2)}vh`;
+   };
+   const storedH = Number(localStorage.getItem(HEIGHT_KEY));
+   if (storedH >= MIN_H_FRAC && storedH <= MAX_H_FRAC) applyHeightFrac(storedH);
+   resizeHandle.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (win.classList.contains("resizing")) return; // a drag is already active: ignore a 2nd pointer
+      e.preventDefault();
+      const startY = e.clientY;
+      const startH = parseFloat(getComputedStyle(win).maxHeight) || win.offsetHeight; // the cap in px
+      resizeHandle.setPointerCapture(e.pointerId);
+      win.classList.add("resizing");
+      const onMove = (ev: PointerEvent): void => {
+         const minPx = MIN_H_FRAC * window.innerHeight;
+         const maxPx = MAX_H_FRAC * window.innerHeight;
+         const h = Math.max(minPx, Math.min(maxPx, startH + (startY - ev.clientY))); // up = taller
+         win.style.maxHeight = `${Math.round(h)}px`; // scroll anchoring holds position; don't force to end
+      };
+      const onUp = (): void => {
+         resizeHandle.removeEventListener("pointermove", onMove);
+         resizeHandle.removeEventListener("pointerup", onUp);
+         resizeHandle.removeEventListener("pointercancel", onUp);
+         win.classList.remove("resizing");
+         /* Persist the CAP the user dragged to (from max-height), not the content-sized rendered
+            height, as a viewport fraction so it scales; re-apply in vh. */
+         const capPx = parseFloat(getComputedStyle(win).maxHeight) || win.offsetHeight;
+         const frac = Math.max(MIN_H_FRAC, Math.min(MAX_H_FRAC, capPx / window.innerHeight));
+         localStorage.setItem(HEIGHT_KEY, frac.toFixed(4));
+         applyHeightFrac(frac);
+      };
+      resizeHandle.addEventListener("pointermove", onMove);
+      resizeHandle.addEventListener("pointerup", onUp);
+      resizeHandle.addEventListener("pointercancel", onUp); // a cancelled (touch/pen) drag must still clean up
+   });
 
    const messages: Msg[] = [];
    let streaming: Msg | null = null;
