@@ -2305,7 +2305,7 @@ export class DawnIngest implements Ingest {
                rides INSIDE it (same place `tool` does), byte-identical to load_conversation's key
                so live + reload pair on one implementation; omitted when the provider gave none. All
                fields reach the DOM via textContent (never innerHTML). */
-            let obj: { tool?: unknown; args?: unknown; result?: unknown; tool_call_id?: unknown; iter?: unknown } = {};
+            let obj: { tool?: unknown; args?: unknown; result?: unknown; tool_call_id?: unknown; iter?: unknown; error?: unknown } = {};
             try {
                obj = JSON.parse(String(p.payload ?? "")) as typeof obj;
             } catch {
@@ -2316,7 +2316,10 @@ export class DawnIngest implements Ingest {
                v == null ? undefined : typeof v === "string" ? v : JSON.stringify(v);
             if (p.kind === "tool_result") {
                const result = detailStr(obj.result);
-               if (id) this.sinks.conversation.toolResult(id, result ?? "");
+               /* `error:true` = confirmed hard failure (DAWN derives it at execute time, never from
+                  result text, so it's not attacker-forceable); omitted = success or unknown -> neutral. */
+               const error = obj.error === true;
+               if (id) this.sinks.conversation.toolResult(id, result ?? "", error);
                break;
             }
             /* default: a tool_call (open/update the pill). `iter` seals the group at a tool-loop

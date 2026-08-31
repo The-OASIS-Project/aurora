@@ -337,6 +337,31 @@
    content: "\2699\FE0E";
    font-size: 0.92em;
 }
+/* Confirmed tool failure: the chip reds (rail + cog + label), success/unknown stays neutral -
+   no green (fail-safe). Live-only in v1; a reloaded pill is neutral. */
+.convo-tool.error .convo-tool-chip {
+   color: color-mix(in srgb, var(--alert-glow) 70%, var(--text-dim));
+   background: color-mix(in srgb, var(--alert) 9%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--alert) 55%, transparent);
+}
+.convo-tool.error .convo-tool-chip:hover {
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--alert) 75%, transparent);
+}
+.convo-tool.error .convo-tool-icon {
+   color: var(--alert);
+}
+/* A failure inside a collapsible group must still surface: red the "N tools" summary so a red
+   pill hidden in the collapsed list isn't missed. The summary is shown whenever the group is
+   collapsible (> N tools) - including while expanded, where it's the toggle header - and hidden
+   only in the bare (few-pill) state, so this rule is inert there. */
+.convo-tools.has-error .convo-tools-summary {
+   color: color-mix(in srgb, var(--alert-glow) 70%, var(--text-dim));
+   background: color-mix(in srgb, var(--alert) 9%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--alert) 55%, transparent);
+}
+.convo-tools.has-error .convo-tools-summary::before {
+   color: var(--alert);
+}
 .convo-tool-detail {
    max-width: 100%;
    max-height: 12rem;

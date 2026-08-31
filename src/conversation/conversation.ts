@@ -45,7 +45,7 @@ export interface ConversationController {
    hasMessage(messageId: number): boolean;
    showError(text: string): void;
    toolCall(call: ToolCall): void;
-   toolResult(id: string, result: string): void;
+   toolResult(id: string, result: string, error?: boolean): void;
    setAssistantName(name: string): void;
    loadHistory(items: ConversationItem[]): void;
    clear(): void;
@@ -383,6 +383,7 @@ export function mountConversation(
    const TOOL_DETAIL_CAP = 4000; // chars per args/result blob: a pathological tool output can't bloat the DOM
    interface ToolPill {
       call: ToolCall;
+      el: HTMLElement; // the .convo-tool root, toggled .error on a confirmed failure
       label: HTMLElement;
       detail: HTMLElement;
    }
@@ -435,6 +436,16 @@ export function mountConversation(
       if (collapsed) g.summary.textContent = `${g.pills.length} tools`;
    };
 
+   /* Reflect a contained failure on the group so a red pill hidden inside a collapsed "N tools"
+      summary still surfaces (the summary reds too). */
+   const updateGroupError = (g: ToolGroupEl): void => {
+      g.el.classList.toggle("has-error", g.pills.some((p) => p.call.error === true));
+   };
+
+   const applyPillError = (pill: ToolPill): void => {
+      pill.el.classList.toggle("error", pill.call.error === true);
+   };
+
    const ensureToolGroup = (): ToolGroupEl => {
       if (toolGroup) return toolGroup;
       win.classList.remove("empty");
@@ -482,6 +493,8 @@ export function mountConversation(
          existing.call = { ...existing.call, ...call };
          existing.label.textContent = existing.call.name || "tool";
          renderToolDetail(existing);
+         applyPillError(existing);
+         updateGroupError(g);
          return;
       }
       const el = document.createElement("div");
@@ -501,23 +514,28 @@ export function mountConversation(
       detail.hidden = true; // the group's delegated listener toggles this on a chip click
       el.append(chip, detail);
       g.list.appendChild(el);
-      const pill: ToolPill = { call: { ...call }, label, detail };
+      const pill: ToolPill = { call: { ...call }, el, label, detail };
       renderToolDetail(pill);
+      applyPillError(pill); // usually clean at call time; covers a reload pill that carries error
       g.pills.push(pill);
       if (call.id) g.byId.set(call.id, pill);
       updateToolCollapse(g);
+      updateGroupError(g);
       if (!bulkLoadingTools) {
          scrollToEnd();
          summon(); // a live tool firing is activity: raise the window (skipped during a bulk reload)
       }
    };
 
-   const toolResult = (id: string, result: string): void => {
+   const toolResult = (id: string, result: string, error?: boolean): void => {
       if (!toolGroup || !id) return;
       const pill = toolGroup.byId.get(id);
       if (!pill) return; // result before its call, or across a group boundary: skip (reload repairs)
       pill.call.result = result;
+      if (error) pill.call.error = true; // red-on-confirmed-failure; success/unknown stays neutral
       renderToolDetail(pill);
+      applyPillError(pill);
+      updateGroupError(toolGroup);
    };
 
    /* Streaming markdown: re-render the growing reply at most once per frame so a

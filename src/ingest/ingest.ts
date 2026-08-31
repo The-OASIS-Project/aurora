@@ -51,6 +51,10 @@ export interface ToolCall {
       (live grouping then matches reload's per-message split). Absent on the reload path (which
       seals per message) and on older daemons (which fall back to stream-boundary sealing). */
    iter?: number;
+   /* Confirmed tool failure (DAWN's `error:true` on the tool_result). The pill reds; absent
+      means success OR unknown (deliberately neutral, no green - fail-safe). Live-only in v1: the
+      reload path leaves it unset, so a reloaded pill is neutral. */
+   error?: boolean;
 }
 
 /* One entry in a loaded transcript: a text turn, a run of tool calls, or both (a turn
@@ -91,7 +95,7 @@ export interface ConversationSink {
       attaches the result to the pill with the matching `tool_call_id` for the expand panel.
       A subsequent text turn closes the current run so the next tools start a fresh group. */
    toolCall(call: ToolCall): void;
-   toolResult(id: string, result: string): void;
+   toolResult(id: string, result: string, error?: boolean): void;
    /* The configured assistant display name (ai_name), for the reply header. */
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */
