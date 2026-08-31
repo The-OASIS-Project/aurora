@@ -506,12 +506,20 @@ function interpretMessage(raw: string): { text?: string; tools?: ToolCall[] } | 
    return { text: joined || undefined, tools: tools.length ? tools : undefined };
 }
 
+/* A reloaded tool result, keyed by tool_call_id: its text plus the persisted confirmed-failure
+   verdict. NOTE the key-name split - reload carries `is_error` (the DB column), the LIVE tool_step
+   frame carries `error`; same concept, two message types. */
+interface ReloadedToolResult {
+   result: string;
+   error: boolean;
+}
+
 /* Parse DAWN's persisted `tool_calls` column (an OpenAI-format JSON array:
    [{id, type:"function", function:{name, arguments}}]) into ordered ToolCall pills for reload.
-   `results` maps a tool_call_id to its result text (from the paired `role:"tool"` rows). This is
-   the REAL reload tool source (content-block tool_use in interpretMessage is a legacy fallback).
-   Untrusted -> parsed defensively; the view binds every field via textContent. */
-function parseToolCalls(raw: unknown, results: Map<string, string>): ToolCall[] {
+   `results` maps a tool_call_id to its result text + error verdict (from the paired `role:"tool"`
+   rows). This is the REAL reload tool source (content-block tool_use in interpretMessage is a
+   legacy fallback). Untrusted -> parsed defensively; the view binds every field via textContent. */
+function parseToolCalls(raw: unknown, results: Map<string, ReloadedToolResult>): ToolCall[] {
    if (raw == null) return [];
    let arr: unknown = raw;
    if (typeof raw === "string") {
@@ -529,7 +537,8 @@ function parseToolCalls(raw: unknown, results: Map<string, string>): ToolCall[] 
       const fn = el.function ?? {};
       const name = typeof fn.name === "string" && fn.name ? fn.name : "tool";
       const args = typeof fn.arguments === "string" ? fn.arguments : undefined;
-      out.push({ id, name, args, result: id ? results.get(id) : undefined });
+      const r = id ? results.get(id) : undefined;
+      out.push({ id, name, args, result: r?.result, error: r?.error ? true : undefined });
    }
    return out;
 }
@@ -1472,14 +1481,17 @@ export class DawnIngest implements Ingest {
                id?: number;
                tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
                tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
+               is_error?: boolean; // on role:"tool" rows, the persisted confirmed-failure verdict (v81)
             }>;
-            /* First pass: map each tool_call_id -> its result text from the `role:"tool"` rows,
-               so a reloaded assistant pill can carry its result (for the expand panel). These rows
-               are filtered out of the rendered items below; they exist only for this correlation. */
-            const toolResults = new Map<string, string>();
+            /* First pass: map each tool_call_id -> its result text + failure verdict from the
+               `role:"tool"` rows, so a reloaded pill can carry its result (for the expand panel) AND
+               red on a confirmed failure. These rows are filtered out of the rendered items below;
+               they exist only for this correlation. `is_error` (DB column) is the reload twin of the
+               live tool_step frame's `error` - same red-only semantics, absent => neutral. */
+            const toolResults = new Map<string, ReloadedToolResult>();
             for (const m of msgs) {
                if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
-                  toolResults.set(m.tool_call_id, m.content ?? "");
+                  toolResults.set(m.tool_call_id, { result: m.content ?? "", error: m.is_error === true });
                }
             }
             this.sinks.conversation.loadHistory(

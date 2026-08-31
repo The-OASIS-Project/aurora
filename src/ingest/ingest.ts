@@ -51,9 +51,9 @@ export interface ToolCall {
       (live grouping then matches reload's per-message split). Absent on the reload path (which
       seals per message) and on older daemons (which fall back to stream-boundary sealing). */
    iter?: number;
-   /* Confirmed tool failure (DAWN's `error:true` on the tool_result). The pill reds; absent
-      means success OR unknown (deliberately neutral, no green - fail-safe). Live-only in v1: the
-      reload path leaves it unset, so a reloaded pill is neutral. */
+   /* Confirmed tool failure -> the pill reds; absent means success OR unknown (deliberately
+      neutral, no green - fail-safe). Dual-source: set live from the `tool_step` frame's `error`,
+      and on reload from the persisted `is_error` DB column (v81). Absent in both directions. */
    error?: boolean;
 }
 
