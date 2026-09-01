@@ -48,6 +48,7 @@ import type { ReactorState } from "../anchor/anchor.ts";
 import { TtsPlayback } from "../audio/tts.ts";
 import { MusicAudio } from "../audio/music.ts";
 import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
+import { RecordingDing } from "../audio/ding.ts";
 import {
    effortOptionsForModel,
    type LlmMode,
@@ -641,6 +642,10 @@ export class DawnIngest implements Ingest {
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
    private readonly music = new MusicAudio();
+   /* The always-on "ready" ding: a short synthesized tone played on entry into
+      always_on_state:recording, replacing DAWN's dropped spoken greeting. Its own lazy,
+      isolated AudioContext; purely cosmetic (error-swallowed). */
+   private readonly ding = new RecordingDing();
    /* Microphone capture (voice input). Constructed here so the composer's mic button can
       bind to it before ingest.start() runs; its AudioContext stays lazy until first use.
       onLevels feeds the reactor bar ring with the user's voice while speaking (the same
@@ -678,10 +683,11 @@ export class DawnIngest implements Ingest {
    private continuousOn = false;
    private resumeContinuous = false;
    private dawnSpeaking = false; // DAWN's `state` is "speaking" (persists across TTS sentence gaps)
-   /* DAWN's always-on FSM is in "recording" (capturing the user's command). DAWN plays the
-      "Hello" greeting with a concurrent top-level state:speaking DURING this, so the mic must
-      stay OPEN here regardless of dawnSpeaking - muting would blank the command window. The
-      greeting echo is handled by the AEC-referenced TTS playback (tts.ts), not by muting. */
+   /* DAWN's always-on FSM is in "recording" (capturing the user's command), so the mic must
+      stay OPEN here regardless of dawnSpeaking - muting would blank the command window. (DAWN
+      dropped the spoken "Hello" greeting that used to play here with a concurrent
+      state:speaking; a client-side ding replaces it. The mic-open override remains as the
+      command-capture guarantee, and any concurrent TTS is handled AEC-side, not by muting.) */
    private alwaysOnRecording = false;
    private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
@@ -2422,9 +2428,10 @@ export class DawnIngest implements Ingest {
                micro-states; we don't map them to the reactor (they'd thrash the busy
                channel), the normal `state` frames still drive it during an always-on turn. */
             const st = typeof p.state === "string" ? p.state : "";
-            /* "recording" = DAWN is capturing the user's command (and may be playing the
-               greeting with a concurrent state:speaking); everything else is not. Drives the
-               keep-mic-open override in updateMicMute. */
+            /* "recording" = DAWN is capturing the user's command; everything else is not.
+               Drives the keep-mic-open override in updateMicMute. `entering` = the once-per-
+               wake transition INTO recording, which triggers the ready ding. */
+            const enteringRecording = st === "recording" && !this.alwaysOnRecording;
             this.alwaysOnRecording = st === "recording";
             if (st === "disabled") {
                /* Server turned us off (60s no-audio auto-disable, or the echo of our own
@@ -2436,10 +2443,14 @@ export class DawnIngest implements Ingest {
                   this.mic.continuousStop();
                }
             } else if (this.continuousOn) {
+               /* Ready ding: replaces DAWN's dropped spoken greeting. Once per wake (guarded
+                  by the transition), and safe to play into the open mic - a pure tone isn't
+                  VAD-scored as speech, so it can't re-trigger the echo stall. */
+               if (enteringRecording) this.ding.play();
                /* Re-evaluate the mute on every micro-state transition: unmute entering
-                  "recording" (capture the command; the AEC handles the greeting echo), and
-                  let the speaking/tail logic re-mute for "processing" + the reply. The
-                  cooldown means this can't reopen mid-reply the way a bare unmute would. */
+                  "recording" (capture the command), and let the speaking/tail logic re-mute
+                  for "processing" + the reply. The cooldown means this can't reopen mid-reply
+                  the way a bare unmute would. */
                this.updateMicMute();
             }
             break;
@@ -3394,6 +3405,7 @@ export class DawnIngest implements Ingest {
       this.tts?.dispose();
       this.music.dispose();
       this.mic.dispose();
+      this.ding.dispose();
    }
 
    /* The login panel subscribes to reflect connection state. */
