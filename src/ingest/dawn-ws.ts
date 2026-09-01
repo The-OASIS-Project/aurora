@@ -678,6 +678,11 @@ export class DawnIngest implements Ingest {
    private continuousOn = false;
    private resumeContinuous = false;
    private dawnSpeaking = false; // DAWN's `state` is "speaking" (persists across TTS sentence gaps)
+   /* DAWN's always-on FSM is in "recording" (capturing the user's command). DAWN plays the
+      "Hello" greeting with a concurrent top-level state:speaking DURING this, so the mic must
+      stay OPEN here regardless of dawnSpeaking - muting would blank the command window. The
+      greeting echo is handled by the AEC-referenced TTS playback (tts.ts), not by muting. */
+   private alwaysOnRecording = false;
    private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
@@ -2412,11 +2417,15 @@ export class DawnIngest implements Ingest {
          }
 
          case "always_on_state": {
-            /* The ONLY always-on push (states: listening | wake_check | recording |
-               processing | disabled). Wake/recording/processing are DAWN's internal VAD
+            /* The ONLY always-on push (states: listening | wake_check | wake_pending |
+               recording | processing | disabled). These are DAWN's internal VAD
                micro-states; we don't map them to the reactor (they'd thrash the busy
                channel), the normal `state` frames still drive it during an always-on turn. */
             const st = typeof p.state === "string" ? p.state : "";
+            /* "recording" = DAWN is capturing the user's command (and may be playing the
+               greeting with a concurrent state:speaking); everything else is not. Drives the
+               keep-mic-open override in updateMicMute. */
+            this.alwaysOnRecording = st === "recording";
             if (st === "disabled") {
                /* Server turned us off (60s no-audio auto-disable, or the echo of our own
                   disable). If our latch is still up it was unsolicited -> tear down + clear
@@ -2426,10 +2435,11 @@ export class DawnIngest implements Ingest {
                   this.resumeContinuous = false;
                   this.mic.continuousStop();
                }
-            } else if (st === "listening" && this.continuousOn) {
-               /* Re-evaluate the mute (backstop): updateMicMute keeps it muted while DAWN is
-                  still speaking or its tail is playing, and reopens the mic once both settle -
-                  so this can't reopen mid-reply the way a bare unmute here used to. */
+            } else if (this.continuousOn) {
+               /* Re-evaluate the mute on every micro-state transition: unmute entering
+                  "recording" (capture the command; the AEC handles the greeting echo), and
+                  let the speaking/tail logic re-mute for "processing" + the reply. The
+                  cooldown means this can't reopen mid-reply the way a bare unmute would. */
                this.updateMicMute();
             }
             break;
@@ -2847,6 +2857,10 @@ export class DawnIngest implements Ingest {
    private startContinuous(): void {
       if (this.continuousOn || !this.mic.available || this.ws?.readyState !== WebSocket.OPEN) return;
       this.continuousOn = true;
+      /* Never inherit a stale recording flag across a re-arm/reconnect: a stale-true errs
+         UNSAFE (it force-holds the mic open -> DAWN's own voice echoes) until the next
+         always_on_state frame resets it. A fresh latch always starts not-recording. */
+      this.alwaysOnRecording = false;
       this.resumeContinuous = true; // survive a reconnect
       /* Enable BEFORE streaming so DAWN sets up its always-on context first; sample_rate is
          the constant 48000 (its VAD decimation divides by it - reporting the ctx rate would
@@ -2862,6 +2876,7 @@ export class DawnIngest implements Ingest {
    private stopContinuous(userInitiated: boolean): void {
       if (!this.continuousOn) return;
       this.continuousOn = false;
+      this.alwaysOnRecording = false;
       if (userInitiated) this.resumeContinuous = false;
       window.clearTimeout(this.micMuteCooldown);
       this.micMuteCooldown = 0;
@@ -2878,6 +2893,16 @@ export class DawnIngest implements Ingest {
       if (!this.continuousOn) {
          window.clearTimeout(this.micMuteCooldown);
          this.micMuteCooldown = 0;
+         return;
+      }
+      /* Always-on RECORDING overrides the speaking-mute: DAWN plays the greeting
+         (state:speaking) while it records the user's command, so muting on dawnSpeaking here
+         would gag the command. Keep the mic open and let the AEC-referenced TTS playback
+         (tts.ts) cancel the greeting from the capture instead. */
+      if (this.alwaysOnRecording) {
+         window.clearTimeout(this.micMuteCooldown);
+         this.micMuteCooldown = 0;
+         this.mic.setMuted(false);
          return;
       }
       if (this.dawnSpeaking || this.tts.isSpeaking()) {

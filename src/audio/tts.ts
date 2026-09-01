@@ -30,6 +30,18 @@ export interface TtsCallbacks {
 export class TtsPlayback {
    private ctx: AudioContext | null = null;
    private analyser: AnalyserNode | null = null;
+   /* Playback routes analyser -> a MediaStreamAudioDestinationNode -> a detached <audio>
+      element, NOT straight to ctx.destination. The reason is echo cancellation: the
+      browser's getUserMedia AEC only cancels output it has a *reference* for, and Web
+      Audio's ctx.destination is invisible to it, so our TTS (e.g. the always-on
+      "Hello." greeting) would bleed uncancelled into the live continuous mic and hold
+      DAWN's server-side VAD hot (end-of-speech never fires). Playing through a media
+      element is the path the AEC references (it is how DAWN's own WebUI escapes this).
+      `sink` null => the element route was unavailable and we fell back to ctx.destination
+      (audio still plays, just without AEC referencing). */
+   private msd: MediaStreamAudioDestinationNode | null = null;
+   private sink: HTMLAudioElement | null = null;
+   private directOutput = false; // true once we've fallen back to analyser -> ctx.destination
    private freq: Uint8Array<ArrayBuffer> = new Uint8Array(FFT_SIZE / 2);
    private levels = new Float32Array(FFT_SIZE / 2);
    private chunks: Uint8Array[] = []; // accumulating the current segment
@@ -111,6 +123,11 @@ export class TtsPlayback {
 
    private ensureContext(): void {
       if (this.ctx && this.ctx.state !== "closed") return;
+      /* Rebuilding after an EXTERNAL context close (audio-device change, OS audio-session
+         interruption - our own close only happens in dispose, which nulls ctx): release
+         the old element sink first so wireOutput doesn't orphan a still-referenced <audio>
+         pointing at the dead stream. No-op on the first build (sink is null). */
+      this.releaseSink();
       this.ctx = new AudioContext({ sampleRate: TTS_SAMPLE_RATE });
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = FFT_SIZE;
@@ -119,6 +136,84 @@ export class TtsPlayback {
       this.analyser.maxDecibels = -10; // TTS peaks
       this.freq = new Uint8Array(this.analyser.frequencyBinCount);
       this.levels = new Float32Array(this.analyser.frequencyBinCount);
+      this.wireOutput();
+   }
+
+   /* Route the analyser to the media-element sink so the AEC can reference our TTS (see
+      the `msd`/`sink` field note). Falls back to ctx.destination if the element route
+      can't be built, so audio never goes silent. Called once per fresh context. */
+   private wireOutput(): void {
+      const ctx = this.ctx!;
+      this.directOutput = false;
+      try {
+         this.msd = ctx.createMediaStreamDestination();
+         const el = new Audio();
+         el.autoplay = false;
+         el.srcObject = this.msd.stream;
+         this.sink = el;
+         this.analyser!.connect(this.msd);
+      } catch {
+         /* No MediaStreamDestination/Audio: play straight to the speakers (no AEC ref). */
+         this.msd = null;
+         this.sink = null;
+         this.fallbackToDirectOutput();
+      }
+   }
+
+   /* Kick the media-element sink into playing its live stream (idempotent - the stream
+      never ends, so one successful play() keeps rendering across segment gaps). A
+      rejected play() (no gesture yet) drops us to direct output so TTS is never silent. */
+   private ensureSinkPlaying(): void {
+      if (!this.sink || this.directOutput || !this.sink.paused) return;
+      /* Scope the rejection to THIS sink: a dispose()/rebuild during the pending play()
+         (reconnect churn, which is the greeting-on-connect case) swaps this.sink, and an
+         unscoped fallback would then wrongly drop the fresh context to direct output (no
+         AEC) or throw on a null ctx. A stale rejection is a no-op. */
+      const el = this.sink;
+      el.play().catch(() => {
+         if (this.sink === el) this.fallbackToDirectOutput();
+      });
+   }
+
+   /* Give up the media-element route (its play() was rejected, or it was never available)
+      and connect the analyser straight to the speakers. Idempotent. Keeps audio alive at
+      the cost of AEC referencing (the mic's worklet-mute is still the primary guard). */
+   private fallbackToDirectOutput(): void {
+      if (this.directOutput) return;
+      this.directOutput = true;
+      if (this.msd) {
+         try {
+            this.analyser?.disconnect(this.msd);
+         } catch {
+            /* not connected */
+         }
+      }
+      if (this.sink) {
+         try {
+            this.sink.pause();
+         } catch {
+            /* nothing to pause */
+         }
+         this.sink.srcObject = null;
+         this.sink = null;
+      }
+      this.msd = null;
+      this.analyser?.connect(this.ctx!.destination);
+   }
+
+   /* Detach and drop the media-element sink + its stream destination. Shared by dispose()
+      and the closed-context rebuild in ensureContext. */
+   private releaseSink(): void {
+      if (this.sink) {
+         try {
+            this.sink.pause();
+         } catch {
+            /* nothing to pause */
+         }
+         this.sink.srcObject = null;
+         this.sink = null;
+      }
+      this.msd = null;
    }
 
    private async playBuffer(bytes: Uint8Array): Promise<void> {
@@ -129,6 +224,7 @@ export class TtsPlayback {
          const ctx = this.ctx!;
          const analyser = this.analyser!;
          if (ctx.state === "suspended") await ctx.resume(); // autoplay: needs a gesture first
+         this.ensureSinkPlaying(); // start the media-element sink (falls back if it can't)
 
          /* Turn the segment into one mono Float32 channel: decode Opus, or read PCM by
             hand (little-endian 16-bit signed -> float). */
@@ -147,8 +243,7 @@ export class TtsPlayback {
 
          const src = ctx.createBufferSource();
          src.buffer = audioBuffer;
-         src.connect(analyser);
-         analyser.connect(ctx.destination);
+         src.connect(analyser); // analyser -> sink is wired once in ensureContext/wireOutput
          this.current = src;
          this.startSampling();
 
@@ -277,6 +372,7 @@ export class TtsPlayback {
          }
       }
       this.decoder = null;
+      this.releaseSink();
       if (this.ctx && this.ctx.state !== "closed") void this.ctx.close();
       this.ctx = null;
    }
