@@ -44,6 +44,9 @@ export interface MenuOptions {
    onConnection?: () => void;
    onMicDevice?: () => void;
    onAbout?: () => void;
+   /* System-menu preference toggles (checkbox rows above the dialog actions), e.g. "Alarm
+      sounds". Rendered with a divider before the actions; empty/absent shows actions only. */
+   systemToggles?: MenuToggle[];
    /* LLM selection surface (MODEL menu). Optional. */
    model?: ModelControl;
 }
@@ -83,10 +86,10 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
          })),
       opts.displaySlider
    );
-   /* System: the Connection, Microphone, and About dialogs (each active when wired).
-      New Chat now lives in the conversation picker's header. */
-   const system = actionMenu(
-      "System",
+   /* System: preference toggles (e.g. Alarm sounds) above the Connection, Microphone, and
+      About dialogs (each active when wired). New Chat now lives in the picker's header. */
+   const system = systemMenu(
+      () => opts.systemToggles ?? [],
       () => [
          { label: "Connection", onClick: opts.onConnection },
          { label: "Microphone", onClick: opts.onMicDevice },
@@ -254,38 +257,59 @@ interface ActionRow {
    onClick?: () => void;
 }
 
-function actionMenu(
-   title: string,
-   getRows: () => ActionRow[],
+/* The System menu: preference checkbox rows (e.g. Alarm sounds) above the dialog actions,
+   separated by a divider. A hybrid of toggleMenu (the checkbox rows) and actionMenu (the
+   dialog rows); refresh reflects the live toggle state each open. */
+function systemMenu(
+   getToggles: () => MenuToggle[],
+   getActions: () => ActionRow[],
    close: () => void
 ): { el: HTMLElement; refresh: () => void } {
-   const { el, dropdown } = menuGroup(title);
+   const { el, dropdown } = menuGroup("System");
    const refresh = (): void => {
-      dropdown.replaceChildren(
-         ...getRows().map((r) => {
-            const row = document.createElement("div");
-            if (r.onClick) {
-               row.className = "menu-row menu-row-action";
-               row.setAttribute("role", "button");
-               row.tabIndex = 0;
-               const fire = (): void => {
-                  r.onClick!();
-                  close();
-               };
-               row.addEventListener("click", fire);
-               row.addEventListener("keydown", (e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                     e.preventDefault();
-                     fire();
-                  }
-               });
-            } else {
-               row.className = "menu-row menu-row-stub";
-            }
-            row.textContent = r.label;
-            return row;
-         })
-      );
+      const rows: HTMLElement[] = [];
+      for (const t of getToggles()) {
+         const row = document.createElement("label");
+         row.className = "menu-row";
+         const cb = document.createElement("input");
+         cb.type = "checkbox";
+         cb.className = "menu-check";
+         cb.checked = t.get();
+         cb.addEventListener("change", () => t.toggle());
+         const span = document.createElement("span");
+         span.textContent = t.label;
+         row.append(cb, span);
+         rows.push(row);
+      }
+      if (rows.length > 0) {
+         const divider = document.createElement("div");
+         divider.className = "menu-divider";
+         rows.push(divider);
+      }
+      for (const r of getActions()) {
+         const row = document.createElement("div");
+         if (r.onClick) {
+            row.className = "menu-row menu-row-action";
+            row.setAttribute("role", "button");
+            row.tabIndex = 0;
+            const fire = (): void => {
+               r.onClick!();
+               close();
+            };
+            row.addEventListener("click", fire);
+            row.addEventListener("keydown", (e) => {
+               if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  fire();
+               }
+            });
+         } else {
+            row.className = "menu-row menu-row-stub";
+         }
+         row.textContent = r.label;
+         rows.push(row);
+      }
+      dropdown.replaceChildren(...rows);
    };
    refresh();
    return { el, refresh };

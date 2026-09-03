@@ -49,6 +49,7 @@ import { TtsPlayback } from "../audio/tts.ts";
 import { MusicAudio } from "../audio/music.ts";
 import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
 import { RecordingDing } from "../audio/ding.ts";
+import { AlarmChime } from "../audio/alarm-chime.ts";
 import {
    effortOptionsForModel,
    type LlmMode,
@@ -116,6 +117,7 @@ function providerLabel(p: LlmProvider): string {
 }
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
+const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 /* Exponential moving average of the live token rate: a smooth figure that leans
    toward recent generations. Persisted so it survives a refresh. */
 const RATE_EMA_KEY = "dawn.hero.rateEma";
@@ -600,7 +602,14 @@ export class DawnIngest implements Ingest {
       identical spoken turn. */
    private readonly typedEchoes: Array<{ text: string; at: number }> = [];
    private readonly jobs = new Map<number, { title: string; running: boolean }>();
-   private schedulerEventId = 0; // the ringing event behind the scheduler notice
+   /* Event ids of currently-ringing ALARMS (not reminders/timers, which DAWN auto-dismisses).
+      Drives the scheduler_action{dismiss} on user close and the shared ringing-tone loop
+      (loop runs while the set is non-empty). Keyed per event so concurrent alarms + a
+      reminder don't clobber each other's cards (each notice is `scheduler-<eventId>`). */
+   private readonly ringingAlarms = new Set<number>();
+   /* Client-side chime/loop for scheduled events (the daemon tone is daemon-local). Initial
+      enabled state from the persisted "Alarm sounds" preference; the System-menu toggle flips it. */
+   private readonly alarmChime = new AlarmChime(localStorage.getItem(ALARM_SOUNDS_KEY) !== "false");
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
@@ -945,6 +954,12 @@ export class DawnIngest implements Ingest {
             this.mic.continuousStop();
          }
          if (!this.wantConnected) this.resumeContinuous = false;
+         /* Silence a ringing-alarm loop on the drop like the other audio producers: the tone
+            belongs to the dead connection, and if the alarm is dismissed/times-out during the
+            outage that terminal frame is lost (DAWN won't re-broadcast it on reconnect), so it
+            would otherwise beep forever. The persistent card carries the state across. */
+         this.alarmChime.stopLoop();
+         this.ringingAlarms.clear();
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -2193,28 +2208,57 @@ export class DawnIngest implements Ingest {
          }
 
          case "scheduler_notification": {
-            /* Alarms/timers/reminders. Surface an actively firing one; a ringing
-               alarm keeps its event id so a dismiss can silence it on DAWN. Any
-               other status (dismissed/snoozed/cancelled, incl. from another client)
-               clears our notice - but ONLY when it is about the event we are currently
-               showing. These frames are broadcast to all the user's clients, so a
-               status change for a DIFFERENT event (an unrelated timer that just
-               cancelled) must not wipe a still-ringing alarm's card. */
+            /* Alarms/timers/reminders. One movable card per event (`scheduler-<id>`) so
+               concurrent events don't clobber each other. Behaviour mirrors DAWN's own WebUI
+               (www/js/ui/scheduler.js): a client chime on every live notification (skipped
+               for a `missed` replay); a ringing ALARM additionally loops a tone + is tracked
+               for the dismiss->scheduler_action path. Reminders/timers auto-dismiss server-
+               side after their chime, so they are NOT tracked and their auto-dismiss frame is
+               ignored below (else the card would flash and vanish before it can be read). */
             const status = String(p.status ?? "");
+            const message = String(p.message ?? "");
+            const eventType = String(p.event_type ?? "alarm");
+            const eventId = Number(p.event_id ?? 0);
+            const missed = p.missed === true;
+            const noticeId = `scheduler-${eventId}`;
+            const wasRinging = this.ringingAlarms.has(eventId);
             if (status === "ringing" || status === "fired") {
-               /* Only `ringing` needs a real dismiss; `fired` already auto-dismissed. */
-               this.schedulerEventId = status === "ringing" ? Number(p.event_id ?? 0) : 0;
-               this.spikeNotice("scheduler", String(p.event_type ?? "alarm"), String(p.name ?? "Alarm"), {
+               /* A live ringing alarm is `critical` so the notification layer's persist-cap
+                  can't silently evict its card - that would leave the loop beeping with no
+                  on-screen control. Reminders/timers and missed replays are ordinary. */
+               const ringingAlarm = eventType === "alarm" && status === "ringing" && !missed;
+               this.spikeNotice(noticeId, eventType, String(p.name ?? "Alarm"), {
                   tone: "attention",
                   hold: 10,
-                  detail: String(p.message ?? ""),
-                  persist: true, // a ringing alarm stays put until dismissed or docked
+                  detail: message,
+                  persist: true, // stays readable until dismissed or docked (WebUI parity)
+                  critical: ringingAlarm,
                   x: 0.62,
                   y: 0.42
                });
-            } else if (this.schedulerEventId > 0 && Number(p.event_id ?? 0) === this.schedulerEventId) {
-               this.schedulerEventId = 0;
-               this.sinks.notifications.remove("scheduler");
+               /* A live ringing alarm's sound IS the looping tone (started below) - no separate
+                  one-shot, which would double over the loop's first beat. A non-alarm live
+                  notification gets the one ascending chime (skip a missed replay). Only a live
+                  ringing alarm drives the loop AND is tracked for the dismiss->scheduler_action
+                  path; a missed replay is neither, so it leaves no phantom set entry that would
+                  keep the loop beeping. */
+               if (ringingAlarm) {
+                  this.ringingAlarms.add(eventId);
+                  this.alarmChime.startLoop(); // idempotent on a re-broadcast
+               } else if (!missed && !wasRinging) {
+                  this.alarmChime.playChime();
+               }
+            } else {
+               /* Non-ringing (dismissed/cancelled/snoozed/timed_out). A ringing alarm's loop
+                  stops on ANY non-ringing status. Then: IGNORE a server AUTO-dismiss/timeout
+                  (both it and a user dismiss carry status "dismissed", so key on the message
+                  prefix / "timed_out" like WebUI, NOT the status) so it can't wipe the card;
+                  a real user/other-client dismiss removes it. */
+               if (this.ringingAlarms.delete(eventId) && this.ringingAlarms.size === 0) {
+                  this.alarmChime.stopLoop();
+               }
+               const isAuto = status === "timed_out" || message.startsWith("Auto-");
+               if (!isAuto) this.sinks.notifications.remove(noticeId);
             }
             break;
          }
@@ -3332,16 +3376,27 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.setThinking(true);
    }
 
-   /* A dismissed notice: for a ringing alarm, tell DAWN to actually stop it
-      (scheduler_action{dismiss}); other notices are cleared locally by the store. */
+   /* A dismissed notice. For a ringing ALARM (`scheduler-<id>`), stop the local ringing loop
+      and tell DAWN to actually silence it (scheduler_action{dismiss}). Reminders/timers are
+      not tracked (DAWN already auto-dismissed them server-side), so their close is local-only.
+      Other notices are cleared locally by the layer. */
    dismiss(id: string): void {
-      if (id === "scheduler" && this.schedulerEventId > 0) {
-         this.send({
-            type: "scheduler_action",
-            payload: { action: "dismiss", event_id: this.schedulerEventId }
-         });
-         this.schedulerEventId = 0;
+      if (!id.startsWith("scheduler-")) return;
+      const eventId = Number(id.slice("scheduler-".length));
+      if (this.ringingAlarms.delete(eventId)) {
+         if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
+         this.send({ type: "scheduler_action", payload: { action: "dismiss", event_id: eventId } });
       }
+   }
+
+   /* "Alarm sounds" preference (the System-menu toggle): gates the client chime + ringing
+      loop only (the spoken alarm rides the general TTS mute, no DAWN verb). Persisted. */
+   alarmSoundsEnabled(): boolean {
+      return this.alarmChime.isEnabled();
+   }
+   setAlarmSounds(on: boolean): void {
+      this.alarmChime.setEnabled(on);
+      localStorage.setItem(ALARM_SOUNDS_KEY, on ? "true" : "false");
    }
 
    /* Focus/blur is a local UI cue only; the real reactor state comes from DAWN's
@@ -3355,6 +3410,8 @@ export class DawnIngest implements Ingest {
       this.stopMetrics();
       this.stopHeartbeat();
       this.closeMusicStream();
+      this.alarmChime.stopLoop();
+      this.ringingAlarms.clear();
       this.tts?.stop();
       window.clearTimeout(this.micMuteCooldown);
       this.micMuteCooldown = 0;
@@ -3406,6 +3463,7 @@ export class DawnIngest implements Ingest {
       this.music.dispose();
       this.mic.dispose();
       this.ding.dispose();
+      this.alarmChime.dispose();
    }
 
    /* The login panel subscribes to reflect connection state. */
@@ -3488,6 +3546,7 @@ export class DawnIngest implements Ingest {
          hold?: number;
          detail?: string;
          persist?: boolean;
+         critical?: boolean;
       }
    ): void {
       this.sinks.notifications.notify({
@@ -3497,6 +3556,7 @@ export class DawnIngest implements Ingest {
          detail: opts.detail,
          tone: opts.tone ?? "nominal",
          persist: opts.persist,
+         critical: opts.critical,
          hold: opts.hold,
          x: opts.x,
          y: opts.y

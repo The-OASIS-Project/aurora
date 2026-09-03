@@ -138,7 +138,9 @@ export class Notifications implements NotificationsSink {
       MAX_PERSIST, evict the oldest un-snapped, un-hovered persist card. Snapped/sticky cards are
       user-docked (exempt); toasts self-limit via their life timer, so neither is counted. */
    private capPersist(): void {
-      const live = [...this.cards.values()].filter((c) => c.notice.persist && !c.snapped && !c.notice.sticky);
+      const live = [...this.cards.values()].filter(
+         (c) => c.notice.persist && !c.snapped && !c.notice.sticky && !c.notice.critical
+      );
       let overflow = live.length - MAX_PERSIST; // insertion order => live[0] is oldest
       for (const c of live) {
          if (overflow <= 0) break;

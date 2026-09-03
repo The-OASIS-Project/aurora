@@ -388,6 +388,11 @@ export interface Notice {
    items?: string[];
    tone?: "nominal" | "attention";
    persist?: boolean;
+   /* A needs-you-now persist card (a ringing alarm) that the persist-cap must NOT evict:
+      evicting it would remove the only on-screen control for something still sounding. Rare
+      and self-limiting (a ringing alarm is dismissed or server-times-out), so exempting it
+      does not reopen the unbounded-growth the cap guards against. */
+   critical?: boolean;
    hold?: number;
    /* A persistent status widget (the jobs card), not a transient toast: always full
       presence, never fades or auto-dismisses, and has no close control - it is shown

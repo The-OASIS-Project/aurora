@@ -288,6 +288,15 @@ const menu = mountMenu(stage, {
    onConnection: openConnection,
    onMicDevice: () => void openMicDevice(),
    onAbout: openAbout,
+   /* System-menu preference: gate the client alarm chime + ringing loop (the spoken alarm
+      rides the general TTS mute). Backed by the ingest, persisted there. */
+   systemToggles: [
+      {
+         label: "Alarm sounds",
+         get: () => dawn.alarmSoundsEnabled(),
+         toggle: () => dawn.setAlarmSounds(!dawn.alarmSoundsEnabled())
+      }
+   ],
    model: dawn.getModelControl(),
    /* Store-backed panels, plus the standalone calendar + music views appended. */
    getPanels: () => [
