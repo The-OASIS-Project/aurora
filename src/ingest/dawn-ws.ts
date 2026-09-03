@@ -2234,11 +2234,22 @@ export class DawnIngest implements Ingest {
                   detail: message,
                   persist: true, // stays readable until dismissed or docked (WebUI parity)
                   critical: ringingAlarm,
-                  /* A ringing alarm gets Snooze/Dismiss buttons (both silence the tone; snooze
-                     re-fires it later). Reminders/timers keep the plain close (nothing to stop). */
+                  /* A ringing alarm gets Snooze (with a duration dropdown, default 10 = DAWN's
+                     default_snooze_minutes) + Dismiss; both silence the tone. Reminders/timers
+                     keep the plain close (nothing to stop). */
                   actions: ringingAlarm
                      ? [
-                          { id: "snooze", label: "Snooze" },
+                          {
+                             id: "snooze",
+                             label: "Snooze",
+                             options: [
+                                { value: "1", label: "1 min" },
+                                { value: "5", label: "5 min" },
+                                { value: "10", label: "10 min" },
+                                { value: "30", label: "30 min" }
+                             ],
+                             defaultValue: "10"
+                          },
                           { id: "dismiss", label: "Dismiss" }
                        ]
                      : undefined,
@@ -3401,14 +3412,19 @@ export class DawnIngest implements Ingest {
    /* A named action on a notice's button. For a ringing alarm's Snooze/Dismiss: stop the local
       loop and send the matching scheduler_action to DAWN (snooze re-fires it later; dismiss
       ends it). Only fires for a tracked ringing alarm; other notices have no action buttons. */
-   noticeAction(id: string, action: string): void {
+   noticeAction(id: string, action: string, value?: string): void {
       if (!id.startsWith("scheduler-")) return;
       if (action !== "snooze" && action !== "dismiss") return;
       const eventId = Number(id.slice("scheduler-".length));
-      if (this.ringingAlarms.delete(eventId)) {
-         if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
-         this.send({ type: "scheduler_action", payload: { action, event_id: eventId } });
+      if (!this.ringingAlarms.delete(eventId)) return;
+      if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
+      const payload: Record<string, unknown> = { action, event_id: eventId };
+      /* Snooze duration from the dropdown (DAWN accepts 1-120; omit to use its default). */
+      if (action === "snooze" && value) {
+         const mins = Number(value);
+         if (Number.isFinite(mins) && mins >= 1 && mins <= 120) payload.snooze_minutes = Math.round(mins);
       }
+      this.send({ type: "scheduler_action", payload });
    }
 
    /* "Alarm sounds" preference (the System-menu toggle): gates the client chime + ringing

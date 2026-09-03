@@ -385,6 +385,10 @@ export interface WatchesSink {
 export interface NoticeAction {
    id: string; // sent back through noticeAction (e.g. "snooze" | "dismiss")
    label: string; // button text
+   /* Optional value dropdown shown beside the button (e.g. the alarm Snooze's durations).
+      The selected option's `value` is passed to noticeAction as the 3rd arg on click. */
+   options?: Array<{ value: string; label: string }>;
+   defaultValue?: string; // pre-selected option value (e.g. "10" minutes)
 }
 
 export interface Notice {
@@ -563,8 +567,9 @@ export interface Ingest {
       DAWN (e.g. a ringing alarm needs scheduler_action{dismiss} to actually stop). */
    dismiss(id: string): void;
    /* User clicked a named action button on a notice (e.g. a ringing alarm's Snooze/Dismiss).
-      `action` is the NoticeAction id; the source maps it to the right write (scheduler_action). */
-   noticeAction(id: string, action: string): void;
+      `action` is the NoticeAction id; `value` is the chosen dropdown option, if any (e.g. the
+      snooze minutes). The source maps it to the right write (scheduler_action). */
+   noticeAction(id: string, action: string, value?: string): void;
    /* User engaged/left the input (focus), which affects the listening state. */
    setEngaged(engaged: boolean): void;
    /* Music transport (a deliberate Tier-C write, like chat submit): a music_control

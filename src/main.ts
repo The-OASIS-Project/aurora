@@ -157,7 +157,7 @@ const ingest: Ingest = dawn;
 const notifications = new Notifications(
    stage,
    (id) => ingest.dismiss(id),
-   (id, action) => ingest.noticeAction(id, action)
+   (id, action, value) => ingest.noticeAction(id, action, value)
 );
 
 /* The music player: a dedicated interactive view (like the conversation console).

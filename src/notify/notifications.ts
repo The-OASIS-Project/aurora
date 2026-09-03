@@ -109,7 +109,7 @@ export class Notifications implements NotificationsSink {
    private readonly cards = new Map<string, Card>();
    private readonly container: HTMLElement;
    private readonly onDismiss: (id: string) => void;
-   private readonly onAction: (id: string, action: string) => void;
+   private readonly onAction: (id: string, action: string, value?: string) => void;
    private engaged = false;
    private engageAmt = 0; // eased 0..1
    private frontHolder: string | null = null;
@@ -124,7 +124,7 @@ export class Notifications implements NotificationsSink {
    constructor(
       container: HTMLElement,
       onDismiss: (id: string) => void,
-      onAction: (id: string, action: string) => void = () => {}
+      onAction: (id: string, action: string, value?: string) => void = () => {}
    ) {
       this.container = container;
       this.onDismiss = onDismiss;
@@ -305,6 +305,7 @@ export class Notifications implements NotificationsSink {
       /* Action buttons (a ringing alarm's Snooze/Dismiss) replace the plain close: an
          action carries the dismiss, so no redundant x. */
       const hasActions = !!notice.actions?.length;
+      if (hasActions) root.classList.add("notice-has-actions"); // wider card for the action row
       let close: HTMLButtonElement | null = null;
       if (!notice.sticky && !hasActions) {
          close = document.createElement("button");
@@ -333,12 +334,29 @@ export class Notifications implements NotificationsSink {
          actionsEl = document.createElement("div");
          actionsEl.className = "notice-actions";
          for (const a of notice.actions!) {
+            /* Each action is a group: an optional value dropdown (e.g. snooze minutes) plus
+               the button. The delegated click handler reads the group's select on fire. */
+            const grp = document.createElement("span");
+            grp.className = "notice-action-group";
+            if (a.options?.length) {
+               const sel = document.createElement("select");
+               sel.className = "notice-action-select";
+               for (const o of a.options) {
+                  const opt = document.createElement("option");
+                  opt.value = o.value;
+                  opt.textContent = o.label;
+                  if (o.value === a.defaultValue) opt.selected = true;
+                  sel.append(opt);
+               }
+               grp.append(sel);
+            }
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "notice-action";
             btn.dataset.action = a.id;
             btn.textContent = a.label;
-            actionsEl.append(btn);
+            grp.append(btn);
+            actionsEl.append(grp);
          }
       }
 
@@ -380,7 +398,7 @@ export class Notifications implements NotificationsSink {
 
       card.disposeMovable = makeMovable(root, {
          storageKey: this.posKey(notice.id),
-         ignore: ".notice-close, .notice-action",
+         ignore: ".notice-close, .notice-action, .notice-action-select",
          onSnap: (s) => this.onSnap(card, s)
       });
 
@@ -392,7 +410,10 @@ export class Notifications implements NotificationsSink {
          const btn = (e.target as HTMLElement).closest<HTMLElement>(".notice-action");
          if (!btn?.dataset.action) return;
          e.stopPropagation();
-         this.act(card, btn.dataset.action);
+         const sel = btn
+            .closest(".notice-action-group")
+            ?.querySelector<HTMLSelectElement>(".notice-action-select");
+         this.act(card, btn.dataset.action, sel?.value);
       });
       root.addEventListener("pointerenter", () => (card.hovered = true));
       root.addEventListener("pointerleave", () => (card.hovered = false));
@@ -431,10 +452,10 @@ export class Notifications implements NotificationsSink {
 
    /* User clicked a named action (a ringing alarm's Snooze/Dismiss): remove the card and
       report the action. Routed through onAction, NOT onDismiss, so it isn't double-handled. */
-   private act(card: Card, action: string): void {
+   private act(card: Card, action: string, value?: string): void {
       const id = card.notice.id;
       this.teardown(card);
-      this.onAction(id, action);
+      this.onAction(id, action, value);
    }
 
    private onSnap(card: Card, snapped: boolean): void {

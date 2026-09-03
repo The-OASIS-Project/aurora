@@ -55,6 +55,11 @@
    --node-accent: var(--alert);
    --node-accent-glow: var(--alert-glow);
 }
+/* An action row (a ringing alarm's dropdown + Snooze + Dismiss) needs more room than a plain
+   text toast, or it crowds the right edge. */
+.notice-card.notice-has-actions {
+   width: 19rem;
+}
 .notice-card .panel-corner {
    border-color: color-mix(in srgb, var(--node-accent) 45%, transparent);
 }
@@ -111,11 +116,39 @@
    accent (alert for a ringing alarm, via notice-attention). */
 .notice-actions {
    display: flex;
-   gap: 0.5rem;
+   gap: 0.4rem;
    margin-top: 0.6rem;
 }
+/* Transparent to layout (display:contents) so its children - an optional dropdown + the
+   button - sit directly in the .notice-actions flex row and space evenly, while the group
+   still exists in the DOM to scope the click handler's select lookup. */
+.notice-action-group {
+   display: contents;
+}
+/* Duration dropdown beside a Snooze button. Machined to match the action pills; an opaque
+   dark background + themed options so the native control doesn't render white. */
+.notice-action-select {
+   flex: 0 0 auto;
+   appearance: none;
+   -webkit-appearance: none;
+   padding: 0.35rem 0.55rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--node-accent-glow, var(--accent-glow));
+   background: color-mix(in srgb, var(--ground-raise) 82%, var(--node-accent, var(--accent)) 18%);
+   border: 1px solid color-mix(in srgb, var(--node-accent, var(--accent)) 40%, transparent);
+   cursor: pointer;
+}
+.notice-action-select option {
+   background: var(--ground-raise);
+   color: var(--text);
+}
+.notice-action-select:focus-visible {
+   outline: 2px solid var(--node-accent);
+   outline-offset: 1px;
+}
 .notice-action {
-   flex: 1 1 auto;
+   flex: 1 1 0;
    padding: 0.35rem 0.6rem;
    font-family: var(--font-mono);
    font-size: var(--fs-label);
