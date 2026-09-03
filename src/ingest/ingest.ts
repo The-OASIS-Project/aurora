@@ -379,11 +379,22 @@ export interface WatchesSink {
    `hold` is seconds fully visible before an unsnapped toast begins to fade. `x`/`y` are
    the abstract default spot (-1..1) the card first appears at, until the user moves or
    snaps it (after which its own persisted position wins). */
+/* A named action button on a notice (e.g. a ringing alarm's Snooze / Dismiss). Clicking one
+   removes the card and calls Ingest.noticeAction(noticeId, id). When a notice has actions the
+   card shows them instead of the plain close (x) - the actions include the dismiss path. */
+export interface NoticeAction {
+   id: string; // sent back through noticeAction (e.g. "snooze" | "dismiss")
+   label: string; // button text
+}
+
 export interface Notice {
    id: string;
    kind: string;
    summary: string;
    detail?: string;
+   /* Action buttons (a ringing alarm's Snooze/Dismiss). When present, the card renders these
+      and omits the plain x-close (an action carries the dismiss). */
+   actions?: NoticeAction[];
    /* A list body (e.g. the active-jobs card's job titles), rendered under the summary. */
    items?: string[];
    tone?: "nominal" | "attention";
@@ -548,9 +559,12 @@ export interface Ingest {
    /* Whether the active model can see images (from get_config's llm.cloud/local.vision_enabled,
       resolved against the current mode). The composer gates image attach on this. */
    isVisionCapable(): boolean;
-   /* User dismissed a transient notice; the source may propagate it to DAWN (e.g.
-      a ringing alarm needs scheduler_action{dismiss} to actually stop). */
+   /* User dismissed a transient notice via its close (x); the source may propagate it to
+      DAWN (e.g. a ringing alarm needs scheduler_action{dismiss} to actually stop). */
    dismiss(id: string): void;
+   /* User clicked a named action button on a notice (e.g. a ringing alarm's Snooze/Dismiss).
+      `action` is the NoticeAction id; the source maps it to the right write (scheduler_action). */
+   noticeAction(id: string, action: string): void;
    /* User engaged/left the input (focus), which affects the listening state. */
    setEngaged(engaged: boolean): void;
    /* Music transport (a deliberate Tier-C write, like chat submit): a music_control

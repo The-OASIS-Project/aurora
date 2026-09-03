@@ -107,6 +107,37 @@
    outline-offset: 1px;
 }
 
+/* Action buttons (a ringing alarm's Snooze / Dismiss). Machined pills in the card's node
+   accent (alert for a ringing alarm, via notice-attention). */
+.notice-actions {
+   display: flex;
+   gap: 0.5rem;
+   margin-top: 0.6rem;
+}
+.notice-action {
+   flex: 1 1 auto;
+   padding: 0.35rem 0.6rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   text-transform: uppercase;
+   color: var(--node-accent-glow, var(--accent-glow));
+   background: color-mix(in srgb, var(--node-accent, var(--accent)) 10%, transparent);
+   border: 1px solid color-mix(in srgb, var(--node-accent, var(--accent)) 40%, transparent);
+   cursor: pointer;
+   transition:
+      background 140ms ease,
+      border-color 140ms ease;
+}
+.notice-action:hover {
+   background: color-mix(in srgb, var(--node-accent, var(--accent)) 20%, transparent);
+   border-color: color-mix(in srgb, var(--node-accent, var(--accent)) 65%, transparent);
+}
+.notice-action:focus-visible {
+   outline: 2px solid var(--node-accent);
+   outline-offset: 1px;
+}
+
 .notice-title {
    font-size: var(--fs-data);
    line-height: 1.35;

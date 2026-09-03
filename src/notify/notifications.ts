@@ -109,6 +109,7 @@ export class Notifications implements NotificationsSink {
    private readonly cards = new Map<string, Card>();
    private readonly container: HTMLElement;
    private readonly onDismiss: (id: string) => void;
+   private readonly onAction: (id: string, action: string) => void;
    private engaged = false;
    private engageAmt = 0; // eased 0..1
    private frontHolder: string | null = null;
@@ -120,9 +121,14 @@ export class Notifications implements NotificationsSink {
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-   constructor(container: HTMLElement, onDismiss: (id: string) => void) {
+   constructor(
+      container: HTMLElement,
+      onDismiss: (id: string) => void,
+      onAction: (id: string, action: string) => void = () => {}
+   ) {
       this.container = container;
       this.onDismiss = onDismiss;
+      this.onAction = onAction;
    }
 
    notify(notice: Notice): void {
@@ -296,8 +302,11 @@ export class Notifications implements NotificationsSink {
       const kindEl = document.createElement("span");
       kindEl.className = "notice-kind";
       head.append(dot, kindEl);
+      /* Action buttons (a ringing alarm's Snooze/Dismiss) replace the plain close: an
+         action carries the dismiss, so no redundant x. */
+      const hasActions = !!notice.actions?.length;
       let close: HTMLButtonElement | null = null;
-      if (!notice.sticky) {
+      if (!notice.sticky && !hasActions) {
          close = document.createElement("button");
          close.className = "notice-close";
          close.type = "button";
@@ -313,7 +322,28 @@ export class Notifications implements NotificationsSink {
       const listEl = document.createElement("ul");
       listEl.className = "notice-list";
 
+      /* Actions are fixed at mount: a notice's action set is immutable for its lifetime.
+         update()/paint() do NOT reconcile them, because a given notice id never changes its
+         action shape in practice (a scheduler event's type is fixed per event_id). The only
+         theoretical exception - a missed replay (no actions) reusing an id that later rings
+         live - degrades safely: the plain x rendered at that first mount still dismisses and
+         stops the loop, just without the Snooze option. */
+      let actionsEl: HTMLDivElement | null = null;
+      if (hasActions) {
+         actionsEl = document.createElement("div");
+         actionsEl.className = "notice-actions";
+         for (const a of notice.actions!) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "notice-action";
+            btn.dataset.action = a.id;
+            btn.textContent = a.label;
+            actionsEl.append(btn);
+         }
+      }
+
       root.append(head, titleEl, subEl, listEl);
+      if (actionsEl) root.append(actionsEl);
       this.container.appendChild(root);
 
       const snapped = localStorage.getItem(this.snapKey(notice.id)) === "1";
@@ -350,13 +380,19 @@ export class Notifications implements NotificationsSink {
 
       card.disposeMovable = makeMovable(root, {
          storageKey: this.posKey(notice.id),
-         ignore: ".notice-close",
+         ignore: ".notice-close, .notice-action",
          onSnap: (s) => this.onSnap(card, s)
       });
 
       close?.addEventListener("click", (e) => {
          e.stopPropagation();
          this.dismiss(card);
+      });
+      actionsEl?.addEventListener("click", (e) => {
+         const btn = (e.target as HTMLElement).closest<HTMLElement>(".notice-action");
+         if (!btn?.dataset.action) return;
+         e.stopPropagation();
+         this.act(card, btn.dataset.action);
       });
       root.addEventListener("pointerenter", () => (card.hovered = true));
       root.addEventListener("pointerleave", () => (card.hovered = false));
@@ -391,6 +427,14 @@ export class Notifications implements NotificationsSink {
       const id = card.notice.id;
       this.teardown(card);
       this.onDismiss(id);
+   }
+
+   /* User clicked a named action (a ringing alarm's Snooze/Dismiss): remove the card and
+      report the action. Routed through onAction, NOT onDismiss, so it isn't double-handled. */
+   private act(card: Card, action: string): void {
+      const id = card.notice.id;
+      this.teardown(card);
+      this.onAction(id, action);
    }
 
    private onSnap(card: Card, snapped: boolean): void {

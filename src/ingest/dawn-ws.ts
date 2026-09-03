@@ -37,6 +37,7 @@ import type {
    LibraryItem,
    MusicState,
    MusicTrack,
+   NoticeAction,
    OutImage,
    ToolCall,
    UploadedDoc,
@@ -2233,6 +2234,14 @@ export class DawnIngest implements Ingest {
                   detail: message,
                   persist: true, // stays readable until dismissed or docked (WebUI parity)
                   critical: ringingAlarm,
+                  /* A ringing alarm gets Snooze/Dismiss buttons (both silence the tone; snooze
+                     re-fires it later). Reminders/timers keep the plain close (nothing to stop). */
+                  actions: ringingAlarm
+                     ? [
+                          { id: "snooze", label: "Snooze" },
+                          { id: "dismiss", label: "Dismiss" }
+                       ]
+                     : undefined,
                   x: 0.62,
                   y: 0.42
                });
@@ -3389,6 +3398,19 @@ export class DawnIngest implements Ingest {
       }
    }
 
+   /* A named action on a notice's button. For a ringing alarm's Snooze/Dismiss: stop the local
+      loop and send the matching scheduler_action to DAWN (snooze re-fires it later; dismiss
+      ends it). Only fires for a tracked ringing alarm; other notices have no action buttons. */
+   noticeAction(id: string, action: string): void {
+      if (!id.startsWith("scheduler-")) return;
+      if (action !== "snooze" && action !== "dismiss") return;
+      const eventId = Number(id.slice("scheduler-".length));
+      if (this.ringingAlarms.delete(eventId)) {
+         if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
+         this.send({ type: "scheduler_action", payload: { action, event_id: eventId } });
+      }
+   }
+
    /* "Alarm sounds" preference (the System-menu toggle): gates the client chime + ringing
       loop only (the spoken alarm rides the general TTS mute, no DAWN verb). Persisted. */
    alarmSoundsEnabled(): boolean {
@@ -3547,6 +3569,7 @@ export class DawnIngest implements Ingest {
          detail?: string;
          persist?: boolean;
          critical?: boolean;
+         actions?: NoticeAction[];
       }
    ): void {
       this.sinks.notifications.notify({
@@ -3557,6 +3580,7 @@ export class DawnIngest implements Ingest {
          tone: opts.tone ?? "nominal",
          persist: opts.persist,
          critical: opts.critical,
+         actions: opts.actions,
          hold: opts.hold,
          x: opts.x,
          y: opts.y

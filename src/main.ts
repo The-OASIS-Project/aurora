@@ -154,7 +154,11 @@ const ingest: Ingest = dawn;
 
 /* Notification layer: self-owned movable notice cards (they snap like the instruments).
    The x closes a notice and propagates to DAWN (a ringing alarm needs a real dismiss). */
-const notifications = new Notifications(stage, (id) => ingest.dismiss(id));
+const notifications = new Notifications(
+   stage,
+   (id) => ingest.dismiss(id),
+   (id, action) => ingest.noticeAction(id, action)
+);
 
 /* The music player: a dedicated interactive view (like the conversation console).
    It reflects DAWN's music_state/position and sends transport through the ingest;
