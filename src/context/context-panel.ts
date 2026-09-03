@@ -54,7 +54,26 @@ const BREAKDOWN: Array<{ key: keyof ContextItem["breakdown"]; cap: string; name:
    { key: "source", cap: "SRC", name: "source" }
 ];
 
-export function mountContextPanel(root: HTMLElement): ContextPanelController {
+/* item_id prefixes that map to a user-scoped memory-delete verb (delete_memory_*). Only these
+   are deletable from the panel; relation/document_chunk/calendar_occ rows and external/user
+   rows (empty item_id) have no delete verb, so they show no delete control. The ingest owns the
+   prefix->verb mapping (its MEMORY_DELETE_VERBS is the paired wire truth - keep the kinds in
+   sync); this only decides whether to show the control. The id must be a canonical positive
+   integer (DAWN's %lld row id) so "show control" agrees with the ingest's "can delete". */
+const DELETABLE_PREFIXES = new Set(["fact", "entity", "summary"]);
+const MEMORY_ID_RE = /^[1-9]\d*$/; // rejects "", "abc", "0", "1e3", "0x10", " 5 "
+function isDeletable(itemId: string): boolean {
+   const c = itemId.indexOf(":");
+   return c > 0 && DELETABLE_PREFIXES.has(itemId.slice(0, c)) && MEMORY_ID_RE.test(itemId.slice(c + 1));
+}
+
+export interface ContextPanelOptions {
+   /* Delete one of the user's own memories (a context row's item_id). Confirm-gating happens
+      in the panel; this just fires the write. Absent => no delete control is shown. */
+   onDeleteMemory?: (itemId: string) => void;
+}
+
+export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions = {}): ContextPanelController {
    const el = document.createElement("div");
    el.id = "context";
    el.className = "context";
@@ -247,7 +266,55 @@ export function mountContextPanel(root: HTMLElement): ContextPanelController {
       const score = document.createElement("span");
       score.className = "context-score";
       score.textContent = item.score.toFixed(2);
-      rowHead.append(tags, score);
+      /* Score + optional delete grouped on the right (row-head is space-between). */
+      const rightGroup = document.createElement("div");
+      rightGroup.className = "context-row-head-right";
+      rightGroup.append(score);
+      rowHead.append(tags, rightGroup);
+
+      /* Delete control (only on the user's own deletable memories). Quick two-step confirm:
+         first click arms it (shows "Delete?"), a second click within a few seconds deletes;
+         it auto-reverts otherwise. A destructive write, so it's gated but stays lightweight. */
+      if (opts.onDeleteMemory && isDeletable(item.itemId)) {
+         const del = document.createElement("button");
+         del.type = "button";
+         del.className = "context-del";
+         del.setAttribute("aria-label", "Delete this memory");
+         del.textContent = "×"; // x
+         let armed = false;
+         let revert = 0;
+         const disarm = (): void => {
+            armed = false;
+            del.classList.remove("armed");
+            del.textContent = "×";
+            del.setAttribute("aria-label", "Delete this memory");
+            window.clearTimeout(revert);
+            revert = 0;
+         };
+         rowDisposers.push(disarm); // clear the timer on re-render / destroy
+         del.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!armed) {
+               armed = true;
+               del.classList.add("armed");
+               del.textContent = "Delete?";
+               del.setAttribute("aria-label", "Confirm delete this memory");
+               window.clearTimeout(revert);
+               revert = window.setTimeout(disarm, 3500);
+               return;
+            }
+            window.clearTimeout(revert);
+            opts.onDeleteMemory?.(item.itemId);
+            /* Optimistic: drop it from the trace + re-render (mirrors the picker's delete). A
+               server failure surfaces a notice from the ingest; the row is already gone. */
+            if (current) {
+               const idx = current.items.indexOf(item);
+               if (idx >= 0) current.items.splice(idx, 1);
+            }
+            render();
+         });
+         rightGroup.append(del);
+      }
       row.append(rowHead);
 
       if (item.text) {

@@ -119,6 +119,15 @@ function providerLabel(p: LlmProvider): string {
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
+/* Context-panel memory delete: item_id prefix -> the user-scoped delete verb + its id field
+   (verified in dawn/src/webui/webui_memory.c + memory_focus_adapters.c). Only these prefixes
+   have an id-based delete; relation/document_chunk/calendar_occ and preferences do not. Paired
+   with the Context panel's DELETABLE_PREFIXES (the display gate) - keep the kinds in sync. */
+const MEMORY_DELETE_VERBS: Record<string, { type: string; field: string }> = {
+   fact: { type: "delete_memory_fact", field: "fact_id" },
+   entity: { type: "delete_memory_entity", field: "entity_id" },
+   summary: { type: "delete_memory_summary", field: "summary_id" }
+};
 /* Exponential moving average of the live token rate: a smooth figure that leans
    toward recent generations. Persisted so it survives a refresh. */
 const RATE_EMA_KEY = "dawn.hero.rateEma";
@@ -1603,6 +1612,28 @@ export class DawnIngest implements Ingest {
                click, so accept the success and only refetch to correct a failure. */
             if ((p as { success?: boolean }).success === false) this.requestConversations();
             break;
+
+         case "delete_memory_fact_response":
+         case "delete_memory_entity_response":
+         case "delete_memory_summary_response": {
+            /* The Context panel confirm-gated + optimistically removed the row. On success
+               there is nothing to do; a genuine failure surfaces a notice. "Not found" means
+               it was already gone (a re-click, or deleted elsewhere), so treat it as success -
+               the optimistic removal was correct. No id echo in the response, so nothing to
+               reconcile per-row. */
+            if ((p as { success?: boolean }).success === false) {
+               const err = String((p as { error?: string }).error ?? "");
+               if (!/not found/i.test(err)) {
+                  this.spikeNotice("memory-delete", "attention", err || "Couldn't delete that memory", {
+                     x: 0,
+                     y: -0.4,
+                     hold: 5,
+                     tone: "attention"
+                  });
+               }
+            }
+            break;
+         }
 
          case "delete_conversation_response": {
             if ((p as { success?: boolean }).success === false) {
@@ -3435,6 +3466,24 @@ export class DawnIngest implements Ingest {
    setAlarmSounds(on: boolean): void {
       this.alarmChime.setEnabled(on);
       localStorage.setItem(ALARM_SOUNDS_KEY, on ? "true" : "false");
+   }
+
+   /* Delete one of the user's own memories from the Context panel. Maps the row's item_id
+      prefix to the matching user-scoped delete verb (auth-only, user-scoped server-side). The
+      panel already confirm-gated this and removed the row optimistically; a server failure is
+      surfaced as a notice from the *_response handler. Non-memory prefixes are ignored. */
+   deleteMemory(itemId: string): void {
+      const colon = itemId.indexOf(":");
+      if (colon <= 0) return;
+      const kind = itemId.slice(0, colon);
+      const idStr = itemId.slice(colon + 1);
+      /* Canonical positive-integer id only (rejects "", "abc", "0", "1e3", "0x10", " 5 "), so a
+         malformed/non-canonical item_id never sends a wrong or rounded delete key. Mirrors the
+         panel's isDeletable, so "show control" and "can delete" agree on every input. */
+      if (!/^[1-9]\d*$/.test(idStr)) return;
+      const verb = MEMORY_DELETE_VERBS[kind];
+      if (!verb) return;
+      this.send({ type: verb.type, payload: { [verb.field]: Number(idStr) } });
    }
 
    /* Focus/blur is a local UI cue only; the real reactor state comes from DAWN's

@@ -570,6 +570,11 @@ export interface Ingest {
       `action` is the NoticeAction id; `value` is the chosen dropdown option, if any (e.g. the
       snooze minutes). The source maps it to the right write (scheduler_action). */
    noticeAction(id: string, action: string, value?: string): void;
+   /* User deleted one of their own memories from the Context panel (a confirm-gated,
+      user-scoped destructive write - charter "user surface, not operator console"). `itemId`
+      is the context row's `item_id` ("fact:8502" / "entity:7" / "summary:2496"); the source
+      maps the prefix to the matching delete_memory_* verb. Non-memory prefixes are ignored. */
+   deleteMemory(itemId: string): void;
    /* User engaged/left the input (focus), which affects the listening state. */
    setEngaged(engaged: boolean): void;
    /* Music transport (a deliberate Tier-C write, like chat submit): a music_control

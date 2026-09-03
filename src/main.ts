@@ -220,7 +220,9 @@ const libraryPanel = mountLibraryPanel(stage, {
 /* The Context panel: a standalone movable view showing what DAWN pulled into context for
    the latest turn (the pushed context_injection frame). Read-only, no controller options -
    it is a pure sink. Defaults hidden; summoned from the Panels menu. */
-const contextPanel = mountContextPanel(stage);
+const contextPanel = mountContextPanel(stage, {
+   onDeleteMemory: (itemId) => ingest.deleteMemory(itemId)
+});
 
 /* The conversation picker: fixed menu-band chrome (top band, between the clock and the
    center menu) that lists / searches / opens the user's conversations and does the

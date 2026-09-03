@@ -9,9 +9,11 @@ framework would want to own rendering itself.
 
 ## Design goals
 
-- **Ambient and read-mostly.** An instrument you leave running. It consumes DAWN's
-  streams and reflects state; it never adds control paths that could depower the
-  daemon. The few writes it makes are deliberate user actions (see below).
+- **Ambient, and the user's surface - not the operator's.** An instrument you leave
+  running. It reflects DAWN's streams and lets the user act on their own data and session;
+  it never crosses into operator/admin/global control or anything that could depower or
+  reconfigure the daemon (that is DAWN's own WebUI). The writes it makes are deliberate user
+  actions on the user's own data (see below); destructive ones are confirm-gated.
 - **Purpose, not eye candy.** Every moving element encodes a real signal. The center
   reactor is a reinterpretation of DAWN's own ring visualizer: the bars are the voice
   spectrum, the gauges are throughput, the core is conversation state.
@@ -108,22 +110,24 @@ and calls `ingest.start(sinks)`. `DawnIngest` (`dawn-ws.ts`) owns the WebSocket:
 session reuse, and translating DAWN's `{type, payload}` frames into sink calls. Which
 DAWN signals map to what is documented in `docs/DAWN_UI_SIGNAL_MAP.md`.
 
-The deliberate writes, i.e. the read-mostly exceptions: submitting a chat message,
+The writes Aurora makes are the user acting on their own data and session (see the charter
+in CLAUDE.md - "user surface, not operator console"): submitting a chat message,
 `set_session_llm` (the model panel), `set_private`, `set_tts_enabled` (a per-connection
 voice-mute preference; it also stops DAWN synthesizing each sentence on the LLM-token
 thread, so a client-side audio drop alone leaves the reply paced to synthesis speed),
-dismissing an alarm
-(`scheduler_action`), `new_conversation` plus final-answer persistence for the UI's
-own conversation, music transport (`music_subscribe` plus `music_control` from the
-player), voice input (the mic streams `AUDIO_IN` / `AUDIO_IN_END` binary frames for
-push-to-talk; continuous listening toggles `always_on_enable` / `always_on_disable`), and
-the conversation picker's management verbs (`rename_conversation`, `set_pinned`, and the
-confirm-gated `delete_conversation`). Music control and voice input are Tier C (they mutate
-DAWN) but benign and user-initiated, so they are treated like chat submit, not ambient
-control. Picker rename/pin are the same benign class; `delete_conversation` is the one
-destructive write (it cascade-deletes the conversation's images + child background jobs
-server-side), so it is gated behind a named, cascade-explicit confirm and is reachable only
-from a deliberate user gesture. Everything else is read.
+dismissing / snoozing an alarm (`scheduler_action`), `new_conversation` plus final-answer
+persistence for the UI's own conversation, music transport (`music_subscribe` plus
+`music_control` from the player), voice input (the mic streams `AUDIO_IN` / `AUDIO_IN_END`
+binary frames for push-to-talk; continuous listening toggles `always_on_enable` /
+`always_on_disable`), the conversation picker's management verbs (`rename_conversation`,
+`set_pinned`, and the confirm-gated `delete_conversation`), the Watches panel's watch verbs,
+and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel).
+All are benign and user-initiated - the user's own data, not operator control of the daemon.
+The **destructive** ones (`delete_conversation` - which cascade-deletes the conversation's
+images + child background jobs server-side; `watch_remove`; `delete_memory_*`) are gated
+behind a named confirm and reachable only from a deliberate user gesture, never a frame
+handler. What stays out is operator/admin/global (`set_config`, `set_secrets`, `restart`,
+user management, the global SAGE flag) - that lives in DAWN's own WebUI.
 
 ## Directory structure
 

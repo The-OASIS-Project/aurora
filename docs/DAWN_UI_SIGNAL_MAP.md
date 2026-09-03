@@ -8,9 +8,9 @@ the exhaustive, bidirectional wire reference (every request, every admin verb,
 every satellite frame). This one answers a narrower, more useful question for
 building dashboards:
 
-> *If I am a mostly read-only client, what signals does DAWN hand me, which ones
-> arrive on their own, which ones I have to ask for, and what can I actually
-> build with each?*
+> *As the user's interface to DAWN (not the operator's console), what signals does
+> DAWN hand me, which ones arrive on their own, which ones I have to ask for, and
+> what can I actually build with each?*
 
 Everything below was read out of `dawn/src/webui/` (primarily
 `webui_broadcasts.c`, `webui_server.c`, and the per-domain handlers) as of
@@ -27,10 +27,11 @@ DAWN's WebSocket surface divides into three tiers from a UI's point of view:
 |------|-----------|------------|------------|
 | **A. Pushed signals** | Nothing (just connect) | On connect + whenever an event fires | The live, ambient heartbeat: reactor state, notices, jobs, alarms, music, phone |
 | **B. Poll (request/response)** | Send a request | Only when you ask | Filling a panel's *contents* (Home Assistant states, memory, metrics snapshots) |
-| **C. Control / mutation** | Send a command | Ack only | Not for a read-mostly UI. Listed here so you know what to *not* wire. |
+| **C. Control / mutation** | Send a command | Ack only | The user acting on their own data/session (chat, model, schedule, watches, memory deletes, ...). Wire the user-scoped ones; the operator/admin verbs stay out (see §6). |
 
-A read-mostly dashboard is built almost entirely on **Tier A**, dips into
-**Tier B** to populate a few panels, and deliberately ignores **Tier C**.
+The dashboard is built almost entirely on **Tier A**, dips into **Tier B** to populate a
+few panels, and uses the **user-scoped** slice of **Tier C** for the user's own actions -
+while leaving the operator/admin slice to DAWN's own WebUI (§6).
 
 The subtlety that drives the whole design: **an event and its content often
 arrive on different tiers.** A background job *finishing* is pushed (Tier A);
@@ -234,15 +235,23 @@ tell you, and defers the server work.
 
 ---
 
-## 6. Tier C — control / mutation (deliberately NOT wired here)
+## 6. Tier C — control / mutation (the user-vs-operator line)
 
-Listed so a read-mostly client knows the boundary. These mutate DAWN or depower
-it, which the hero UI's charter forbids. Includes: `text` / `cancel` (drive the
-assistant), `music_control`, `scheduler_action`, `job_action`, all `set_*` /
-`get_config` / `set_config` / `set_secrets` / `restart`, user management
-(`create_user`, `delete_user`, ...), memory deletes. The one
-soft exception is the conversation console's `text` submit, which the hero UI
-already treats as an explicit user-initiated action, not ambient control.
+The charter (CLAUDE.md - "user surface, not operator console") draws its line
+**through** Tier C, not around it: Aurora wires the verbs where the **user acts on
+their own data or session**, and leaves the **operator/admin/global** verbs to DAWN's
+own WebUI.
+
+- **Wired (user-scoped, all deliberate + user-initiated):** `text` submit, `music_control`,
+  `scheduler_action` (dismiss/snooze), the conversation picker verbs, the Watches verbs,
+  conversation attachments, the session-continuity re-anchors, and **memory deletes**
+  (`delete_memory_fact` / `_preference` / `_summary` / `_entity`, from the Context panel).
+  The destructive ones (`delete_conversation`, `watch_remove`, `delete_memory_*`) are
+  confirm-gated and fire only from a deliberate gesture, never a frame handler.
+- **Out (operator/admin/global - stays in DAWN's WebUI):** `set_config` / `get_config`(write)
+  / `set_secrets` / `restart`, user management (`create_user`, `delete_user`, ...), the SAGE
+  **global** attention flag, `job_action`, and anything that **depowers** a live capability.
+  `cancel` (interrupt a generation) is deliberately not wired either.
 
 **`set_tts_enabled` is a sanctioned exception, NOT a forbidden write** (in the
 `text` submit / `set_private` benign class). It is a per-connection preference -

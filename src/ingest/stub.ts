@@ -83,6 +83,7 @@ export class StubIngest implements Ingest {
    /* No DAWN behind the stub, so a dismiss is purely local (the store removes it). */
    dismiss(_id: string): void {}
    noticeAction(_id: string, _action: string, _value?: string): void {}
+   deleteMemory(_itemId: string): void {}
 
    /* No music engine behind the stub. */
    musicControl(_action: string, _params?: Record<string, unknown>): void {}

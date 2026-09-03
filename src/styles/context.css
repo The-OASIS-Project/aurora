@@ -271,6 +271,42 @@
    color: var(--text);
    letter-spacing: 0.02em;
 }
+/* Score + optional delete control, grouped at the right of the row head. */
+.context-row-head-right {
+   display: flex;
+   align-items: center;
+   gap: 0.4rem;
+}
+/* Delete-this-memory control: a faint x that arms into a compact "Delete?" confirm (alert)
+   on first click, deletes on the second, auto-reverts otherwise. */
+.context-del {
+   flex: 0 0 auto;
+   padding: 0 0.25rem;
+   height: 1.15rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   line-height: 1;
+   color: var(--text-faint);
+   background: none;
+   border: 1px solid transparent;
+   cursor: pointer;
+   transition:
+      color 140ms ease,
+      border-color 140ms ease;
+}
+.context-del:hover {
+   color: var(--alert);
+}
+.context-del.armed {
+   color: var(--alert-glow);
+   border-color: color-mix(in srgb, var(--alert) 55%, transparent);
+   background: color-mix(in srgb, var(--alert) 14%, transparent);
+   letter-spacing: 0.04em;
+}
+.context-del:focus-visible {
+   outline: 2px solid var(--alert);
+   outline-offset: 1px;
+}
 
 /* Retrieved text: clamped to two lines, click to expand. */
 .context-text {

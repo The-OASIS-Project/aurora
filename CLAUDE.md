@@ -6,10 +6,11 @@ project-specific technical direction.
 
 ## Project overview
 
-Aurora is a calm, read-mostly, JARVIS-style ambient dashboard for D.A.W.N. (part
-of The OASIS Project). Vanilla TypeScript + Vite, no web framework. It consumes DAWN's
-WebSocket broadcast streams and reflects state; it is not DAWN's admin panel. It runs on
-a PC or laptop, not the Jetson.
+Aurora is a calm, JARVIS-style ambient interface for D.A.W.N. (part of The OASIS
+Project). Vanilla TypeScript + Vite, no web framework. It reflects DAWN's WebSocket state
+and lets the user act on their own data and session; it is the **user's** interface, not
+DAWN's operator/admin console (that is DAWN's own WebUI). It runs on a PC or laptop, not
+the Jetson.
 
 See @ARCHITECTURE.md for the four-layer design and the render seam, and
 @docs/DAWN_UI_SIGNAL_MAP.md for which DAWN signals the UI consumes.
@@ -20,36 +21,41 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   abstract coordinates through `RenderNode`; only `src/render/` knows pixels or CSS. If
   a state or choreography type grows a visual property, the seam is broken. This is the
   spine of the whole design.
-- **Read-mostly.** Do not add control paths that could depower DAWN. Writes are limited
-  to deliberate user actions (chat submit, `set_session_llm`, `set_private`,
-  `set_tts_enabled` (a per-connection "mute my socket's voice" preference; it also
-  stops DAWN pacing the reply to synthesis speed, so muting client-side alone is not
-  enough), `scheduler_action` dismiss, `new_conversation` plus the UI's own message
-  persistence, music transport via `music_subscribe` / `music_control` plus the
-  `music_buffer` flow-control report, which is solicited telemetry the server clamps,
-  not a control verb, and voice input: the mic sends `AUDIO_IN` / `AUDIO_IN_END` binary
-  frames for push-to-talk, and continuous listening sends `always_on_enable` /
-  `always_on_disable` to arm/disarm DAWN's server-side VAD + wake word - all user-initiated
-  conversation input, the same sanctioned class as chat submit), and the conversation
-  picker's management verbs (`rename_conversation`, `set_pinned`, and the confirm-gated
-  **`delete_conversation`**), and the **Watches panel**'s `watch_set_enabled` (a benign
-  per-watch enable/disable flip, same class as `set_pinned`) plus its CRUD (`watch_add` /
-  `watch_update` from the edit modal, and the confirm-gated **`watch_remove`**) - per-user
-  proactive rules, deliberate actions like the picker verbs. The SAGE **global attention
-  flag is display-only** in Aurora - toggling it is a `set_config` (admin/global), over the
-  read-mostly line. Rename and pin are benign metadata flips like `set_private`;
-  **delete is the one write that permanently destroys DAWN-side data** (it cascade-deletes
-  the conversation's images + child background jobs and refuses on a running job), so it is
-  gated behind a named, cascade-explicit confirm dialog and only ever reachable from a
-  deliberate user gesture, never a frame handler. **Conversation attachments** are the same
-  sanctioned conversation-input class as chat submit: the composer uploads a document
-  (`POST /api/documents`, inlined into the turn text as an `[ATTACHED DOCUMENT]` marker) or a
-  client-compressed image (`POST /api/images`, sent as `payload.images[]` base64 plus the
-  MANDATORY order-matched `payload.image_ids[]` so the daemon persists `[IMAGE:id]` markers -
-  image attach is gated on a vision-capable model). The **session-continuity** writes are
-  `set_active_conversation`/`load_conversation` re-anchors on reconnect and the takeover
-  reclaim (see the reconnect gotcha below). If a new feature needs to write to DAWN, flag it
-  and confirm first.
+- **User surface, not operator console.** Aurora is the *user's* ambient interface to DAWN;
+  DAWN's own WebUI is the operator/admin console. Aurora writes freely on behalf of deliberate
+  user actions over the user's OWN data and session, but never crosses into operator/admin/global
+  control or anything that **depowers or reconfigures the daemon**. The test for any new write is
+  not "is it a write?" (that line is retired - Aurora long outgrew read-only eye-candy) but
+  "**is this the user acting on their own data, or an operator configuring the daemon?**"
+  - **Out of bounds - stays in DAWN's WebUI:** `set_config`, `set_secrets`, `restart`, user
+    management (`create_user` / `delete_user`, ...), and the SAGE **global attention flag**
+    (display-only in Aurora - toggling it is a `set_config`, admin/global). Anything that would
+    depower a live capability for the user or others is out.
+  - **The user-scoped writes Aurora makes** (all deliberate, user-initiated): chat submit;
+    `set_session_llm`; `set_private`; `set_tts_enabled` (a per-connection "mute my socket's voice"
+    preference - it also stops DAWN pacing the reply to synthesis speed, so a client-side audio drop
+    alone is not enough); `scheduler_action` dismiss / **snooze**; `new_conversation` + the UI's own
+    final-answer persistence; music transport (`music_subscribe` / `music_control` + the
+    `music_buffer` flow-control report, solicited telemetry the server clamps, not a control verb);
+    voice input (mic `AUDIO_IN` / `AUDIO_IN_END` for push-to-talk; `always_on_enable` /
+    `always_on_disable` to arm/disarm DAWN's server-side VAD + wake word); the conversation picker's
+    `rename_conversation` / `set_pinned` / confirm-gated **`delete_conversation`**; the Watches
+    panel's `watch_set_enabled` + `watch_add` / `watch_update` / confirm-gated **`watch_remove`**;
+    **conversation attachments** (a document via `POST /api/documents`, inlined as an
+    `[ATTACHED DOCUMENT]` marker; a client-compressed image via `POST /api/images`, sent as
+    `payload.images[]` base64 plus the MANDATORY order-matched `payload.image_ids[]` so the daemon
+    persists `[IMAGE:id]` markers - image attach is gated on a vision-capable model); the
+    **session-continuity** writes (`set_active_conversation` / `load_conversation` re-anchors on
+    reconnect + the takeover reclaim, see the reconnect gotcha below); and **memory deletes**
+    (`delete_memory_fact` / `_preference` / `_summary` / `_entity` - user-scoped, the user's own
+    memory, from the Context panel).
+  - **Destructive writes are gated.** Any write that permanently destroys DAWN-side data -
+    `delete_conversation` (cascade-deletes the conversation's images + child background jobs and
+    refuses on a running job), `watch_remove`, `delete_memory_*` - is gated behind a named confirm
+    and reachable ONLY from a deliberate user gesture, **never a frame handler**. Rename/pin/enable
+    flips are benign metadata, no gate.
+  - A new user-scoped write is fine; **flag it only if it might cross into operator/admin/global
+    territory or could depower the daemon.**
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, HA board) and the notification cards (`src/notify/`) are
