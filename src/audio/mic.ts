@@ -427,7 +427,12 @@ export class MicCapture {
       this.analyser!.connect(this.sink);
 
       if (!this.workletLoaded) {
-         await ctx.audioWorklet.addModule(new URL("./mic-capture-worklet.js", import.meta.url));
+         /* From public/worklets/ (not bundled) so it stays a real same-origin script
+            under DAWN's CSP; a bundled sub-inline-limit worklet becomes a data: URI that
+            script-src refuses. Mirrors MusicAudio. */
+         await ctx.audioWorklet.addModule(
+            `${import.meta.env.BASE_URL}worklets/mic-capture-worklet.js`
+         );
          this.workletLoaded = true;
       }
       this.worklet = new AudioWorkletNode(ctx, "mic-capture-processor");

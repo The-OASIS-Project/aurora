@@ -171,7 +171,12 @@ export class MusicAudio {
       this.buildDecoder();
 
       try {
-         await this.ctx.audioWorklet.addModule(new URL("./music-worklet.js", import.meta.url));
+         /* Loaded from public/worklets/ (not bundled) so it stays a real same-origin
+            script under DAWN's CSP (script-src 'self'). A bundled worklet under Vite's
+            inline limit becomes a data: URI, which DAWN's script-src refuses. */
+         await this.ctx.audioWorklet.addModule(
+            `${import.meta.env.BASE_URL}worklets/music-worklet.js`
+         );
       } catch (e) {
          console.error("[music] AudioWorklet unavailable (needs a secure context):", e);
          this.onError("Music audio needs HTTPS on this origin");

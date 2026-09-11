@@ -76,6 +76,38 @@ it at your daemon by editing `DAWN_TARGET` in `vite.config.ts` (default
 Working on the code? See **`DEVELOPING.md`** for the dev loop, developing against fake
 data with no DAWN running, and the conventions.
 
+## Install with an existing DAWN
+
+Already running DAWN? Aurora can ride along inside it, using DAWN's own web address and
+login, with no separate server to run. Three steps:
+
+1. **Build Aurora.** From this folder:
+
+   ```
+   npm install
+   npm run build
+   ```
+
+   This creates a `dist/` folder with the finished app.
+
+2. **Point DAWN at it.** In DAWN's `dawn.toml`, under `[webui]`, set `aurora_path` to the
+   full path of that `dist/` folder:
+
+   ```
+   [webui]
+   aurora_path = "/full/path/to/aurora/dist"
+   ```
+
+3. **Restart DAWN.**
+
+Now open DAWN's web interface as usual and click the **sunrise icon** in the header to
+switch to Aurora (or go straight to `/aurora`). It shares your DAWN login, so there's
+nothing else to sign into.
+
+DAWN's own web interface stays right where it is; Aurora sits alongside it. Leave
+`aurora_path` unset and nothing changes. To update Aurora later, run `npm run build` again
+and restart DAWN.
+
 ## Connecting
 
 Log in with your DAWN username and password. Aurora keeps you signed in across refreshes,

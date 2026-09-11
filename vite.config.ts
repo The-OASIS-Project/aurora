@@ -48,6 +48,12 @@ function stripCookieSecurity(setCookie: string[]): string[] {
 }
 
 export default defineConfig({
+   // Served under /aurora when co-located behind DAWN (same-origin subpath, so DAWN's
+   // WebUI keeps "/"). One base for dev and build, so the dev server also serves at
+   // https://localhost:5273/aurora/. API/WS paths stay absolute at the root (/api, /ws,
+   // /music-ws) and are unaffected. Worklets live in public/worklets/ and are loaded via
+   // import.meta.env.BASE_URL so they resolve under this base too.
+   base: "/aurora/",
    define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
    plugins: [basicSsl()],
    server: {

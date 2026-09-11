@@ -569,6 +569,7 @@ export class DawnIngest implements Ingest {
    private musicUnavailable = false; // surfaced "stream unavailable" after exhausting retries
    private musicWsToken = ""; // token the current music socket is (re)connecting with
    private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
+   private musicPort = 0; // config.music_port; used for the cross-port prod connect (0 = fall back to main+1)
    private dawnVersion = ""; // daemon version if a frame advertises it (feature-detected; else "")
    private lastStatus: LinkStatus = "disconnected"; // last emitted status, for the Connection dialog
    private lastDetail = "";
@@ -1223,10 +1224,23 @@ export class DawnIngest implements Ingest {
          case "config": {
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
-               open it now with the token `session` just stored. (music_port is for a
-               non-proxied client; we always reach it through the /music-ws dev proxy.)
-               Older servers omit music_enabled -> the field stays true and we open. */
+               open it now with the token `session` just stored. Older servers omit
+               music_enabled -> the field stays true and we open.
+               music_port: in a co-located PROD build there is no /music-ws route on
+               DAWN's main port (music is a separate lws server on main+1), so we connect
+               cross-port to wss://<host>:music_port. In DEV we keep the Vite /music-ws
+               proxy (one accepted cert, same origin). See openMusicStream. */
             this.musicEnabled = p.music_enabled !== false;
+            /* Range-validate before use: music_port is untrusted server input that becomes
+               a WebSocket port. A bad/out-of-range value stays 0 -> the main+1 fallback. */
+            if (
+               typeof p.music_port === "number" &&
+               Number.isInteger(p.music_port) &&
+               p.music_port >= 1 &&
+               p.music_port <= 65535
+            ) {
+               this.musicPort = p.music_port;
+            }
             if (typeof p.version === "string") this.dawnVersion = p.version;
             /* Mic capture chunks at the server's configured cadence (falls back to a
                default until this arrives). Matches the TTS-out audio_chunk_ms. */
@@ -3068,9 +3082,21 @@ export class DawnIngest implements Ingest {
       this.closeMusicStream();
       this.musicWsToken = token;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      /* DEV: reach the dawn-music server (main+1) through the Vite /music-ws proxy, so
+         it rides the one accepted dev cert on the same origin. PROD (co-located under
+         DAWN): DAWN's main port has no /music-ws route, so connect cross-port to the
+         advertised music_port (connect-src wss: allows it; it auths by token, not
+         cookie). Fall back to main+1 when the server omits music_port (older daemons). */
+      let musicUrl: string;
+      if (import.meta.env.DEV) {
+         musicUrl = `${proto}://${window.location.host}/music-ws`;
+      } else {
+         const port = this.musicPort || Number(window.location.port || "443") + 1;
+         musicUrl = `${proto}://${window.location.hostname}:${port}`;
+      }
       let ws: WebSocket;
       try {
-         ws = new WebSocket(`${proto}://${window.location.host}/music-ws`, "dawn-music");
+         ws = new WebSocket(musicUrl, "dawn-music");
       } catch {
          return;
       }
