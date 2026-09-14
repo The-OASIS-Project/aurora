@@ -73,6 +73,19 @@ interface Snap {
    ySnapped: boolean;
 }
 
+/* Persisted position is per-axis INTENT, not a resolved pixel, so it survives a
+   viewport resize AND the element scaling itself (a right/bottom dock stays flush as
+   the card grows). `lo`/`hi` = flush to the near/far viewport edge (the `edge` gutter);
+   `center` = viewport-centered; `free` = a fraction of the free travel (`f` in 0..1),
+   which is where sibling snaps and un-snapped drops land (siblings are NOT persisted as
+   references - they re-snap live on the next drag). X never persists `center` (the
+   central dead zone filters it), but the type allows it so one axisPos covers both. */
+type Anchor = { a: "lo" | "hi" | "center" } | { a: "free"; f: number };
+interface StoredPos {
+   x: Anchor;
+   y: Anchor;
+}
+
 const THRESHOLD = 4; // px of movement before a press becomes a drag (taps still click)
 const GLIDE_MS = 180; // how long the view takes to slide into a snapped spot
 const IND_INSET = 14; // preview bar inset from the viewport edge
@@ -105,6 +118,7 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
    let dragging = false;
    let pending: Snap | null = null;
    let otherRects: DOMRect[] = []; // sibling views, captured at drag start (they don't move)
+   let stored: StoredPos | null = null; // per-axis anchor intent, once the user has placed it
 
    /* Two preview bars (one per edge the view is about to dock to). */
    const vbar = document.createElement("div");
@@ -129,6 +143,57 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       el.style.right = "auto";
       el.style.bottom = "auto";
    };
+
+   /* Resolve one axis anchor to a pixel, given the current viewport dimension V and the
+      element's current layout SIZE. lo/center/hi track the viewport + size; free scales
+      with the free travel. `V - size` can go <= 0 on a tiny viewport, so clamp it. */
+   const axisPos = (anc: Anchor, V: number, size: number): number => {
+      const travel = Math.max(0, V - size);
+      switch (anc.a) {
+         case "lo":
+            return edge;
+         case "hi":
+            return V - size - edge;
+         case "center":
+            return travel / 2;
+         case "free":
+            return anc.f * travel;
+      }
+   };
+
+   /* Re-derive the element's pixel position from the stored anchors. Measured with the
+      LAYOUT box (offsetWidth/Height), not getBoundingClientRect, so a CSS-3D-transformed
+      element (a receded notice) is not measured at its scaled-down on-screen size.
+      mode "all" recomputes both axes (viewport change / restore); "dockOnly" recomputes
+      only the size-sensitive far-edge/center anchors and holds lo/free at their current
+      pixel - so an element scaling itself (e.g. a list card hover-expanding) keeps its
+      flush dock without a free/proportional axis drifting. */
+   const applyStored = (mode: "all" | "dockOnly" = "all"): boolean => {
+      if (!stored) return false;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      /* A hidden view (display:none) measures 0x0, which would resolve a size-dependent
+         anchor (hi / center / free) to the wrong pixel. Don't place it; defer to the
+         ResizeObserver's first real-size fire once it is shown. */
+      if (w === 0 && h === 0) return false;
+      const curLeft = parseFloat(el.style.left);
+      const curTop = parseFloat(el.style.top);
+      const resolve = (anc: Anchor, V: number, size: number, cur: number): number => {
+         if (mode === "dockOnly" && (anc.a === "lo" || anc.a === "free")) {
+            return Number.isFinite(cur) ? cur : axisPos(anc, V, size);
+         }
+         return axisPos(anc, V, size);
+      };
+      place(
+         resolve(stored.x, window.innerWidth, w, curLeft),
+         resolve(stored.y, window.innerHeight, h, curTop)
+      );
+      return true;
+   };
+   /* Whether applyStored has ever run against a real (nonzero) measurement. Until it has,
+      a genuine 0 -> nonzero size transition (the view being shown) must do a FULL "all"
+      recompute so a free/proportional axis is derived correctly, not held by dockOnly. */
+   let appliedRealSize = false;
 
    /* Visible sibling rects (every other movable view that is currently shown). */
    const siblingRects = (): DOMRect[] =>
@@ -258,12 +323,38 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
       hbar.remove();
    };
 
+   const isAnchor = (v: unknown): v is Anchor =>
+      !!v &&
+      typeof v === "object" &&
+      (((v as Anchor).a === "lo" || (v as Anchor).a === "hi" || (v as Anchor).a === "center") ||
+         ((v as { a?: string }).a === "free" && Number.isFinite((v as { f?: unknown }).f)));
+
    const restore = (): void => {
       try {
          const raw = localStorage.getItem(opts.storageKey);
          if (!raw) return;
-         const pos = JSON.parse(raw) as { x?: number; y?: number };
-         if (typeof pos.x === "number" && typeof pos.y === "number") place(pos.x, pos.y);
+         const parsed = JSON.parse(raw) as unknown;
+         if (!parsed || typeof parsed !== "object") return;
+         const p = parsed as { x?: unknown; y?: unknown };
+         if (isAnchor(p.x) && isAnchor(p.y)) {
+            stored = { x: p.x, y: p.y }; // v2 anchor schema
+            if (applyStored("all")) appliedRealSize = true;
+            return;
+         }
+         /* Legacy px `{x, y}`: convert to free-fractions against the CURRENT viewport +
+            size so it lands roughly where it was. Not written back here (applyStored never
+            persists); the next drop upgrades it to a real anchor. */
+         if (typeof p.x === "number" && typeof p.y === "number") {
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+            const frac = (px: number, V: number, size: number): number =>
+               Math.min(1, Math.max(0, px / Math.max(1, V - size)));
+            stored = {
+               x: { a: "free", f: frac(p.x, window.innerWidth, w) },
+               y: { a: "free", f: frac(p.y, window.innerHeight, h) }
+            };
+            if (applyStored("all")) appliedRealSize = true;
+         }
       } catch {
          /* ignore a corrupt entry */
       }
@@ -345,16 +436,62 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
          glideTimer = window.setTimeout(() => (el.style.transition = ""), GLIDE_MS + 20);
       }
       place(snap.left, snap.top);
-      localStorage.setItem(
-         opts.storageKey,
-         JSON.stringify({ x: parseFloat(el.style.left), y: parseFloat(el.style.top) })
-      );
+
+      /* Persist the INTENT, not the pixel. Classify each axis from the snap result: a
+         viewport-edge dock -> lo/hi; a preview-less snap -> center (viewport-center, Y
+         only - X center is dead-zone-filtered); a sibling guide OR an un-snapped drop ->
+         free, with the fraction read from the PLACED (post-clamp) pixel so it round-trips. */
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const anchorFor = (prev: AxisPreview, snapped: boolean, placed: number, V: number, size: number): Anchor => {
+         if (prev && prev.type === "edge") return { a: prev.side === "lo" ? "lo" : "hi" };
+         if (snapped && !prev) return { a: "center" };
+         const travel = Math.max(1, V - size); // divisor floor of 1 (axisPos's multiplier floors at 0)
+         return { a: "free", f: Math.min(1, Math.max(0, placed / travel)) };
+      };
+      stored = {
+         x: anchorFor(snap.xPrev, snap.xSnapped, parseFloat(el.style.left) || 0, window.innerWidth, w),
+         y: anchorFor(snap.yPrev, snap.ySnapped, parseFloat(el.style.top) || 0, window.innerHeight, h)
+      };
+      localStorage.setItem(opts.storageKey, JSON.stringify(stored));
       opts.onSnap?.(snap.xSnapped || snap.ySnapped);
    };
 
    const onResize = (): void => {
-      if (el.style.left) place(parseFloat(el.style.left), parseFloat(el.style.top));
+      /* A user-placed view re-derives from its anchors (re-docks flush, re-centers,
+         re-proportions free). A view positioned by the caller with no stored anchor (e.g.
+         a notice placed by placeDefault) keeps the old px re-clamp so it stays on screen. */
+      if (stored) {
+         if (applyStored("all")) appliedRealSize = true;
+      } else if (el.style.left) {
+         place(parseFloat(el.style.left), parseFloat(el.style.top));
+      }
    };
+
+   /* Element self-scaling (a card hover-expanding, the music player growing as a track
+      loads) does NOT fire window.resize, so a ResizeObserver re-docks to the new size.
+      Gated: never mid-drag; never while the element is pressed (its own grip) or hovered
+      (a hovered list card is expanding - re-anchoring there would drift the header; a
+      pointerleave re-fires this to settle it). The first REAL-size fire (a hidden view
+      being shown) does a full "all" recompute so a free axis is derived correctly; after
+      that only size-sensitive hi/center anchors re-dock ("dockOnly"), leaving lo/free put.
+      A transition back to 0x0 (the view hidden) re-arms the "all" recompute for next show. */
+   const onSelfResize = (): void => {
+      if (!stored || dragging) return;
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) {
+         appliedRealSize = false; // hidden again: next real-size fire recomputes fully
+         return;
+      }
+      if (!appliedRealSize) {
+         if (applyStored("all")) appliedRealSize = true;
+         return;
+      }
+      if (el.matches(":hover, :active")) return;
+      const sizeSensitive = (a: Anchor): boolean => a.a === "hi" || a.a === "center";
+      if (!sizeSensitive(stored.x) && !sizeSensitive(stored.y)) return;
+      applyStored("dockOnly");
+   };
+   const ro = new ResizeObserver(onSelfResize);
 
    /* The card is a drag surface, so suppress text selection on it: without this a
       press-and-move can start a text highlight before the drag threshold trips (the
@@ -366,13 +503,17 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
    restore();
    movables.add(el); // visible to other movable views as a snap target
    el.addEventListener("pointerdown", onDown);
+   el.addEventListener("pointerleave", onSelfResize); // settle a hi/center dock the hover gate deferred
    window.addEventListener("resize", onResize);
+   ro.observe(el); // re-dock on element self-scaling (fires once immediately - a no-op if unplaced)
 
    return (): void => {
       movables.delete(el);
       window.clearTimeout(glideTimer);
       hidePreview();
+      ro.disconnect();
       el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointerleave", onSelfResize);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
