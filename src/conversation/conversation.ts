@@ -209,6 +209,15 @@ export function mountConversation(
    let shortTimer = 0;
    let longTimer = 0;
    let raf = 0;
+   /* Composer recall: ArrowUp/ArrowDown cycle THIS conversation's user turns,
+      read from the in-memory messages[] (the client-side source of truth - no
+      DOM scraping, so transcript virtualization can't hide older turns). Loading
+      or switching conversations rebuilds messages[], so recall always matches
+      what is on screen. recallIndex === null means "not navigating" (the composer
+      holds the user's live draft); recallSnapshot is the user-turn list captured
+      at the START of a navigation session and held stable while cycling. */
+   let recallSnapshot: string[] = [];
+   let recallIndex: number | null = null;
    /* Attachment plumbing: object URLs minted for fetched images (revoked on clear /
       loadHistory / destroy so a long session doesn't leak them), plus the one open
       image-lightbox / doc-viewer overlay. */
@@ -810,6 +819,8 @@ export function mountConversation(
       scroll.replaceChildren();
       closeToolGroup(); // the group DOM was just wiped; drop the dangling ref
       messages.length = 0;
+      recallIndex = null; // messages[] just changed out from under any in-flight recall
+      recallSnapshot = [];
       resetCorrelation();
       win.classList.remove("thinking", "receded");
       win.classList.add("empty");
@@ -829,6 +840,8 @@ export function mountConversation(
       scroll.replaceChildren();
       closeToolGroup(); // the group DOM was just wiped; drop the dangling ref
       messages.length = 0;
+      recallIndex = null; // switching conversations must not let recall walk the old snapshot
+      recallSnapshot = [];
       resetCorrelation(); // fresh transcript: drop stale ids + pending adopt entries
       /* A turn can carry text, a run of tool calls, or both (spoke then called tools) - render
          the text first, then its tool pills, preserving transcript order. closeToolGroup() per
@@ -1073,6 +1086,7 @@ export function mountConversation(
       const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
       const imageIds = pendingImages.map((im) => im.id);
       input.value = "";
+      recallIndex = null; // the sent turn re-enters messages[]; next ArrowUp re-snapshots fresh
       autoGrow(); // collapse back to one line
       revokePreviews();
       pendingDocs = [];
@@ -1083,16 +1097,70 @@ export function mountConversation(
       opts.onSubmit?.(sentText, images.length ? { images, imageIds } : undefined);
    };
    const onInput = (): void => {
+      recallIndex = null; // a real edit exits recall; further arrows do caret nav, not recall
       autoGrow(); // fit the typed text (grows the bar up to the CSS cap)
       summon(); // typing counts as activity
    };
+   /* This conversation's user-turn texts, oldest -> newest, for recall. msg.text is
+      already attachment-stripped (see appendMsg), so image-only / document-only turns
+      come through empty and are skipped - matching WebUI's data-raw-text reader. */
+   const userTurnTexts = (): string[] =>
+      messages.filter((m) => m.role === "user" && m.text.trim() !== "").map((m) => m.text);
+
+   /* Place a recalled entry into the composer: fill, resize, caret-to-end. A programmatic
+      .value assignment does NOT fire the 'input' event, so this never trips the nav reset
+      in onInput (only a real keystroke/paste does). */
+   const setRecall = (text: string): void => {
+      input.value = text;
+      autoGrow();
+      input.setSelectionRange(text.length, text.length);
+   };
+
    /* Enter submits; Shift+Enter is a newline (a textarea does not submit a form on Enter, so
       this is explicit). Skip while an IME is composing, and defer to the emoji-`:shortcode:`
-      picker when it has already claimed the key (it preventDefaults on Enter to accept). */
+      picker when it has already claimed the key (it preventDefaults on Enter/arrows to accept
+      or move its selection). ArrowUp/ArrowDown recall this conversation's user turns. */
    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !e.defaultPrevented) {
+      if (e.defaultPrevented || e.isComposing) return; // picker owns the key, or mid-IME
+      if (e.key === "Enter" && !e.shiftKey) {
          e.preventDefault();
          form.requestSubmit();
+         return;
+      }
+      const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+      /* ArrowUp walks OLDER. Navigation begins only from an EMPTY composer (so it never
+         fights caret movement in a live multi-line draft) and snapshots the turns at that
+         moment; from there each ArrowUp steps further back, clamped at the oldest. */
+      if (e.key === "ArrowUp" && plain) {
+         if (recallIndex === null) {
+            if (input.value !== "") return; // non-empty draft: leave ArrowUp to caret movement
+            recallSnapshot = userTurnTexts();
+            if (recallSnapshot.length === 0) return;
+            e.preventDefault();
+            recallIndex = recallSnapshot.length - 1;
+            setRecall(recallSnapshot[recallIndex]);
+         } else if (recallIndex > 0) {
+            e.preventDefault();
+            recallIndex--;
+            setRecall(recallSnapshot[recallIndex]);
+         } else {
+            e.preventDefault(); // already at the oldest - swallow so the caret doesn't jump
+         }
+         return;
+      }
+      /* ArrowDown walks NEWER, and only while navigating; stepping past the newest clears
+         the composer and exits navigation (WebUI parity - lands on blank, not a saved draft). */
+      if (e.key === "ArrowDown" && plain && recallIndex !== null) {
+         e.preventDefault();
+         if (recallIndex < recallSnapshot.length - 1) {
+            recallIndex++;
+            setRecall(recallSnapshot[recallIndex]);
+         } else {
+            recallIndex = null;
+            recallSnapshot = [];
+            input.value = "";
+            autoGrow();
+         }
       }
    };
    const engage = (): void => {
