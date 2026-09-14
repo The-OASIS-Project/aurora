@@ -145,6 +145,51 @@
    pointer-events: none;
 }
 
+/* Pin: locks the window upright (suppresses the idle recede) so it stays put while you work.
+   Sticky like the resize grip so it stays reachable as the transcript scrolls; a negative
+   bottom margin collapses its footprint so it overlays the top-right corner instead of taking
+   a row. Dim at rest, lit in accent (never the amber alert tone) when engaged. */
+.convo-pin {
+   position: sticky;
+   top: 0.4rem;
+   align-self: flex-end;
+   z-index: 4;
+   margin: -2px -6px -24px 0; /* pull to the corner; negative bottom removes it from the flow */
+   width: 24px;
+   height: 24px;
+   padding: 0;
+   border: none;
+   background: none;
+   color: var(--text-faint);
+   cursor: pointer;
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   transition: color 160ms ease;
+}
+.convo-pin svg {
+   width: 15px;
+   height: 15px;
+   display: block;
+}
+.convo-pin:hover {
+   color: var(--accent-glow);
+}
+.convo-pin:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}
+.convo-pin.active {
+   color: var(--accent-glow);
+   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent-glow) 45%, transparent));
+}
+/* Fade the pin out with a normally-receding window (only reachable while unpinned). */
+.convo-window.receded .convo-pin {
+   opacity: 0;
+   pointer-events: none;
+   transition: opacity 900ms ease;
+}
+
 /* A turn: a colored left rail + a role header, then the body. Cooler than a filled
    box — the rail and a glowing role tick carry the identity. */
 .convo-msg {

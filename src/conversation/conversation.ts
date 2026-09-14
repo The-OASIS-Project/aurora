@@ -93,6 +93,7 @@ interface Msg {
 const IDLE_MS = 6000; // pointer off the window + settled -> recede
 const LONG_IDLE_MS = 45000; // no activity at all -> recede even if hovered/focused
 const HEIGHT_KEY = "dawn.hero.convoHeight"; // persisted window height cap, as a viewport fraction
+const PIN_KEY = "dawn.hero.convoPinned"; // persisted "keep upright" lock (suppresses the idle recede)
 const MIN_H_FRAC = 0.2; // clamp the resizable height cap to a sane band of the viewport
 const MAX_H_FRAC = 0.85;
 const HOVER_MARGIN = 64; // px slack around the window that still counts as "over"
@@ -170,6 +171,43 @@ export function mountConversation(
       resizeHandle.addEventListener("pointermove", onMove);
       resizeHandle.addEventListener("pointerup", onUp);
       resizeHandle.addEventListener("pointercancel", onUp); // a cancelled (touch/pen) drag must still clean up
+   });
+
+   /* Pin: lock the window upright so it never leans back while you are actively working.
+      A persistent, user-controlled member of the same suppression set as thinking/speaking
+      (see armIdle). Sticky-positioned (like the resize grip) so it stays reachable at the
+      top-right as the transcript scrolls, rather than scrolling away like an absolute child. */
+   const SVG_NS = "http://www.w3.org/2000/svg";
+   const pinBtn = document.createElement("button");
+   pinBtn.type = "button";
+   pinBtn.className = "convo-pin";
+   pinBtn.setAttribute("aria-label", "Keep conversation up");
+   pinBtn.title = "Keep conversation up";
+   const pinSvg = document.createElementNS(SVG_NS, "svg");
+   pinSvg.setAttribute("viewBox", "0 0 24 24");
+   pinSvg.setAttribute("fill", "currentColor");
+   pinSvg.setAttribute("aria-hidden", "true");
+   const pinPath = document.createElementNS(SVG_NS, "path");
+   pinPath.setAttribute(
+      "d",
+      "M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"
+   );
+   pinSvg.appendChild(pinPath);
+   pinBtn.appendChild(pinSvg);
+   win.insertBefore(pinBtn, resizeHandle);
+
+   let pinned = localStorage.getItem(PIN_KEY) === "1";
+   const reflectPin = (): void => {
+      pinBtn.classList.toggle("active", pinned);
+      pinBtn.setAttribute("aria-pressed", String(pinned));
+   };
+   reflectPin();
+   pinBtn.addEventListener("click", () => {
+      pinned = !pinned;
+      localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
+      reflectPin();
+      if (pinned) summon(); // raise it now and hold
+      else armIdle(); // release: resume the normal idle countdown
    });
 
    const messages: Msg[] = [];
@@ -626,7 +664,7 @@ export function mountConversation(
    };
 
    const recede = (): void => {
-      if (!active || messages.length === 0) return;
+      if (pinned || !active || messages.length === 0) return; // pinned: never lean back
       active = false;
       win.classList.add("receded"); // leans back slowly, dims, edges fade - persists
    };
@@ -637,7 +675,7 @@ export function mountConversation(
    function armIdle(): void {
       window.clearTimeout(shortTimer);
       window.clearTimeout(longTimer);
-      if (thinking || speaking || messages.length === 0) return;
+      if (pinned || thinking || speaking || messages.length === 0) return; // pinned holds it upright
       longTimer = window.setTimeout(recede, LONG_IDLE_MS);
       if (!hovering && !focused) shortTimer = window.setTimeout(recede, IDLE_MS);
    }
