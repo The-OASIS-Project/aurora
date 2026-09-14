@@ -853,6 +853,9 @@
    flex-wrap: wrap;
    gap: 0.4rem;
    padding: 0 0.2rem 0.5rem;
+   /* #console is pointer-events:none and each child re-enables its own; without this the
+      pending chips + their remove [x] buttons inherit `none` and can't be clicked. */
+   pointer-events: auto;
 }
 .composer-pending.shown {
    display: flex;
