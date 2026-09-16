@@ -116,11 +116,20 @@ intended presentation.
 
 | Frame | Payload | Fires when |
 |-------|---------|------------|
-| `scheduler_notification` | `event_id`, `event_type` ∈ alarm \| timer \| reminder \| task, `status` ∈ ringing \| dismissed \| snoozed \| cancelled \| fired, `name`, `message`, `fire_at`, `tts_routed` | A scheduled event fires or changes state. Broadcast to all the user's clients (system events, `user_id 0`, go to everyone). |
+| `scheduler_notification` | `event_id`, `event_type` ∈ alarm \| timer \| reminder \| task \| **briefing**, `status` ∈ ringing \| dismissed \| snoozed \| cancelled \| fired, `name`, `message`, `fire_at`, `tts_routed`, **`conversation_id?`** | A scheduled event fires or changes state. Broadcast to all the user's clients (system events, `user_id 0`, go to everyone). |
 | `scheduler_events_changed` | *(empty)* | The event queue changed. Signal to refetch (Tier B `scheduler_events` request). |
 
 `ringing` is the actionable state (would show dismiss/snooze). `tts_routed` tells
 you DAWN is already speaking the alert, so a silent client should not also chime.
+
+**`conversation_id` (click-to-open key).** A `briefing` event (a morning briefing) creates a
+persistent conversation and carries its **`conversation_id`** here (present whenever the event has
+an associated conversation; absent / 0 for plain alarms/timers, or a briefing whose conversation
+failed to create). Aurora makes such a card tap-to-open -> `load_conversation` (`src/notify/`; the
+own-tap distinguishes from a drag). It rides the missed-notification reconnect replay too, so a
+briefing missed while offline stays clickable. `fire_at` is epoch seconds, present on every
+notification incl. that replay. (Consumed 2026-09-16; documented DAWN-side in
+`WEBSOCKET_PROTOCOL.md` the same day.)
 
 ### 3.4 Background jobs
 
