@@ -882,6 +882,34 @@ live bystander, and reload. Verified against `dawn/src/webui/webui_broadcasts.c`
   later follow-up.
 - **Backend doc:** the `tool_step` frame is now written up in DAWN's `WEBSOCKET_PROTOCOL.md`.
 
+### 9.10 Live conversation-list sync (`conversation_list_changed`) - consumed 2026-09-16
+
+The conversation picker now updates live from any interface (a second tab, voice, messaging, a
+background job/briefing) instead of only on click/reconnect. Verified against
+`dawn/src/webui/webui_broadcasts.c` + `auth_db_conv.c` + `webui_history.c`.
+
+- **Frame (Tier A push, payload-wrapped):** `{type:"conversation_list_changed",
+  payload:{conversation_id:int64, reason:"created"|"bumped"}}`. `created` fires inside
+  `conv_db_create*` (after the autocommit INSERT + unlock, so the row is queryable before the
+  frame lands); `bumped` fires from `conv_db_add_message` per NON-tool row (user + one assistant
+  row per tool-loop iteration -> **>=2 per normal turn**). Fire-and-forget, never replayed.
+- **Consumer (Aurora, `dawn-ws.ts`):** debounce ~700ms trailing, then a page-0
+  `list_conversations` **replace** (there is no per-conversation metadata verb to patch in place).
+  **Self-echo:** ignore `bumped` for the active `this.convId` (covered instead by an own-turn
+  refresh at terminal `stream_end`, coalesced one-per-turn not per tool iteration); `created` is
+  NOT convId-filtered (convId is still 0 when DAWN emits it on a fresh chat) -
+  `new_conversation_response` cancels the debounce to collapse the double-fetch.
+- **Latch safety:** `requestConversations()` is now queue-don't-drop (a refresh queued behind an
+  in-flight list/search request is drained on the response via `settleListRequest()`), fixing a
+  pre-existing race where two page-0 requests could corrupt the list. Reconnect boot list is the
+  loss-recovery path for frames dropped while disconnected.
+- **Picker guards:** a live replace skips re-render during an inline rename or an active search
+  (updating the cache underneath), and preserves scroll position on replace.
+- This is list membership/order only; unread-marking stays on `conversation_messages_appended`
+  (orthogonal). Charter: a read (`list_conversations`), no new write. Coordinated with the
+  daemon-side reconnect+sync hardening (`docs/WEBUI_RECONNECT_SYNC_DESIGN.md`); no daemon change
+  was needed for the Aurora half (the server already emitted the frame).
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and

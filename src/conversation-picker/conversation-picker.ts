@@ -141,6 +141,7 @@ export function mountConversationPicker(
    const unread = new Set<string>(); // String(id) keys (WebUI-consistent)
    let awaitingPage = false; // a load-more request is in flight
    let editingId = 0; // row currently in inline-rename (0 = none)
+   let dirtyList = false; // a render was skipped while collapsed; rebuild once on expand
 
    const isSearching = (): boolean => searchInput.value.trim().length > 0;
    const viewItems = (): ConversationMeta[] => (isSearching() ? searchItems : listItems);
@@ -171,6 +172,12 @@ export function mountConversationPicker(
    const applyOpen = (): void => {
       el.classList.toggle("open", open);
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      /* Rebuild the list we skipped while collapsed BEFORE positioning, so positionPanel()
+         measures the real content height (open-up/down + clamp depend on it). */
+      if (open && dirtyList) {
+         dirtyList = false;
+         render();
+      }
       positionPanel();
       if (open) searchInput.focus();
    };
@@ -264,7 +271,15 @@ export function mountConversationPicker(
    /* Disposers for per-row onActivate listeners, cleared on each full render. */
    let rowDisposers: Array<() => void> = [];
 
-   const render = (opts2: { append?: boolean } = {}): void => {
+   const render = (): void => {
+      /* Collapsed: the list DOM is hidden, so skip the ~50-row replaceChildren rebuild and
+         just mark it dirty; applyOpen() rebuilds once on expand. The picker is collapsed by
+         default, so this drops the per-turn / per-remote-change churn of the live refresh when
+         nothing is on screen. (User-action renders only happen while open, so they never defer.) */
+      if (!open) {
+         dirtyList = true;
+         return;
+      }
       const prevScroll = listEl.scrollTop;
       rowDisposers.forEach((d) => d());
       rowDisposers = [];
@@ -298,8 +313,9 @@ export function mountConversationPicker(
          for (const [label, group] of buckets) listEl.appendChild(buildGroup(label, group));
       }
 
-      /* An append keeps the reading position (new rows are added at the bottom). */
-      if (opts2.append) listEl.scrollTop = prevScroll;
+      /* Keep the reading position: an append adds rows at the bottom, and a replace (now also
+         driven by an unsolicited live refresh) should not jump the user to the top. */
+      listEl.scrollTop = prevScroll;
    };
 
    /* --- mutations (optimistic; ingest refetches only on failure) ---------- */
@@ -462,7 +478,14 @@ export function mountConversationPicker(
             awaitingPage = false;
             total = o.total ?? items.length;
          }
-         render({ append: o.append && !o.searching });
+         /* The arrays are now fresh. Two cases skip the re-render (a live refresh is
+            unsolicited + frequent, unlike the old refetch-on-failure): a rename input is live
+            (replaceChildren would drop the user's keystrokes - commit/cancel renders when it
+            ends), or a non-search refresh landed while the user is searching (keep the search
+            results on screen; clearing the search will render the already-fresh list). */
+         if (editingId !== 0) return;
+         if (!o.searching && isSearching()) return;
+         render();
       },
       setActive: (id) => {
          activeId = id;
@@ -479,8 +502,12 @@ export function mountConversationPicker(
       },
       markAppended: (id) => {
          if (id === activeId) return; // the active view reloads via the ingest, not a badge
-         if (!listItems.some((c) => c.id === id) && !searchItems.some((c) => c.id === id)) return;
+         /* Keep the unread mark even for an id not yet in the list: a messaging-created
+            conversation's appended can arrive before the debounced list refresh adds its row,
+            so retaining it lets the dot show once the row lands. Bounded so a long-lived tab
+            can't grow the set without limit (drop the oldest, insertion-ordered). */
          unread.add(String(id));
+         if (unread.size > 256) unread.delete(unread.values().next().value as string);
          render();
       },
       setTimezone: (zone) => {

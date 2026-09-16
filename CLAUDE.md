@@ -169,9 +169,11 @@ stub-only - kept as the render seam and the extension point for future store-bac
   `set_session_llm_response` echo after a change (native Claude clamps a mid-conversation
   thinking-disable back on, §9.2). Fall back to the config default (`llm.thinking`) only
   for older servers that omit the runtime fields.
-- **Message persistence is split.** With an active conversation the daemon persists the
-  USER turn itself; the client persists only the FINAL ANSWER (on the `state: idle`
-  transition). Saving the user turn too produces duplicate rows.
+- **DAWN is the sole writer of persisted turns (server-authoritative).** The daemon persists
+  BOTH the user turn and the assistant reply itself; the client saves nothing (see
+  `dawn-ws.ts` terminal `stream_end`, which only registers the finalized bubble for
+  message_appended adoption, it does not persist). This corrects the older "the client
+  persists the final answer" model - client-side saving is gone and would duplicate rows.
 - **A background job's answer arrives as `message_appended`,** not a stream. Handle it,
   or the result never appears in the UI.
 - **The bloom pass outputs opaque black** (no alpha), so the ground token is pure black
