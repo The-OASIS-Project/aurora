@@ -120,6 +120,7 @@ function providerLabel(p: LlmProvider): string {
 
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
+const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
 /* Context-panel memory delete: item_id prefix -> the user-scoped delete verb + its id field
    (verified in dawn/src/webui/webui_memory.c + memory_focus_adapters.c). Only these prefixes
    have an id-based delete; relation/document_chunk/calendar_occ and preferences do not. Paired
@@ -714,6 +715,18 @@ export class DawnIngest implements Ingest {
    private alwaysOnRecording = false;
    private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
+   /* "Always on (this browser)" session keepalive: the daemon slides this session's login
+      expiry forward on heartbeat (capped at 30 days) so the ambient dashboard stays connected
+      + signed in for days without a re-login. Consent-gated in the UI (it weakens login expiry).
+      Client-persisted; re-asserted after each authed session frame (a fresh session clears the
+      server-side DB flag) and advertised on the handshake as a diagnostics hint. */
+   private keepaliveOn = localStorage.getItem(KEEPALIVE_KEY) === "1";
+   /* Our belief about the server session's keepalive DB flag, so the session-frame re-assert
+      converges on a real mismatch instead of blindly re-sending (a blind disable-every-connect
+      would spam the daemon's keepalive audit log). Init from the persisted intent: a resumed
+      same-token session carries the flag we last set; a fresh session clears it (handled on the
+      `reconnected:false` path). */
+   private keepaliveServerOn = this.keepaliveOn;
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
       while the tool runs and its results are processed, so the tool_call state alone
@@ -854,7 +867,11 @@ export class DawnIngest implements Ingest {
                has no stream-derived tool render, so this is its only live tool signal; the server
                keeps the origin EXCLUDED by default (so stock www doesn't double-render). Harmless
                on a daemon that predates the flag - it's simply ignored. */
-            tool_step_origin: true
+            tool_step_origin: true,
+            /* "Always on" keepalive intent, re-advertised each (re)connect. Diagnostics-only on
+               the daemon (it does NOT authorize renewal - the DB flag does, set by the
+               session_keepalive_enable we re-send after auth). Ignored by an older daemon. */
+            session_keepalive: this.keepaliveOn
          };
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
@@ -1187,6 +1204,19 @@ export class DawnIngest implements Ingest {
             this.capsSynced = true;
             /* Connection confirmed live: (re)start the liveness heartbeat. */
             this.startHeartbeat();
+            /* Converge the server's "Always on" keepalive flag with the user's intent. A FRESH
+               session (restart / idle-expiry / eviction; reconnected:false) starts with the DB
+               flag CLEARED, so an enable must be re-sent (the handshake hint alone does not
+               authorize renewal - only the auth-gated verb sets the DB flag the ping renewal
+               reads). A same-token reconnect kept the flag. Send a verb ONLY on a real mismatch:
+               this both re-enables after a fresh session AND clears a stale enable when the user
+               turned keepalive OFF while disconnected (the disable would otherwise be lost) -
+               while a user who never touched keepalive emits nothing and doesn't spam the audit log. */
+            if ((p as { reconnected?: boolean }).reconnected === false) this.keepaliveServerOn = false;
+            if (this.keepaliveOn !== this.keepaliveServerOn) {
+               this.send({ type: this.keepaliveOn ? "session_keepalive_enable" : "session_keepalive_disable" });
+               this.keepaliveServerOn = this.keepaliveOn;
+            }
             /* Re-establish continuous listening after a reconnect: DAWN destroyed the
                always-on context on the drop, so re-enable from HERE (never before the
                handshake, or the enable targets the throwaway connection and is lost). */
@@ -3577,6 +3607,25 @@ export class DawnIngest implements Ingest {
    setAlarmSounds(on: boolean): void {
       this.alarmChime.setEnabled(on);
       localStorage.setItem(ALARM_SOUNDS_KEY, on ? "true" : "false");
+   }
+
+   /* "Always on (this browser)" session keepalive (the System-menu toggle). Turning it ON is
+      consent-gated in the UI (it weakens login expiry). Persist the flag and, if the link is
+      reliably live, send the gated verb now and record the server now matches. If the link is
+      NOT live (offline / half-open), skip the send and leave the belief untouched so the
+      session-frame convergence delivers it on the next (re)connect - so a "turn off" can't be
+      silently lost into a dead socket. Gating on isLinkLive (not just capsSynced) covers the
+      half-open case where readyState is OPEN but pings are going unanswered. */
+   isKeepaliveEnabled(): boolean {
+      return this.keepaliveOn;
+   }
+   setKeepalive(on: boolean): void {
+      this.keepaliveOn = on;
+      localStorage.setItem(KEEPALIVE_KEY, on ? "1" : "0");
+      if (this.isLinkLive()) {
+         this.send({ type: on ? "session_keepalive_enable" : "session_keepalive_disable" });
+         this.keepaliveServerOn = on;
+      }
    }
 
    /* Delete one of the user's own memories from the Context panel. Maps the row's item_id

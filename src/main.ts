@@ -290,6 +290,31 @@ const openMicDevice = async (): Promise<void> => {
    });
 };
 
+/* System > "Always on (this browser)" toggle. Turning it OFF applies immediately when the link
+   is live, and otherwise converges on the next reconnect (the ingest re-asserts the desired
+   state on the session frame, so an offline "turn off" is never lost). Turning it ON weakens
+   login-expiry (the browser stays signed in + connected in the background, no password re-prompt,
+   up to 30 days), so gate it behind an explicit, fail-closed consent dialog: only the "Turn on"
+   action enables it - Cancel, Escape, and a backdrop click all leave it off. */
+const toggleKeepalive = (): void => {
+   if (dawn.isKeepaliveEnabled()) {
+      dawn.setKeepalive(false);
+      return;
+   }
+   openDialog({
+      title: 'Turn on "Always on"',
+      sub:
+         "Keep this browser signed in and connected while it stays open. It won't ask for your " +
+         "password again (up to 30 days) and it stays connected in the background. Only turn this " +
+         "on for a device you personally trust and control; anyone with access to it stays signed " +
+         "in as you.",
+      actions: [
+         { label: "Turn on", onClick: () => dawn.setKeepalive(true) },
+         { label: "Cancel", onClick: () => {} }
+      ]
+   });
+};
+
 const menu = mountMenu(stage, {
    onConnection: openConnection,
    onMicDevice: () => void openMicDevice(),
@@ -301,6 +326,11 @@ const menu = mountMenu(stage, {
          label: "Alarm sounds",
          get: () => dawn.alarmSoundsEnabled(),
          toggle: () => dawn.setAlarmSounds(!dawn.alarmSoundsEnabled())
+      },
+      {
+         label: "Always on (this browser)",
+         get: () => dawn.isKeepaliveEnabled(),
+         toggle: toggleKeepalive
       }
    ],
    model: dawn.getModelControl(),
