@@ -54,6 +54,17 @@
    color: var(--text-faint);
 }
 
+/* Readable body prose (a consent explanation): normal case + comfortable line-height, unlike
+   the tracked uppercase .dialog-sub subtitle. Mixed-case sentences, not a stylized label. */
+.dialog-body {
+   margin: 0;
+   font-size: var(--fs-body);
+   line-height: 1.55;
+   letter-spacing: 0.01em;
+   color: var(--text-dim);
+   max-width: 34rem;
+}
+
 .dialog-close {
    position: absolute;
    top: 0.45rem;

@@ -27,6 +27,9 @@ export interface DialogChoice {
 export interface DialogOptions {
    title: string;
    sub?: string;
+   /* A paragraph of readable body prose (e.g. a consent explanation). Distinct from `sub`,
+      which is a short uppercase subtitle - a sentence in `sub` renders as tracked all-caps. */
+   body?: string;
    rows?: DialogRow[];
    /* A radio list; choosing one calls onChoose and closes the dialog. */
    choices?: DialogChoice[];
@@ -77,6 +80,13 @@ export function openDialog(opts: DialogOptions): void {
       sub.className = "dialog-sub";
       sub.textContent = opts.sub;
       card.append(sub);
+   }
+
+   if (opts.body) {
+      const body = document.createElement("p");
+      body.className = "dialog-body";
+      body.textContent = opts.body;
+      card.append(body);
    }
 
    if (opts.rows?.length) {

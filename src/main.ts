@@ -302,8 +302,8 @@ const toggleKeepalive = (): void => {
       return;
    }
    openDialog({
-      title: 'Turn on "Always on"',
-      sub:
+      title: "Always on",
+      body:
          "Keep this browser signed in and connected while it stays open. It won't ask for your " +
          "password again (up to 30 days) and it stays connected in the background. Only turn this " +
          "on for a device you personally trust and control; anyone with access to it stays signed " +
