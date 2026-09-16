@@ -60,6 +60,14 @@
 .notice-card.notice-has-actions {
    width: 19rem;
 }
+/* A click-to-open card (a briefing): signal it's tappable to open its conversation. The title
+   brightens on hover so the affordance reads without adding chrome. */
+.notice-card.notice-openable {
+   cursor: pointer;
+}
+.notice-card.notice-openable:hover .notice-title {
+   color: var(--accent-glow);
+}
 .notice-card .panel-corner {
    border-color: color-mix(in srgb, var(--node-accent) 45%, transparent);
 }

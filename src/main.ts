@@ -157,7 +157,9 @@ const ingest: Ingest = dawn;
 const notifications = new Notifications(
    stage,
    (id) => ingest.dismiss(id),
-   (id, action, value) => ingest.noticeAction(id, action, value)
+   (id, action, value) => ingest.noticeAction(id, action, value),
+   /* Tap a briefing card to open its conversation (same load path the picker uses). */
+   (conversationId) => ingest.loadConversation(conversationId)
 );
 
 /* The music player: a dedicated interactive view (like the conversation console).

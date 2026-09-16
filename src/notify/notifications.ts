@@ -32,6 +32,7 @@ import { cssMovableEdge, makeMovable } from "../render/movable.ts";
 import type { Notice, NotificationsSink } from "../ingest/ingest.ts";
 
 const DEFAULT_HOLD = 6; // seconds a notice holds at peak before it begins to recede
+const TAP_MAX_PX = 4; // click within this of the pointerdown = a tap (open), beyond = a drag (matches makeMovable's THRESHOLD)
 
 /* Depth -> pixels (mirrors the css3d floating field, softened for a placed card: front
    sits at its natural size, receding pushes it back + blurs it). */
@@ -110,6 +111,7 @@ export class Notifications implements NotificationsSink {
    private readonly container: HTMLElement;
    private readonly onDismiss: (id: string) => void;
    private readonly onAction: (id: string, action: string, value?: string) => void;
+   private readonly onOpen: (conversationId: number) => void;
    private engaged = false;
    private engageAmt = 0; // eased 0..1
    private frontHolder: string | null = null;
@@ -124,11 +126,13 @@ export class Notifications implements NotificationsSink {
    constructor(
       container: HTMLElement,
       onDismiss: (id: string) => void,
-      onAction: (id: string, action: string, value?: string) => void = () => {}
+      onAction: (id: string, action: string, value?: string) => void = () => {},
+      onOpen: (conversationId: number) => void = () => {}
    ) {
       this.container = container;
       this.onDismiss = onDismiss;
       this.onAction = onAction;
+      this.onOpen = onOpen;
    }
 
    notify(notice: Notice): void {
@@ -417,6 +421,37 @@ export class Notifications implements NotificationsSink {
       });
       root.addEventListener("pointerenter", () => (card.hovered = true));
       root.addEventListener("pointerleave", () => (card.hovered = false));
+
+      /* Click-to-open: a briefing card (conversationId set) opens its conversation on a TAP of
+         its body. Distinguish a tap from a drag the way makeMovable does - by PEAK movement, not
+         net displacement: once the pointer moves past the threshold during the press it latches a
+         drag (so a "drag out and back" that releases near the grab point still counts as a drag,
+         not a tap). Skip clicks on the controls (they stopPropagation anyway, and are in
+         makeMovable's `ignore` set so they never start a drag). The handler latches at mount on the
+         initial conversationId, which is sound for briefings: a briefing always carries its id at
+         its first (ringing/fired) mount, and its non-ringing path calls remove(), never an update()
+         that would add/drop the id. */
+      if (notice.conversationId) {
+         root.classList.add("notice-openable");
+         let downX = 0;
+         let downY = 0;
+         let moved = false;
+         root.addEventListener("pointerdown", (e) => {
+            downX = e.clientX;
+            downY = e.clientY;
+            moved = false;
+         });
+         root.addEventListener("pointermove", (e) => {
+            if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_MAX_PX) moved = true;
+         });
+         root.addEventListener("click", (e) => {
+            const cid = card.notice.conversationId;
+            if (!cid || moved) return; // no backing conversation, or this press latched a drag
+            const t = e.target as HTMLElement;
+            if (t.closest(".notice-close, .notice-actions, .notice-action, .notice-action-select")) return;
+            this.onOpen(cid);
+         });
+      }
    }
 
    private update(card: Card, notice: Notice): void {

@@ -414,6 +414,10 @@ export interface Notice {
       while relevant and removed via `remove` when not. Still movable/snappable like the
       instruments. `persist`/`hold`/`tone` transient fields are ignored when sticky. */
    sticky?: boolean;
+   /* If set, the card is click-to-open: a tap on its body (not a control, not a drag) opens
+      this conversation. Set for a morning-briefing card (scheduler_notification carries the
+      briefing's conversation_id); absent for notices with no backing conversation. */
+   conversationId?: number;
    x: number;
    y: number;
 }

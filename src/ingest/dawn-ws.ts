@@ -2347,6 +2347,11 @@ export class DawnIngest implements Ingest {
             const eventId = Number(p.event_id ?? 0);
             const missed = p.missed === true;
             const noticeId = `scheduler-${eventId}`;
+            /* A morning briefing (event_type "briefing") creates a persistent conversation and
+               carries its id here, so its card is click-to-open. Other scheduler events (alarms/
+               timers/reminders) omit it -> a non-clickable card. Feature-detected: an older
+               daemon or a briefing whose conversation failed to create won't carry it. */
+            const convId = Number(p.conversation_id ?? 0);
             const wasRinging = this.ringingAlarms.has(eventId);
             if (status === "ringing" || status === "fired") {
                /* A live ringing alarm is `critical` so the notification layer's persist-cap
@@ -2378,6 +2383,7 @@ export class DawnIngest implements Ingest {
                           { id: "dismiss", label: "Dismiss" }
                        ]
                      : undefined,
+                  conversationId: convId > 0 ? convId : undefined,
                   x: 0.62,
                   y: 0.42
                });
@@ -3798,6 +3804,7 @@ export class DawnIngest implements Ingest {
          persist?: boolean;
          critical?: boolean;
          actions?: NoticeAction[];
+         conversationId?: number;
       }
    ): void {
       this.sinks.notifications.notify({
@@ -3810,6 +3817,7 @@ export class DawnIngest implements Ingest {
          critical: opts.critical,
          actions: opts.actions,
          hold: opts.hold,
+         conversationId: opts.conversationId,
          x: opts.x,
          y: opts.y
       });
