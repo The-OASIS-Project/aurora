@@ -794,12 +794,28 @@ body.engaged #docks {
    color: var(--text-faint);
 }
 
+/* The ENTER affordance is a real submit button (a click submits the turn, same as the
+   keyboard Enter). Reset the button chrome so it reads as the same quiet mono hint, then
+   brighten on hover/focus so it announces itself as clickable. */
 .composer-hint {
    flex-shrink: 0;
    font-family: var(--font-mono);
    font-size: var(--fs-label);
    letter-spacing: 0.24em;
    color: var(--text-faint);
+   border: none;
+   background: none;
+   padding: 0;
+   cursor: pointer;
+   transition: color 160ms ease;
+}
+.composer-hint:hover {
+   color: var(--accent);
+}
+.composer-hint:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 3px;
+   color: var(--accent);
 }
 
 /* Emoji `:shortcode:` autocomplete: a frosted, angular dropdown that rises just

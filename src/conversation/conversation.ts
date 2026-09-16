@@ -1038,6 +1038,25 @@ export function mountConversation(
       if (fileInput?.files) onFilesPicked(Array.from(fileInput.files));
       if (fileInput) fileInput.value = ""; // let the same file be picked again after removal
    };
+   /* Paste an image (a screenshot, or a copied image file) straight into the composer: pull the
+      file items off the clipboard and route them through the same filter+upload path as the
+      attach button / drag-drop (vision-gated inside onFilesPicked). Plain-text pastes carry no
+      file items, so we leave those to the textarea's native paste. */
+   const onPaste = (e: ClipboardEvent): void => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+         const it = items[i];
+         if (it.kind === "file") {
+            const f = it.getAsFile();
+            if (f) files.push(f);
+         }
+      }
+      if (files.length === 0) return; // text paste: let the textarea handle it
+      e.preventDefault();
+      onFilesPicked(files);
+   };
 
    /* Drag-and-drop anywhere in the app as a second attach path. The WINDOW is the drop zone
       (the #console is pointer-events:none, so it can't receive drag events) with a depth
@@ -1084,6 +1103,7 @@ export function mountConversation(
       composerRow.parentElement?.insertBefore(pendingRow, composerRow);
       attachBtn.addEventListener("click", onAttachClick);
       fileInput.addEventListener("change", onFileChange);
+      input.addEventListener("paste", onPaste); // paste an image straight into the composer
       dropHint = document.createElement("div");
       dropHint.className = "composer-drop-hint";
       const hintInner = document.createElement("div");
@@ -1287,6 +1307,7 @@ export function mountConversation(
          disposeVisuals();
          attachBtn?.removeEventListener("click", onAttachClick);
          fileInput?.removeEventListener("change", onFileChange);
+         input.removeEventListener("paste", onPaste);
          window.removeEventListener("dragenter", onWinDragEnter);
          window.removeEventListener("dragover", onWinDragOver);
          window.removeEventListener("dragleave", onWinDragLeave);
