@@ -1,0 +1,71 @@
+/*
+ * Ambient standby ("Deep Idle") screensaver. Near-black is reached WITHOUT a scrim: the
+ * reactor canvas dims in-shader (Anchor.setStandby), the ground is already pure black, and
+ * this file fades all the chrome. The `#standby` overlay is transparent - it is the pointer
+ * sink that swallows the wake gesture and (in P1) hosts the drifting clock. `body.standby`
+ * is toggled by src/standby/standby.ts.
+ */
+
+/* Fade every chrome element - inside #stage (instruments, HUD, conversation, menubar, notices)
+   and the body-mounted overlays (dialogs, the reader, the lightbox, watch modal, drag ghost) -
+   but NOT the reactor canvas (#anchor, the living backdrop) or the standby overlay itself. */
+body.standby #stage > :not(#anchor),
+body.standby > :not(#stage):not(#standby):not(script):not(style) {
+   opacity: 0;
+   pointer-events: none;
+   transition: opacity 1.4s ease; /* slow fade into standby (bloom-back on wake is a quick snap) */
+}
+
+/* Notice cards write their opacity inline every frame (their depth model), which beats any
+   normal stylesheet rule - so force them hidden in standby. They reappear on wake when the
+   rule lifts and their inline opacity takes over again. */
+body.standby .notice-card {
+   opacity: 0 !important;
+}
+
+/* The overlay: transparent, above the dialog/reader tier (1000-1100), cursor hidden (a static
+   white cursor is itself an OLED burn-in element). Pointer-events are toggled to `auto` by JS
+   only while asleep, so it absorbs the waking tap; otherwise it never intercepts. */
+#standby {
+   position: fixed;
+   inset: 0;
+   z-index: 1200;
+   pointer-events: none;
+   cursor: none;
+}
+
+/* The drifting standby clock: large, dim, centered, then translated on a slow Lissajous path
+   from JS (the transform is written every frame while asleep). Hidden until standby engages. */
+.standby-clock {
+   position: absolute;
+   left: 0;
+   top: 0;
+   /* Left-justified + top-left anchored; JS positions it via `transform: translate()`. Left-
+      anchoring means ticking digits extend rightward from a fixed edge - no side-to-side wobble
+      as digit widths change (a centered clock re-centers every second and jitters). */
+   text-align: left;
+   white-space: nowrap;
+   opacity: 0;
+   transition: opacity 1.2s ease;
+   color: var(--text-dim);
+   user-select: none;
+}
+body.standby #standby .standby-clock {
+   opacity: 0.4; /* dim: a moving element must not be a bright burn source */
+   /* Promote the compositor layer only while it actually drifts, not 24/7 while awake. */
+   will-change: transform;
+}
+.standby-clock-time {
+   font-family: var(--font-clock);
+   font-size: clamp(2.5rem, 10vw, 7.5rem);
+   letter-spacing: 0.06em;
+   font-variant-numeric: tabular-nums; /* ticking seconds never change width */
+   line-height: 1;
+}
+.standby-clock-date {
+   font-family: var(--font-mono);
+   font-size: clamp(0.9rem, 2.4vw, 1.6rem);
+   letter-spacing: 0.24em;
+   color: var(--text-faint);
+   margin-top: 0.6rem;
+}

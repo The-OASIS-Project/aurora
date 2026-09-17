@@ -226,6 +226,27 @@ export class Anchor {
    private booting = false;
    private bootGain = 0;
 
+   /* Ambient standby dim/slow (the screensaver). `dimCur` multiplies alongside bootGain at
+      the LIGHT sites (a low ember at ~0.1), `motCur` scales the motion clock to a resting
+      heartbeat (~0.25). Both ease toward their targets - slow into standby, fast out (bloom).
+      They default to 1 so the boot ramp and normal running are byte-for-byte unchanged until
+      standby first drives them down. `reactorClock` is an always-on accumulator (dt*motCur)
+      used as the motion time, so slowing/restoring has no phase discontinuity. */
+   private dimTarget = 1;
+   private dimCur = 1;
+   private motTarget = 1;
+   private motCur = 1;
+   private reactorClock = 0;
+   private readonly ember = 0.06; // standby brightness floor (below the bloom threshold)
+   /* Standby burn-in drift: the reactor canvas slowly translates while dimmed so the bright
+      core/ring never sits on fixed pixels (the clock + nebula already move; the reactor is the
+      one static lit element). `canvasDrifted` tracks whether a transform is currently applied so
+      it can be cleared exactly once on wake; hop* is the reduced-motion discrete offset. */
+   private canvasDrifted = false;
+   private hopT = 0;
+   private hopX = 0;
+   private hopY = 0;
+
    /* Ambient background: a dim drifting particle field plus a few large, very
       faint haze clouds behind the reactor, in the same scene so the full-screen
       canvas has no compositing seam. */
@@ -486,7 +507,7 @@ export class Anchor {
       );
       s.maxLife = 1.0 + Math.random() * 1.1;
       s.life = s.maxLife;
-      s.color.copy(color);
+      s.color.copy(color).multiplyScalar(this.dimCur); // dim to an ember in standby, like the bars
    }
 
    /* Advance every spark: drift, slow, and fade (colour scaled by life^2 so an additive
@@ -656,6 +677,13 @@ export class Anchor {
       this.bloom.enabled = on;
    }
 
+   /* Ambient standby: dim the reactor to a low ember and slow it to a resting heartbeat (on),
+      or bloom back to full (off). Only sets targets - frame() eases them. */
+   setStandby(on: boolean): void {
+      this.dimTarget = on ? this.ember : 1;
+      this.motTarget = on ? 0.25 : 1;
+   }
+
    frame(time: number): void {
       const dt = Math.min(Math.max(time - this.lastTime, 0), 0.05);
       this.lastTime = time;
@@ -663,7 +691,47 @@ export class Anchor {
          accumulation and `mt` (frozen at 0) gates every time-based oscillation,
          so nothing animates rather than merely slowing. */
       const motion = this.reducedMotion ? 0 : 1;
-      const mt = this.reducedMotion ? 0 : time;
+      /* Ambient-standby easing: dim/slow toward their targets - slow INTO standby (~0.4/s),
+         fast OUT (~3.5/s) so waking blooms. Under reduced motion, snap (dimming is not motion). */
+      const dimRate = this.dimTarget < this.dimCur ? 0.4 : 3.5;
+      const motRate = this.motTarget < this.motCur ? 0.4 : 3.5;
+      const kdim = this.reducedMotion ? 1 : 1 - Math.exp(-dimRate * dt);
+      const kmot = this.reducedMotion ? 1 : 1 - Math.exp(-motRate * dt);
+      this.dimCur += (this.dimTarget - this.dimCur) * kdim;
+      this.motCur += (this.motTarget - this.motCur) * kmot;
+      /* Motion time: an accumulator scaled by motCur, so slowing to a resting heartbeat and
+         restoring never jumps phase (unlike switching between two absolute clocks). */
+      this.reactorClock += dt * this.motCur;
+      const mt = this.reducedMotion ? 0 : this.reactorClock;
+
+      /* Standby burn-in drift: slowly translate the whole reactor canvas while dimmed, so the
+         bright core/ring never sits on fixed pixels. Scaled by how-asleep it is (eases in with
+         the dim, eases back to center on wake). Reduced motion hops discretely instead of
+         drifting. Compositor-only (a canvas transform); the exposed edge shows the black ground. */
+      const standbyAmt = Math.min(1, Math.max(0, (1 - this.dimCur) / (1 - this.ember)));
+      if (standbyAmt > 0.002) {
+         const amp = 0.05 * Math.min(window.innerWidth, window.innerHeight);
+         let dx: number;
+         let dy: number;
+         if (this.reducedMotion) {
+            this.hopT += dt;
+            if (this.hopT >= 45) {
+               this.hopT = 0;
+               this.hopX = Math.random() * 2 - 1;
+               this.hopY = Math.random() * 2 - 1;
+            }
+            dx = amp * standbyAmt * this.hopX;
+            dy = amp * standbyAmt * this.hopY;
+         } else {
+            dx = amp * standbyAmt * Math.sin(this.reactorClock * 0.19);
+            dy = amp * standbyAmt * Math.sin(this.reactorClock * 0.12 + 1.1);
+         }
+         this.renderer.domElement.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+         this.canvasDrifted = true;
+      } else if (this.canvasDrifted) {
+         this.renderer.domElement.style.transform = "";
+         this.canvasDrifted = false;
+      }
 
       /* Ease current params toward the active state's targets. */
       const tp = STATE_PARAMS[this.state];
@@ -685,6 +753,11 @@ export class Anchor {
       }
       const bootGain = this.reducedMotion ? 1 : easeOutCubic(this.bootT / BOOT_DUR);
       this.bootGain = bootGain;
+      /* Combined light scalar: boot ramp x standby dim. Substituted for bootGain at the LIGHT
+         sites only (gauge/head/glow opacity, spark rate, core intensity, bar colour) - NOT at
+         bootSpin or assembly scale, which are geometry/boot concerns, so standby darkens the
+         reactor to an ember without shrinking or spinning it. */
+      const lightGain = bootGain * this.dimCur;
       const bootSpin = 1 + (1 - bootGain) * 5; // 6x at ignition, settling to 1x
 
       /* Gauge arcs: speed and brightness rise with gauge activity (thinking). The outer
@@ -701,10 +774,10 @@ export class Anchor {
          const speed = r.spin * (0.7 + this.p.gaugeGain * 0.95) * (i === 1 ? surge : 1) * bootSpin;
          r.angle += dt * motion * speed;
          r.mesh.rotation.z = r.angle;
-         r.arcMat.uniforms.uOpacity.value = (0.4 + this.p.gaugeGain * 0.45) * bootGain;
-         r.headMat.uniforms.uOpacity.value = 0.95 * bootGain; // heads ignite with the trails
+         r.arcMat.uniforms.uOpacity.value = (0.4 + this.p.gaugeGain * 0.45) * lightGain;
+         r.headMat.uniforms.uOpacity.value = 0.95 * lightGain; // heads ignite with the trails
          /* Head stays opaque (a solid nucleus); only the halo glow responds to activity. */
-         r.glowMat.opacity = (0.4 + this.p.gaugeGain * 0.35) * bootGain;
+         r.glowMat.opacity = (0.4 + this.p.gaugeGain * 0.35) * lightGain;
       });
 
       /* Shed comet sparks from each head (skipped under reduced motion - they are motion).
@@ -714,7 +787,7 @@ export class Anchor {
          this.rings.forEach((r, i) => {
             r.mesh.updateMatrix(); // refresh the local matrix from the rotation just set
             this.vHead.copy(r.head.position).applyMatrix4(r.mesh.matrix);
-            this.sparkAccum[i] += dt * (14 + this.p.gaugeGain * 22) * bootGain;
+            this.sparkAccum[i] += dt * (14 + this.p.gaugeGain * 22) * lightGain;
             while (this.sparkAccum[i] >= 1) {
                this.sparkAccum[i] -= 1;
                this.spawnSpark(this.vHead, r.glow);
@@ -744,7 +817,7 @@ export class Anchor {
       const pulse = 0.5 + 0.5 * Math.sin(mt * this.p.pulseRate);
       this.core.scale.setScalar((0.92 + 0.08 * breath) * (0.95 + 0.12 * energy));
       this.coreMat.uniforms.uIntensity.value =
-         (this.p.coreBase + this.p.corePulse * pulse + 0.14 * energy) * bootGain;
+         (this.p.coreBase + this.p.corePulse * pulse + 0.14 * energy) * lightGain;
       this.coreColor.copy(this.cAccent).lerp(this.cAlert, this.p.hue);
       this.coreGlow.copy(this.cAccentGlow).lerp(this.cAlert, this.p.hue);
 
@@ -814,6 +887,9 @@ export class Anchor {
          this.scratch.copy(this.cAccentSoft).lerp(this.cAccent, shimmer);
          this.scratch.lerp(this.cAccentGlow, shimmer * shimmer);
          this.scratch.lerp(this.cWarn, Math.pow(shimmer, 4) * 0.75);
+         /* Standby dims the bars by LUMINANCE (colour), not only height (bootGain at :h above):
+            shrinking alone would leave a full-brightness hairline ring, not an ember. */
+         this.scratch.multiplyScalar(this.dimCur);
          this.bars.setColorAt(i, this.scratch);
       }
       this.bars.instanceMatrix.needsUpdate = true;

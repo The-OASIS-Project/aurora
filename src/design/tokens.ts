@@ -113,6 +113,11 @@ export const TYPE: TypeScale = {
    one-line change instead of a grep across every stylesheet. */
 export const FONT_MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
 
+/* The clock face - the HUD clock and the standby screensaver clock. A distinct, cooler
+   display family than the readout mono; swap this one line (+ the @fontsource import in
+   main.ts) to try another. Currently Orbitron (geometric sci-fi). */
+export const FONT_CLOCK = '"Orbitron", var(--font-mono)';
+
 /* The anchor canvas occupies this fraction of the smaller viewport dimension.
    Exported so the renderer can derive its panel keep-out from the SAME number
    rather than a duplicated constant that drifts (the reactor's real footprint). */
@@ -174,4 +179,5 @@ export function applyType(t: TypeScale = TYPE): void {
    root.setProperty("--fs-lead", t.lead);
    root.setProperty("--fs-display", t.display);
    root.setProperty("--font-mono", FONT_MONO);
+   root.setProperty("--font-clock", FONT_CLOCK);
 }

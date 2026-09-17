@@ -713,6 +713,7 @@ export class DawnIngest implements Ingest {
       state:speaking; a client-side ding replaces it. The mic-open override remains as the
       command-capture guarantee, and any concurrent TTS is handled AEC-side, not by muting.) */
    private alwaysOnRecording = false;
+   private voiceWake: (() => void) | null = null; // fired on a wake-word match (standby wake-on-voice)
    private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    /* "Always on (this browser)" session keepalive: the daemon slides this session's login
@@ -2275,6 +2276,7 @@ export class DawnIngest implements Ingest {
                tone: alert ? "attention" : "nominal",
                hold: alert ? 9 : 6,
                persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
+               urgent: alert, // a needs-you alert peeks the standby screensaver; an ambient FYI does not
                /* Spawn centered, in the reactor's full-height dead strip: docked panels are kept
                   in the left/right columns flanking it, so a centered notice avoids them. */
                x: 0,
@@ -2384,6 +2386,9 @@ export class DawnIngest implements Ingest {
                        ]
                      : undefined,
                   conversationId: convId > 0 ? convId : undefined,
+                  /* A live (non-missed) fire wakes the standby screensaver (peek): alarms,
+                     timers, reminders, and briefings. A `missed` reconnect replay does not. */
+                  urgent: !missed,
                   x: 0.62,
                   y: 0.42
                });
@@ -2647,7 +2652,10 @@ export class DawnIngest implements Ingest {
                /* Ready ding: replaces DAWN's dropped spoken greeting. Once per wake (guarded
                   by the transition), and safe to play into the open mic - a pure tone isn't
                   VAD-scored as speech, so it can't re-trigger the echo stall. */
-               if (enteringRecording) this.ding.play();
+               if (enteringRecording) {
+                  this.ding.play();
+                  this.voiceWake?.(); // a wake-word match: wake the standby screensaver
+               }
                /* Re-evaluate the mute on every micro-state transition: unmute entering
                   "recording" (capture the command), and let the speaking/tail logic re-mute
                   for "processing" + the reply. The cooldown means this can't reopen mid-reply
@@ -3605,6 +3613,20 @@ export class DawnIngest implements Ingest {
       this.send({ type: "scheduler_action", payload });
    }
 
+   /* Whether any alarm is currently RINGING - the standby screensaver's "don't sleep while an
+      alarm sounds" guard. Reads the same live set that drives the chime loop, so a
+      server-timed-out / auto-dismissed alarm (whose card lingers) correctly reads as not
+      ringing, unlike the notice's `critical` flag. */
+   isAlarmRinging(): boolean {
+      return this.ringingAlarms.size > 0;
+   }
+
+   /* Register a callback fired at a wake-word match (the always-on VAD entering "recording"),
+      so the ambient-standby screensaver can wake on a real voice match. Read-only observer. */
+   onVoiceWake(cb: () => void): void {
+      this.voiceWake = cb;
+   }
+
    /* "Alarm sounds" preference (the System-menu toggle): gates the client chime + ringing
       loop only (the spoken alarm rides the general TTS mute, no DAWN verb). Persisted. */
    alarmSoundsEnabled(): boolean {
@@ -3803,6 +3825,7 @@ export class DawnIngest implements Ingest {
          detail?: string;
          persist?: boolean;
          critical?: boolean;
+         urgent?: boolean;
          actions?: NoticeAction[];
          conversationId?: number;
       }
@@ -3815,6 +3838,7 @@ export class DawnIngest implements Ingest {
          tone: opts.tone ?? "nominal",
          persist: opts.persist,
          critical: opts.critical,
+         urgent: opts.urgent,
          actions: opts.actions,
          hold: opts.hold,
          conversationId: opts.conversationId,

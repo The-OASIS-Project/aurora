@@ -408,6 +408,11 @@ export interface Notice {
       and self-limiting (a ringing alarm is dismissed or server-times-out), so exempting it
       does not reopen the unbounded-growth the cap guards against. */
    critical?: boolean;
+   /* A live, needs-attention fire that should WAKE the ambient-standby screensaver (peek):
+      a ringing alarm, a live (non-missed) fired timer/reminder/briefing, or a SAGE level=alert.
+      Stamped at the source - NOT inferred from tone/persist - so reconnect/`missed` replays and
+      lingering cards never spuriously light the display. Consumed only by the standby layer. */
+   urgent?: boolean;
    hold?: number;
    /* A persistent status widget (the jobs card), not a transient toast: always full
       presence, never fades or auto-dismisses, and has no close control - it is shown

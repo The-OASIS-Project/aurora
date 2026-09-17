@@ -260,6 +260,7 @@ body.engaged #docks {
    padding-left: 0.6rem;
 }
 .clk-time {
+   font-family: var(--font-clock);
    font-size: var(--fs-display);
    font-weight: 500;
    letter-spacing: 0.08em;

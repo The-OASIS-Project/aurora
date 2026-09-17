@@ -47,6 +47,9 @@ export interface MenuOptions {
    /* System-menu preference toggles (checkbox rows above the dialog actions), e.g. "Alarm
       sounds". Rendered with a divider before the actions; empty/absent shows actions only. */
    systemToggles?: MenuToggle[];
+   /* An optional stepped slider in the System menu (e.g. "Screen saver" timeout), below the
+      toggles. Same control as the Display menu's `displaySlider`. */
+   systemSlider?: MenuSlider;
    /* LLM selection surface (MODEL menu). Optional. */
    model?: ModelControl;
 }
@@ -90,6 +93,7 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
       About dialogs (each active when wired). New Chat now lives in the picker's header. */
    const system = systemMenu(
       () => opts.systemToggles ?? [],
+      () => opts.systemSlider,
       () => [
          { label: "Connection", onClick: opts.onConnection },
          { label: "Microphone", onClick: opts.onMicDevice },
@@ -262,6 +266,7 @@ interface ActionRow {
    dialog rows); refresh reflects the live toggle state each open. */
 function systemMenu(
    getToggles: () => MenuToggle[],
+   getSlider: () => MenuSlider | undefined,
    getActions: () => ActionRow[],
    close: () => void
 ): { el: HTMLElement; refresh: () => void } {
@@ -281,6 +286,8 @@ function systemMenu(
          row.append(cb, span);
          rows.push(row);
       }
+      const slider = getSlider();
+      if (slider) rows.push(sliderRow(slider)); // e.g. "Screen saver", below the toggles
       if (rows.length > 0) {
          const divider = document.createElement("div");
          divider.className = "menu-divider";

@@ -17,6 +17,8 @@
 import "@fontsource/ibm-plex-sans/latin-400.css";
 import "@fontsource/ibm-plex-sans/latin-500.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/orbitron/latin-500.css"; // the clock face (--font-clock)
+import "@fontsource/orbitron/latin-600.css";
 
 import "./styles/main.css";
 import "./styles/panels.css";
@@ -34,6 +36,7 @@ import "./styles/context.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";
 import "./styles/conversations.css";
+import "./styles/standby.css";
 
 import { applyPalette } from "./design/tokens.ts";
 import {
@@ -50,7 +53,15 @@ import { Css3dRenderer } from "./render/css3d.ts";
 import { PanelDrag } from "./render/panel-drag.ts";
 import { Anchor } from "./anchor/anchor.ts";
 import { DawnIngest } from "./ingest/dawn-ws.ts";
-import type { Ingest, MicCaptureState } from "./ingest/ingest.ts";
+import type { Ingest, MicCaptureState, ReactorSink } from "./ingest/ingest.ts";
+import { mountStandby } from "./standby/standby.ts";
+import {
+   STANDBY_STEPS,
+   STANDBY_DEFAULT,
+   getStandbyMin,
+   setStandbyMin,
+   formatStandbyMin
+} from "./standby/standby-timeout.ts";
 import { mountHud } from "./hud/hud.ts";
 import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
@@ -161,6 +172,15 @@ const notifications = new Notifications(
    /* Tap a briefing card to open its conversation (same load path the picker uses). */
    (conversationId) => ingest.loadConversation(conversationId)
 );
+
+/* Ambient standby (screensaver): after the configured inactivity it fades the chrome and
+   dims the reactor to a resting ember; input / a live alert wakes it. Constructed here so the
+   reactor + notification sinks (below) and the mic subscription can be decorated to feed it. */
+const standby = mountStandby({
+   onStandby: (on) => anchor.setStandby(on),
+   isAlarmRinging: () => dawn.isAlarmRinging()
+});
+dawn.onVoiceWake(() => standby.wakeOnVoice()); // a wake-word match wakes the display
 
 /* The music player: a dedicated interactive view (like the conversation console).
    It reflects DAWN's music_state/position and sends transport through the ingest;
@@ -335,6 +355,22 @@ const menu = mountMenu(stage, {
          toggle: toggleKeepalive
       }
    ],
+   /* Screen saver: after this inactivity the display enters ambient standby (Off = disabled).
+      A pure client display preference - persisted locally, no DAWN verb. */
+   systemSlider: {
+      label: "Screen saver",
+      steps: STANDBY_STEPS,
+      get: () => getStandbyMin(),
+      format: (v) => formatStandbyMin(v),
+      onChange: (v) => {
+         setStandbyMin(v);
+         standby.setTimeoutMinutes(v);
+      },
+      reset: () => {
+         setStandbyMin(STANDBY_DEFAULT);
+         standby.setTimeoutMinutes(STANDBY_DEFAULT);
+      }
+   },
    model: dawn.getModelControl(),
    /* Store-backed panels, plus the standalone calendar + music views appended. */
    getPanels: () => [
@@ -462,6 +498,7 @@ const paintMic = (): void => {
 micCtl.onState((s) => {
    micState = s;
    paintMic();
+   standby.onMicState(s); // "recording" (PTT) is a user wake + a don't-sleep guard
 });
 /* One button, two gestures. Capture starts immediately on press (so the first word is
    never clipped) but buffers locally; if the press crosses the hold threshold it is a
@@ -586,13 +623,36 @@ const conversation = mountConversation(stage, {
    }
 });
 
+/* Decorate the reactor sink so standby learns DAWN's activity (busy guard - a non-idle
+   reactor never sleeps; NOT a wake, so an ambient FYI can't light the display). */
+const reactorSink: ReactorSink = {
+   setState: (s) => {
+      standby.onReactorState(s);
+      anchor.setState(s);
+   },
+   setLevels: (b) => anchor.setLevels(b),
+   setStrain: (l) => anchor.setStrain(l),
+   setHesitation: (l) => anchor.setHesitation(l)
+};
+
+/* Decorate the notify sink so an `urgent` notice (ringing alarm / live timer|reminder|briefing
+   / SAGE alert) peeks the standby display; then forward to the notification layer as usual. */
+const rawNotify = notifications.notify.bind(notifications);
+notifications.notify = (notice) => {
+   if (notice.urgent) standby.wakeForAlert();
+   rawNotify(notice);
+};
+
 ingest.start({
    store,
-   reactor: anchor,
+   reactor: reactorSink,
    conversation,
    telemetry: {
       update: (values) => hud.updateTelemetry(values),
-      setTimezone: (tz) => hud.setTimezone(tz)
+      setTimezone: (tz) => {
+         hud.setTimezone(tz);
+         standby.setTimezone(tz); // the standby clock renders in the DAWN user's tz too
+      }
    },
    music: musicPlayer,
    calendar: calendarPanel,
@@ -629,6 +689,7 @@ function frame(now: number): void {
    notifications.tick(dt); // notice importance -> depth recede + contention + engagement
    anchor.frame((now - start) / 1000); // the center light
    musicPlayer.frame(); // spectrum meter + interpolated progress (when playing)
+   standby.tick(dt); // screensaver: evaluate the inactivity timeout + peek return
 
    requestAnimationFrame(frame);
 }
@@ -692,6 +753,7 @@ function dispose(): void {
    contextPanel.destroy();
    conversationPicker.destroy();
    notifications.dispose();
+   standby.destroy(); // remove the global activity listeners + overlay (or HMR stacks them)
    hud.destroy();
    menu.destroy();
    login.destroy();

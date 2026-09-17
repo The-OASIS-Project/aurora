@@ -12,6 +12,7 @@
  */
 
 import { safeTimeZone } from "../util/tz.ts";
+import { formatClockTime, formatClockDate } from "../util/clock-format.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
 
@@ -164,24 +165,8 @@ function startClock(root: HTMLElement, getTz: () => string | undefined): () => v
    const tick = (): void => {
       const now = new Date();
       const tz = getTz();
-      const timeOpts: Intl.DateTimeFormatOptions = {
-         hour12: false,
-         hour: "2-digit",
-         minute: "2-digit",
-         second: "2-digit"
-      };
-      const dateOpts: Intl.DateTimeFormatOptions = {
-         weekday: "short",
-         day: "2-digit",
-         month: "short",
-         year: "numeric"
-      };
-      if (tz) {
-         timeOpts.timeZone = tz;
-         dateOpts.timeZone = tz;
-      }
-      if (timeEl) timeEl.textContent = now.toLocaleTimeString("en-GB", timeOpts);
-      if (dateEl) dateEl.textContent = now.toLocaleDateString("en-US", dateOpts).toUpperCase();
+      if (timeEl) timeEl.textContent = formatClockTime(now, tz);
+      if (dateEl) dateEl.textContent = formatClockDate(now, tz);
    };
    tick();
    const id = window.setInterval(tick, 1000);
