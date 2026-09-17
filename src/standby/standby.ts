@@ -21,6 +21,9 @@ const DRIFT_FRAC = 0.82; // fraction of the max on-screen travel to use
 const HOP_EVERY = 40; // seconds between discrete repositions under reduced motion
 
 export interface StandbyController {
+   /* Whether the display is currently in standby (asleep) - lets the frame loop skip
+      invisible per-frame work (e.g. the music spectrum draw). */
+   isAsleep(): boolean;
    /* Inactivity delay in minutes (0 = Off), from the System-menu picker. */
    setTimeoutMinutes(min: number): void;
    /* The DAWN user's IANA timezone, for the standby clock (the box may be UTC). */
@@ -147,6 +150,7 @@ export function mountStandby(deps: {
    setTimeoutMinutes(getStandbyMin()); // apply the persisted setting on mount
 
    return {
+      isAsleep: () => machine.isAsleep(),
       setTimeoutMinutes,
       setTimezone: (z) => {
          tz = z;

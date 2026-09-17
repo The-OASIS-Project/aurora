@@ -688,7 +688,9 @@ function frame(now: number): void {
    renderer.render(nodes); // coordinates -> pixels
    notifications.tick(dt); // notice importance -> depth recede + contention + engagement
    anchor.frame((now - start) / 1000); // the center light
-   musicPlayer.frame(); // spectrum meter + interpolated progress (when playing)
+   /* Skip the music player's (purely visual) spectrum + progress draw while in standby - the
+      card is faded out and invisible; audio playback is independent. Recomputes on wake. */
+   if (!standby.isAsleep()) musicPlayer.frame();
    standby.tick(dt); // screensaver: evaluate the inactivity timeout + peek return
 
    requestAnimationFrame(frame);
