@@ -22,6 +22,12 @@
    flex-direction: column;
    gap: 0.85rem;
    width: min(22rem, 84vw);
+   /* Never taller than the viewport: a long list (e.g. the "Add a watch" catalog) caps here
+      and its list scrolls inside, instead of the card running off the top and bottom. `auto`
+      (not `hidden`) is the backstop so a non-list dialog that still exceeds the cap on a very
+      short viewport scrolls the card rather than clipping its actions bar out of reach. */
+   max-height: 88vh;
+   overflow: auto;
    padding: 1.7rem 1.6rem 1.5rem;
    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
    border-radius: 2px;
@@ -122,11 +128,27 @@
    box-shadow: 0 0 8px color-mix(in srgb, var(--alert) 60%, transparent);
 }
 
-/* Radio-style choice list (the microphone picker): one selected, the rest pickable. */
+/* Radio-style choice list (the microphone picker, the "Add a watch" catalog): one selected,
+   the rest pickable. It is the card's scroll region - min-height:0 lets it shrink below its
+   content inside the flex column so the capped card scrolls the list, not the whole dialog.
+   The small padding-right keeps the scrollbar off the option text. */
 .dialog-choices {
    display: flex;
    flex-direction: column;
    gap: 0.25rem;
+   min-height: 0;
+   overflow-y: auto;
+   padding-right: 0.3rem;
+   /* Slim phosphor scrollbar, same language as the context/library lists. */
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.dialog-choices::-webkit-scrollbar {
+   width: 8px;
+}
+.dialog-choices::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
 }
 .dialog-choice {
    display: flex;
