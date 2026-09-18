@@ -279,8 +279,10 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       is written only on Save (Cancel leaves nothing behind - no stray default watch). */
    const openAdd = (): void => {
       const choices = catalog.map((c) => {
-         const fam = c.key.split(".")[0];
-         const famLabel = fam === "stat" ? "System" : fam === "suit" ? "Suit" : fam === "component" ? "Components" : fam;
+         const fam = c.key.split(".")[0] || "other";
+         /* Same family label + title-case fallback as the panel body (groupByFamily), so an
+            unknown family (e.g. network.*) reads "Network" here too, not the raw prefix. */
+         const famLabel = FAMILY_LABELS[fam] ?? fam.charAt(0).toUpperCase() + fam.slice(1);
          return { label: `${famLabel} · ${c.label}`, value: c.key };
       });
       if (choices.length === 0) {
