@@ -298,6 +298,9 @@
    margin: 1.2em 0;
 }
 .docview-body.markdown table {
+   width: 100%;
+   /* Content-sized columns, whole words, long tokens still break (see convo.css). */
+   table-layout: auto;
    border-collapse: collapse;
    margin: 0 0 0.85em;
    font-size: var(--fs-data);
@@ -307,6 +310,10 @@
    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
    padding: 0.35rem 0.6rem;
    text-align: left;
+   vertical-align: top;
+   /* Reset any inherited word-break so auto-layout keeps whole words (see convo.css). */
+   overflow-wrap: normal;
+   word-break: normal;
 }
 
 @keyframes docview-in {

@@ -558,6 +558,34 @@
    border-left: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
    color: var(--text-dim);
 }
+/* Markdown tables. `table-layout: auto` on a full-width table sizes columns to their real
+   content - a short label column stays narrow and a long-prose column takes the surplus.
+   `overflow-wrap: normal` keeps words whole: auto then sizes each column to at least its
+   longest WORD, so a label column can't be squeezed narrower than its text and wrap mid-word
+   (Chrome's `break-word` under-sizes the column in a table, which reintroduces the shredding). */
+.convo-body table {
+   width: 100%;
+   table-layout: auto;
+   border-collapse: collapse;
+   margin: 0.5em 0 0.7em;
+   font-size: 0.95em;
+}
+.convo-body th,
+.convo-body td {
+   border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+   padding: 0.35rem 0.55rem;
+   text-align: left;
+   vertical-align: top;
+   /* Reset the inherited word-break: break-word (it behaves like overflow-wrap: anywhere,
+      under-sizing the column and shredding a label word) so auto-layout keeps words whole. */
+   overflow-wrap: normal;
+   word-break: normal;
+}
+.convo-body th {
+   font-weight: 600;
+   color: var(--text);
+   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 
 /* Thinking dot before the first token lands. */
 .convo-window.thinking .convo-scroll::after {
