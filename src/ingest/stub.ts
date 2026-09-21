@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, OutImage, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, StockPosition, StockPortfolio, StockStatus, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -192,6 +192,85 @@ export class StubIngest implements Ingest {
       }, 1000);
    }
 
+   /* --- Stocks portfolio (fake feed so offline dev exercises the panel + every state) ------- */
+   private stocksTimer = 0;
+   private stocksTick = 0;
+   /* cash_equivalent (SWVXX) is a labeled position; settled cash is separate (below), so the
+      rows + cash line reconcile to total_value with no double-count (the P0 disjoint assumption). */
+   private fakeStockPositions: StockPosition[] = [
+      { symbol: "AAPL", assetType: "equity", qty: 120, price: 232.1, value: 27852, unrealizedPl: 8110, unrealizedPlPct: 41.1, dayChange: -312, dayChangePct: -1.11 },
+      { symbol: "NVDA", assetType: "equity", qty: 60, price: 184.2, value: 11052, unrealizedPl: 5230, unrealizedPlPct: 89.8, dayChange: 402, dayChangePct: 3.77 },
+      { symbol: "VTI", assetType: "etf", qty: 200, price: 298.5, value: 59700, unrealizedPl: 9400, unrealizedPlPct: 18.7, dayChange: 118, dayChangePct: 0.2 },
+      { symbol: "AAPL  260116C00250000", assetType: "option", qty: 5, price: 12.4, value: 6200, unrealizedPl: -800, unrealizedPlPct: -11.4, dayChange: 210, dayChangePct: 3.5 },
+      { symbol: "SWVXX", assetType: "cash_equivalent", qty: 20000, price: 1, value: 20000, unrealizedPl: 0, unrealizedPlPct: 0, dayChange: 0, dayChangePct: 0 }
+   ];
+   private readonly FAKE_CASH = 5000;
+
+   private buildFakePortfolio(status: StockStatus, asOf: number, extHours: boolean): StockPortfolio {
+      const positions = this.fakeStockPositions.map((p) => ({ ...p }));
+      const holdings = positions.reduce((s, p) => s + p.value, 0);
+      const totalValue = holdings + this.FAKE_CASH;
+      const totalDayChange = positions.reduce((s, p) => s + p.dayChange, 0);
+      const totalUnrealizedPl = positions.reduce((s, p) => s + p.unrealizedPl, 0);
+      return {
+         status,
+         market: "regular",
+         extHours,
+         snapshot: {
+            asOf,
+            totalValue,
+            totalDayChange,
+            totalDayChangePct: (totalDayChange / Math.max(1, totalValue - totalDayChange)) * 100,
+            totalUnrealizedPl,
+            totalUnrealizedPlPct: (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
+            accounts: [
+               {
+                  label: "Brokerage …4417",
+                  value: totalValue,
+                  cash: this.FAKE_CASH,
+                  dayChange: totalDayChange,
+                  unrealizedPl: totalUnrealizedPl,
+                  unrealizedPlPct: (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
+                  positions
+               }
+            ]
+         }
+      };
+   }
+
+   /* Slow feed: jitter the equity/etf/option values, and cycle ok -> rate_limited (stale
+      last-known) -> token_expired (state-only) every ~6 ticks so every render path is offline
+      exercisable. */
+   stocksPortfolioSubscribe(enabled: boolean, extHours: boolean): void {
+      window.clearInterval(this.stocksTimer);
+      this.stocksTimer = 0;
+      if (!enabled) return;
+      const push = (): void => {
+         this.stocksTick++;
+         for (const pos of this.fakeStockPositions) {
+            if (pos.assetType === "cash_equivalent") continue;
+            const drift = (Math.random() - 0.46) * pos.value * 0.004;
+            pos.value = Math.max(1, pos.value + drift);
+            pos.dayChange += drift;
+            pos.dayChangePct = (pos.dayChange / Math.max(1, pos.value - pos.dayChange)) * 100;
+         }
+         const now = Math.floor(Date.now() / 1000);
+         const phase = Math.floor(this.stocksTick / 6) % 4;
+         if (phase === 3) {
+            this.sinks.stocks.setPortfolio({ status: "token_expired", market: "regular", extHours });
+            return;
+         }
+         const status: StockStatus = phase === 2 ? "rate_limited" : "ok";
+         const asOf = status === "rate_limited" ? now - 200 : now; // stale as-of for the dim state
+         this.sinks.stocks.setPortfolio(this.buildFakePortfolio(status, asOf, extHours));
+      };
+      push(); // immediate snapshot on subscribe, like DAWN
+      this.stocksTimer = window.setInterval(push, 3000);
+   }
+   refreshStocks(extHours: boolean): void {
+      this.sinks.stocks.setPortfolio(this.buildFakePortfolio("ok", Math.floor(Date.now() / 1000), extHours));
+   }
+
    /* --- Conversation picker (fake data so offline dev shows the panel) ------- */
    listConversations(_opts: { limit: number; offset: number }): void {
       const now = Math.floor(Date.now() / 1000);
@@ -300,6 +379,8 @@ export class StubIngest implements Ingest {
       this.timeouts.forEach((t) => window.clearTimeout(t));
       window.clearInterval(this.watchReadingsTimer);
       this.watchReadingsTimer = 0;
+      window.clearInterval(this.stocksTimer);
+      this.stocksTimer = 0;
       this.intervals = [];
       this.timeouts = [];
    }

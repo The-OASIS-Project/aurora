@@ -30,6 +30,7 @@ import "./styles/music.css";
 import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/watches.css";
+import "./styles/stocks.css";
 import "./styles/library.css";
 import "./styles/docview.css";
 import "./styles/context.css";
@@ -71,6 +72,7 @@ import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 import { mountWatchesPanel } from "./watches/watches-panel.ts";
+import { mountStocksPanel } from "./stocks/stocks-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
@@ -177,7 +179,12 @@ const notifications = new Notifications(
    dims the reactor to a resting ember; input / a live alert wakes it. Constructed here so the
    reactor + notification sinks (below) and the mic subscription can be decorated to feed it. */
 const standby = mountStandby({
-   onStandby: (on) => anchor.setStandby(on),
+   onStandby: (on) => {
+      anchor.setStandby(on);
+      /* Standby is "nobody watching": suspend the portfolio push so DAWN stops fetching from
+         Schwab while the screensaver is up (resume gets a fresh snapshot instantly on wake). */
+      stocksPanel.setSuspended(on);
+   },
    isAlarmRinging: () => dawn.isAlarmRinging()
 });
 dawn.onVoiceWake(() => standby.wakeOnVoice()); // a wake-word match wakes the display
@@ -224,6 +231,17 @@ const watchesPanel = mountWatchesPanel(stage, {
    onAdd: (metric, fields) => ingest.addWatch(metric, fields),
    onUpdate: (id, fields) => ingest.updateWatch(id, fields),
    onRemove: (id) => ingest.removeWatch(id),
+   isLive: () => dawn.isLinkLive(),
+   notify: (m) => dawn.notifyUser(m)
+});
+
+/* The Stocks panel: a read-only view of the user's OWN Schwab portfolio, pushed over the WS.
+   The subscription is gated on effective visibility (shown AND not standby/hidden), so DAWN
+   only fetches from Schwab while someone is actually looking. In-charter (own data, no write
+   beyond the sanctioned subscribe/get); Aurora never owns the Schwab OAuth re-auth. */
+const stocksPanel = mountStocksPanel(stage, {
+   onPortfolioSubscribe: (enabled, extHours) => ingest.stocksPortfolioSubscribe(enabled, extHours),
+   onRefresh: (extHours) => ingest.refreshStocks(extHours),
    isLive: () => dawn.isLinkLive(),
    notify: (m) => dawn.notifyUser(m)
 });
@@ -383,6 +401,7 @@ const menu = mountMenu(stage, {
       { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
+      { id: "stocks", label: "Stocks", enabled: stocksPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "context", label: "Context", enabled: contextPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
@@ -394,6 +413,7 @@ const menu = mountMenu(stage, {
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else if (id === "watches") watchesPanel.setVisible(!watchesPanel.isVisible());
+      else if (id === "stocks") stocksPanel.setVisible(!stocksPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
       else if (id === "clock") hud.clock.setVisible(!hud.clock.isVisible());
@@ -654,12 +674,14 @@ ingest.start({
       setTimezone: (tz) => {
          hud.setTimezone(tz);
          standby.setTimezone(tz); // the standby clock renders in the DAWN user's tz too
+         stocksPanel.setTimezone(tz); // the portfolio "as of" stamp too
       }
    },
    music: musicPlayer,
    calendar: calendarPanel,
    ha: haPanel,
    watches: watchesPanel,
+   stocks: stocksPanel,
    library: libraryPanel,
    context: contextPanel,
    notifications,
@@ -753,6 +775,7 @@ function dispose(): void {
    calendarPanel.destroy();
    haPanel.destroy();
    watchesPanel.destroy();
+   stocksPanel.destroy();
    libraryPanel.destroy();
    contextPanel.destroy();
    conversationPicker.destroy();

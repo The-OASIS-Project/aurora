@@ -1,0 +1,267 @@
+/*
+ * Stocks panel. The user's own Schwab portfolio in the same machined/frosted language as the
+ * Watches / HA boards: standalone + grab-to-move, a headline (total + day change) over a
+ * positions list with a pinned cash line. Phosphor tokens only; gain/loss are the two
+ * directional tokens (loss has no glow, never a fill - direction is also carried by a glyph).
+ * Every figure uses tabular-nums so ticking values do not jitter.
+ */
+
+.stocks {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.65rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   cursor: default;
+}
+.stocks.movable-dragging {
+   cursor: grabbing;
+}
+.stocks.stocks-off {
+   display: none;
+}
+.stocks .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Header (the drag handle): title + the ext/eye/refresh controls, vertically centered so the
+   three differently-shaped controls line up on one axis. */
+.stocks-head {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   cursor: grab;
+}
+.stocks.movable-dragging .stocks-head {
+   cursor: grabbing;
+}
+.stocks-title {
+   flex: 1 1 auto;
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+/* Extended-hours pill: dim OFF, lit accent ON (never the alert hue). */
+.stocks-ext {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.1em;
+   padding: 0.05rem 0.3rem;
+   border-radius: 2px;
+   cursor: pointer;
+   color: var(--text-faint);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   transition:
+      color 0.15s ease,
+      border-color 0.15s ease;
+}
+.stocks-ext.on {
+   color: var(--accent);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Eye redact toggle: a quiet stroke glyph (feather eye / eye-off), brighter on hover. */
+.stocks-eye {
+   flex: none;
+   display: inline-flex;
+   align-items: center;
+   padding: 0;
+   border: none;
+   background: none;
+   color: var(--text-faint);
+   cursor: pointer;
+   opacity: 0.7;
+   transition: opacity 0.15s ease;
+}
+.stocks-eye:hover {
+   opacity: 1;
+}
+.stocks-eye svg {
+   display: block;
+   width: 0.95rem;
+   height: 0.95rem;
+}
+
+/* Degraded (transient error) or stale data dims the whole card so it never reads as live. */
+.stocks.stocks-degraded {
+   opacity: 0.62;
+}
+
+/* Headline: total value big, day change beneath, an all-time line under that. */
+.stocks-headline {
+   display: flex;
+   flex-direction: column;
+   gap: 0.15rem;
+}
+.stocks-total {
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.02em;
+   font-variant-numeric: tabular-nums;
+}
+.stocks-day {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+}
+.stocks-alltime {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+}
+
+/* Directional: gain green, loss rose (no glow, no fill), flat dim. */
+.stk-gain {
+   color: var(--gain);
+}
+.stk-loss {
+   color: var(--loss);
+}
+.stk-flat {
+   color: var(--text-dim);
+}
+
+/* Status / market line. */
+.stocks-status {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   text-transform: uppercase;
+}
+.stocks-status-stale {
+   color: var(--loss);
+}
+
+/* Positions list. Each row is two lines: symbol + value, then qty@price + day change. */
+.stocks-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.4rem;
+}
+.stocks-row {
+   display: flex;
+   flex-direction: column;
+   gap: 0.05rem;
+   padding: 0.1rem 0;
+}
+.stocks-row-l1,
+.stocks-row-l2 {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.75rem;
+}
+.stocks-row-main {
+   display: flex;
+   align-items: baseline;
+   gap: 0.45rem;
+   min-width: 0;
+}
+.stocks-sym {
+   color: var(--text);
+   font-size: var(--fs-label);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.stocks-badge {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   color: var(--text-faint);
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   border-radius: 2px;
+   padding: 0 0.25rem;
+   text-transform: uppercase;
+}
+.stocks-val {
+   flex: none;
+   color: var(--text);
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+}
+.stocks-qty {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+   color: var(--text-faint);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.stocks-row-day {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+   text-align: right;
+}
+
+/* Per-account group header (only when more than one account). */
+.stocks-acct {
+   margin-top: 0.3rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.08em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+
+/* Material-move spike: a brief directional wash behind the row, then gone. Only fires on a
+   meaningful move (see the panel), so it reads as a signal, not noise. */
+.stocks-spike-gain {
+   animation: stocks-spike-gain 1.4s ease-out;
+}
+.stocks-spike-loss {
+   animation: stocks-spike-loss 1.4s ease-out;
+}
+@keyframes stocks-spike-gain {
+   from {
+      background: color-mix(in srgb, var(--gain) 26%, transparent);
+   }
+   to {
+      background: transparent;
+   }
+}
+@keyframes stocks-spike-loss {
+   from {
+      background: color-mix(in srgb, var(--loss) 26%, transparent);
+   }
+   to {
+      background: transparent;
+   }
+}
+/* Respect reduced motion: no wash (the JS also skips scheduling a spike, this is the backstop). */
+@media (prefers-reduced-motion: reduce) {
+   .stocks-spike-gain,
+   .stocks-spike-loss {
+      animation: none;
+   }
+}
+
+/* The pinned cash line: a quiet foot row so holdings + cash reconcile to the total. */
+.stocks-cash {
+   margin-top: 0.15rem;
+   border-top: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+   padding-top: 0.35rem;
+}
+.stocks-cash .stocks-sym {
+   color: var(--text-dim);
+   letter-spacing: 0.06em;
+   text-transform: uppercase;
+   font-size: var(--fs-label);
+}

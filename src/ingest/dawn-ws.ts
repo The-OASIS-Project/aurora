@@ -39,6 +39,13 @@ import type {
    MusicTrack,
    NoticeAction,
    OutImage,
+   StockAccount,
+   StockAssetType,
+   StockMarket,
+   StockPortfolio,
+   StockPosition,
+   StockSnapshot,
+   StockStatus,
    ToolCall,
    UploadedDoc,
    UploadedImage,
@@ -508,6 +515,77 @@ function toWatchItem(w: Record<string, unknown>): WatchItem {
    };
 }
 
+/* --- stocks_portfolio_update mapping. Every union is passed through an allowlist BEFORE it can
+   become a class name downstream, and every number is finite-guarded (an absent field on a
+   state-only frame must never coerce to NaN). --- */
+const STOCK_STATUSES = new Set<StockStatus>(["ok", "not_connected", "rate_limited", "token_expired", "error"]);
+const STOCK_MARKETS = new Set<StockMarket>(["regular", "pre", "post", "closed"]);
+const STOCK_ASSET_TYPES = new Set<StockAssetType>(["equity", "etf", "option", "mutual_fund", "cash_equivalent", "other"]);
+
+function asStockStatus(v: unknown): StockStatus {
+   return typeof v === "string" && STOCK_STATUSES.has(v as StockStatus) ? (v as StockStatus) : "error";
+}
+function asStockMarket(v: unknown): StockMarket {
+   return typeof v === "string" && STOCK_MARKETS.has(v as StockMarket) ? (v as StockMarket) : "closed";
+}
+function asStockAssetType(v: unknown): StockAssetType {
+   return typeof v === "string" && STOCK_ASSET_TYPES.has(v as StockAssetType) ? (v as StockAssetType) : "other";
+}
+/* Finite number or 0 - only ever applied to fields inside a real snapshot. */
+function finNum(v: unknown): number {
+   return typeof v === "number" && isFinite(v) ? v : 0;
+}
+
+function toStockPosition(r: Record<string, unknown>): StockPosition {
+   return {
+      symbol: String(r.symbol ?? ""),
+      assetType: asStockAssetType(r.asset_type),
+      qty: finNum(r.qty),
+      price: finNum(r.price),
+      value: finNum(r.value),
+      unrealizedPl: finNum(r.unrealized_pl),
+      unrealizedPlPct: finNum(r.unrealized_pl_pct),
+      dayChange: finNum(r.day_change),
+      dayChangePct: finNum(r.day_change_pct)
+   };
+}
+function toStockAccount(a: Record<string, unknown>): StockAccount {
+   const positions = a.positions;
+   return {
+      label: String(a.label ?? ""),
+      value: finNum(a.value),
+      cash: finNum(a.cash),
+      dayChange: finNum(a.day_change),
+      unrealizedPl: finNum(a.unrealized_pl),
+      unrealizedPlPct: finNum(a.unrealized_pl_pct),
+      positions: Array.isArray(positions) ? positions.map((r) => toStockPosition(r as Record<string, unknown>)) : []
+   };
+}
+/* A state-only frame (token_expired / cold not_connected) carries no as_of + no accounts, so
+   `snapshot` is undefined and the view shows the matching empty state instead of $NaN. A
+   transient error replays the last-known numbers, so those DO build a snapshot (dimmed by the
+   status). */
+function toStockPortfolio(p: Record<string, unknown>): StockPortfolio {
+   const hasSnapshot = typeof p.as_of === "number" && isFinite(p.as_of) && Array.isArray(p.accounts);
+   const snapshot: StockSnapshot | undefined = hasSnapshot
+      ? {
+           asOf: finNum(p.as_of),
+           totalValue: finNum(p.total_value),
+           totalDayChange: finNum(p.total_day_change),
+           totalDayChangePct: finNum(p.total_day_change_pct),
+           totalUnrealizedPl: finNum(p.total_unrealized_pl),
+           totalUnrealizedPlPct: finNum(p.total_unrealized_pl_pct),
+           accounts: (p.accounts as Array<Record<string, unknown>>).map(toStockAccount)
+        }
+      : undefined;
+   return {
+      status: asStockStatus(p.status),
+      market: asStockMarket(p.market),
+      extHours: p.ext_hours === true,
+      snapshot
+   };
+}
+
 /* DAWN's conversation history and transcripts carry raw Anthropic content blocks: a tool
    call is an assistant turn whose `content` is a `[{type:"tool_use",...}]` array (as a JSON
    string), and a tool result is a `user` turn holding `[{type:"tool_result",...}]`. Those
@@ -677,6 +755,8 @@ export class DawnIngest implements Ingest {
    private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
    private watchTimer = 0; // polls watch_list (no push exists); refreshes the rule structure
    private watchReadingsWanted = false; // Watches panel visible -> subscribe to the 1 Hz gauge stream
+   private stocksPortfolioWanted = false; // Stocks panel effectively visible -> subscribe to the portfolio push
+   private stocksExtHours = false; // the panel's Extended-Hours choice, re-sent on reconnect
    /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
       realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
       re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
@@ -978,6 +1058,11 @@ export class DawnIngest implements Ingest {
             subscription is per-connection and lost on reconnect. */
          if (this.watchReadingsWanted) {
             this.send({ type: "watch_readings_subscribe", payload: { enabled: true } });
+         }
+         /* Same for the portfolio push (per-connection, lost on reconnect). Re-subscribing gets
+            an immediate fresh snapshot, so a reconnect / standby-wake has no visible lag. */
+         if (this.stocksPortfolioWanted) {
+            this.send({ type: "stocks_portfolio_subscribe", payload: { ext_hours: this.stocksExtHours } });
          }
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
@@ -2270,6 +2355,17 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "stocks_portfolio_update":
+            /* Portfolio push (immediate on subscribe, then on cadence, or a one-shot get). */
+            this.sinks.stocks.setPortfolio(toStockPortfolio(p));
+            break;
+
+         /* Acks for the subscribe/unsubscribe verbs - the data arrives as its own frame, so
+            these are no-ops. Present so the default arm does not console.debug the payload. */
+         case "stocks_portfolio_subscribe_response":
+         case "stocks_portfolio_unsubscribe_response":
+            break;
+
          case "watch_readings_subscribe_response":
             break; // just an ack; the readings frames are what matter
 
@@ -3187,6 +3283,22 @@ export class DawnIngest implements Ingest {
          return;
       }
       this.send({ type: "watch_remove", payload: { id } });
+   }
+
+   /* Opt into / out of the portfolio push, gated on the panel's effective visibility (mirror of
+      watchReadingsSubscribe). The intent + ext-hours choice are stored so the onopen handler can
+      re-subscribe after a reconnect (the subscription is per-connection). `send` no-ops when the
+      socket is down; the stored intent survives. A re-subscribe with a new extHours is idempotent
+      server-side (it just resets the per-connection flags), so no unsubscribe-first dance. */
+   stocksPortfolioSubscribe(enabled: boolean, extHours: boolean): void {
+      this.stocksPortfolioWanted = enabled;
+      this.stocksExtHours = extHours;
+      if (enabled) this.send({ type: "stocks_portfolio_subscribe", payload: { ext_hours: extHours } });
+      else this.send({ type: "stocks_portfolio_unsubscribe" });
+   }
+   /* One-shot cached snapshot for the manual refresh button. A read; the server TTL-clamps it. */
+   refreshStocks(extHours: boolean): void {
+      this.send({ type: "stocks_portfolio_get", payload: { ext_hours: extHours } });
    }
 
    getMusicAudio(): MusicAudio {

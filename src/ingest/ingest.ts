@@ -373,6 +373,62 @@ export interface WatchesSink {
    setReadings(readings: WatchReading[]): void;
 }
 
+/* --- Stocks portfolio (Schwab-backed, read-only, owner-scoped over the WS) --------------- */
+
+export type StockStatus = "ok" | "not_connected" | "rate_limited" | "token_expired" | "error";
+export type StockMarket = "regular" | "pre" | "post" | "closed";
+export type StockAssetType = "equity" | "etf" | "option" | "mutual_fund" | "cash_equivalent" | "other";
+
+/* One holding. `qty`/`price`/`value` are raw; the view formats. `dayChangePct` /
+   `unrealizedPlPct` are signed (18.82 = +18.82%). `dayChange` can be negative honestly. */
+export interface StockPosition {
+   symbol: string; // full string incl. an OCC option symbol (compacted for display only)
+   assetType: StockAssetType;
+   qty: number;
+   price: number;
+   value: number;
+   unrealizedPl: number;
+   unrealizedPlPct: number;
+   dayChange: number;
+   dayChangePct: number;
+}
+
+export interface StockAccount {
+   label: string; // masked "…1234"
+   value: number;
+   cash: number; // settled cash; rendered as its own line so holdings + cash reconcile to value
+   dayChange: number;
+   unrealizedPl: number;
+   unrealizedPlPct: number;
+   positions: StockPosition[];
+}
+
+/* The numeric body of a portfolio update. Present ONLY when the frame actually carries numbers
+   (status ok, or a transient error replaying the last-known snapshot); absent for a state-only
+   frame (token_expired / a cold not_connected). */
+export interface StockSnapshot {
+   asOf: number; // unix seconds; on a closed market this is the prior session's close
+   totalValue: number;
+   totalDayChange: number;
+   totalDayChangePct: number;
+   totalUnrealizedPl: number;
+   totalUnrealizedPlPct: number;
+   accounts: StockAccount[];
+}
+
+export interface StockPortfolio {
+   status: StockStatus;
+   market: StockMarket;
+   extHours: boolean;
+   snapshot?: StockSnapshot;
+}
+
+export interface StocksSink {
+   /* A portfolio update (immediate on subscribe, then on cadence, or one-shot from get). The
+      view branches on `snapshot` presence for what to draw and on `status` for the badge. */
+   setPortfolio(portfolio: StockPortfolio): void;
+}
+
 /* A transient attention card: a proactive alert, a ringing alarm, a job/observation
    toast. `tone:"attention"` is the warm needs-you channel. `persist` marks a needs-you
    notice that settles to a quiet float instead of auto-dismissing when left unsnapped.
@@ -515,6 +571,7 @@ export interface IngestSinks {
    calendar: CalendarSink;
    ha: HASink;
    watches: WatchesSink;
+   stocks: StocksSink;
    library: LibrarySink;
    context: ContextSink;
    notifications: NotificationsSink;
@@ -616,6 +673,14 @@ export interface Ingest {
    addWatch(metric: string, fields?: WatchFields): void;
    updateWatch(id: number, fields: WatchFields): void;
    removeWatch(id: number): void;
+   /* --- Stocks portfolio (read-only, owner-scoped). Same visibility-gated pattern as the
+      watch-readings stream: subscribe when the panel is EFFECTIVELY visible (shown AND not
+      suspended by standby / a hidden tab), unsubscribe otherwise, re-subscribe on reconnect if
+      still wanted - so DAWN only fetches from Schwab when someone is actually watching. A read;
+      no new write. `extHours` rides the subscribe so the server picks the off-hours cadence. --- */
+   stocksPortfolioSubscribe(enabled: boolean, extHours: boolean): void;
+   /* One-shot cached snapshot (the manual refresh button) - stocks_portfolio_get. */
+   refreshStocks(extHours: boolean): void;
    /* --- Conversation picker (request/response). listConversations paginates; searchConversations
       filters (title, or message content when `content`). loadConversation / newConversation are
       the already-sanctioned reads/opens. rename / delete / setPinned are deliberate, user-initiated

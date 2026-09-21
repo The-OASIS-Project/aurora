@@ -36,6 +36,16 @@ export interface Palette {
    alert: string;
    alertGlow: string;
 
+   /* Directional (finance panel only): gain green / loss rose. These encode
+      INFORMATION (a value went up or down), never ATTENTION - so `loss` is a
+      desaturated rose held clear of the alert red-orange, has NO glow, and is
+      never a PERSISTENT fill (a brief material-move spike wash that decays to
+      transparent is fine - it reads as information, not a standing alarm block).
+      Direction is always ALSO carried by a sign + a triangle glyph, so color is
+      never the sole cue. */
+   gain: string;
+   loss: string;
+
    /* Secondary cool hue for the second gimbal gauge ring so the two are not one
       teal. Still cool, still calm, but distinct. `coolGlow` is its bright/hot end (cool
       lifted toward white), the cool-ring analogue of accentGlow - drives the comet head. */
@@ -70,6 +80,12 @@ export const PALETTE: Palette = {
 
    alert: "#FF5233",
    alertGlow: "#FF8A6B",
+
+   /* gain: a teal-leaning green, distinct from the cyan accent. loss: a rose held
+      ~30deg off the alert red-orange (never confusable with "needs you"), lower
+      luminance, no glow. Both clear the contrast floor on --ground-raise. */
+   gain: "#4FD38A",
+   loss: "#D9607A",
 
    cool: "#2FB4D6",
    coolGlow: "#97D9EA",
@@ -160,6 +176,8 @@ export function applyPalette(p: Palette = PALETTE): void {
    root.setProperty("--warn-glow", p.warnGlow);
    root.setProperty("--alert", p.alert);
    root.setProperty("--alert-glow", p.alertGlow);
+   root.setProperty("--gain", p.gain);
+   root.setProperty("--loss", p.loss);
    root.setProperty("--cool", p.cool);
    root.setProperty("--cool-glow", p.coolGlow);
    root.setProperty("--text", p.text);
