@@ -198,11 +198,11 @@ export class StubIngest implements Ingest {
    /* cash_equivalent (SWVXX) is a labeled position; settled cash is separate (below), so the
       rows + cash line reconcile to total_value with no double-count (the P0 disjoint assumption). */
    private fakeStockPositions: StockPosition[] = [
-      { symbol: "AAPL", assetType: "equity", qty: 120, price: 232.1, value: 27852, unrealizedPl: 8110, unrealizedPlPct: 41.1, dayChange: -312, dayChangePct: -1.11 },
-      { symbol: "NVDA", assetType: "equity", qty: 60, price: 184.2, value: 11052, unrealizedPl: 5230, unrealizedPlPct: 89.8, dayChange: 402, dayChangePct: 3.77 },
-      { symbol: "VTI", assetType: "etf", qty: 200, price: 298.5, value: 59700, unrealizedPl: 9400, unrealizedPlPct: 18.7, dayChange: 118, dayChangePct: 0.2 },
-      { symbol: "AAPL  260116C00250000", assetType: "option", qty: 5, price: 12.4, value: 6200, unrealizedPl: -800, unrealizedPlPct: -11.4, dayChange: 210, dayChangePct: 3.5 },
-      { symbol: "SWVXX", assetType: "cash_equivalent", qty: 20000, price: 1, value: 20000, unrealizedPl: 0, unrealizedPlPct: 0, dayChange: 0, dayChangePct: 0 }
+      { symbol: "AAPL", description: "Apple Inc.", assetType: "equity", qty: 120, price: 232.1, value: 27852, unrealizedPl: 8110, unrealizedPlPct: 41.1, dayChange: -312, dayChangePct: -1.11 },
+      { symbol: "NVDA", description: "NVIDIA Corporation", assetType: "equity", qty: 60, price: 184.2, value: 11052, unrealizedPl: 5230, unrealizedPlPct: 89.8, dayChange: 402, dayChangePct: 3.77 },
+      { symbol: "VTI", description: "Vanguard Total Stock Market ETF", assetType: "etf", qty: 200, price: 298.5, value: 59700, unrealizedPl: 9400, unrealizedPlPct: 18.7, dayChange: 118, dayChangePct: 0.2 },
+      { symbol: "AAPL  260116C00250000", description: "AAPL Jan 16 2026 250 Call", assetType: "option", qty: 5, price: 12.4, value: 6200, unrealizedPl: -800, unrealizedPlPct: -11.4, dayChange: 210, dayChangePct: 3.5 },
+      { symbol: "SWVXX", description: "Schwab Value Advantage Money Fund", assetType: "cash_equivalent", qty: 20000, price: 1, value: 20000, unrealizedPl: 0, unrealizedPlPct: 0, dayChange: 0, dayChangePct: 0 }
    ];
    private readonly FAKE_CASH = 5000;
 

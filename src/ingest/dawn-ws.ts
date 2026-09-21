@@ -536,9 +536,19 @@ function finNum(v: unknown): number {
    return typeof v === "number" && isFinite(v) ? v : 0;
 }
 
+/* Optional instrument name: trimmed, length-capped, undefined when absent/empty (an older
+   daemon omits it -> no tooltip). Untrusted wire text; the view binds it via the DOM `title`
+   property (a plain string set, not an HTML sink). */
+function stockDesc(v: unknown): string | undefined {
+   if (typeof v !== "string") return undefined;
+   const s = v.trim();
+   return s ? s.slice(0, 120) : undefined;
+}
+
 function toStockPosition(r: Record<string, unknown>): StockPosition {
    return {
       symbol: String(r.symbol ?? ""),
+      description: stockDesc(r.description),
       assetType: asStockAssetType(r.asset_type),
       qty: finNum(r.qty),
       price: finNum(r.price),

@@ -135,6 +135,24 @@ function assetBadge(t: StockPosition["assetType"]): string {
    }
 }
 
+/* The full asset-type name, for the badge's hover tooltip (native `title`). */
+function assetLabel(t: StockPosition["assetType"]): string {
+   switch (t) {
+      case "equity":
+         return "Equity";
+      case "etf":
+         return "Exchange-traded fund";
+      case "option":
+         return "Option";
+      case "mutual_fund":
+         return "Mutual fund";
+      case "cash_equivalent":
+         return "Cash equivalent";
+      default:
+         return "Other";
+   }
+}
+
 /* One entry in the frozen render order: an account header, or a position keyed by acct:symbol. */
 type RenderItem = { kind: "header"; acct: number } | { kind: "pos"; key: string };
 
@@ -449,9 +467,11 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       const sym = document.createElement("span");
       sym.className = "stocks-sym";
       sym.textContent = compactSymbol(p.symbol, p.assetType === "option"); // DAWN string -> textContent
+      if (p.description) sym.title = p.description; // hover shows the full instrument name (title = plain string, not an HTML sink)
       const badge = document.createElement("span");
       badge.className = `stocks-badge type-${p.assetType}`;
       badge.textContent = assetBadge(p.assetType);
+      badge.title = assetLabel(p.assetType); // hover expands the abbreviation
       main.append(sym, badge);
       const val = document.createElement("span");
       val.className = "stocks-val";

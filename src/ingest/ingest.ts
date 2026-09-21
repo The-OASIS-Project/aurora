@@ -383,6 +383,9 @@ export type StockAssetType = "equity" | "etf" | "option" | "mutual_fund" | "cash
    `unrealizedPlPct` are signed (18.82 = +18.82%). `dayChange` can be negative honestly. */
 export interface StockPosition {
    symbol: string; // full string incl. an OCC option symbol (compacted for display only)
+   /* Instrument name (Schwab's instrument.description, e.g. "Apple Inc."). Optional +
+      feature-detected: absent on an older daemon that doesn't emit it -> no symbol tooltip. */
+   description?: string;
    assetType: StockAssetType;
    qty: number;
    price: number;
