@@ -1,7 +1,7 @@
 /*
  * Design tokens: the single source of truth for the visual language.
  *
- * Kris asked for tunable colors so a palette pivot is a one-file change. This is
+ * Colors are tunable so a palette pivot is a one-file change. This is
  * that file. Every color the system draws (CSS panels AND the WebGL anchor) is
  * derived from PALETTE here. At startup applyPalette() mirrors these into CSS
  * custom properties on :root, so stylesheets reference var(--accent) and the

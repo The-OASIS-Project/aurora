@@ -552,7 +552,7 @@ export class StubIngest implements Ingest {
 
    private startPanelEvents(): void {
       const emailSubjects = [
-         "Kris — re: OASIS build",
+         "Re: OASIS build",
          "Calendar: invite accepted",
          "Shipment out for delivery",
          "AURA firmware digest"
