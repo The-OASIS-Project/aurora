@@ -65,7 +65,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   show/hide, wired in `hud.ts`), so the only remaining fixed HUD chrome is the frame corners
   and the reticle. **The conversation picker is now movable too** (grab its header bar via
   `makeMovable`; it keeps its top-band position until first dragged). The menubar is the only
-  fixed top-band chrome left. Store-backed ambient
+  fixed top-band chrome left. The Watches board and the read-only **Stocks panel** (`src/stocks/`,
+  the user's own Schwab portfolio) are movable + Panels-menu toggleable in the same way; Stocks is
+  **default-off** (opt-in), since financial data should not auto-appear. Store-backed ambient
   panels dock to the rails through `PanelDrag` instead - but that path is stub-only today
   (see the notification note below).
 - **Colors and feel only from `src/design/tokens.ts`.** Never hardcode a color in a

@@ -919,6 +919,47 @@ background job/briefing) instead of only on click/reconnect. Verified against
   daemon-side reconnect+sync hardening (`docs/WEBUI_RECONNECT_SYNC_DESIGN.md`); no daemon change
   was needed for the Aurora half (the server already emitted the frame).
 
+### 9.11 Stocks portfolio panel (`stocks_portfolio_*`) - consumed 2026-09-21
+
+A read-only view of the user's OWN Schwab portfolio, pushed over the WS. The full wire contract is
+DAWN's `docs/STOCKS_PANEL_DESIGN.md` §6; this is the consumer view. Coordinated with the daemon-side
+build (P0 parser, P1 fetch/cache/refresher/verbs/fan-out).
+
+- **Verbs (Tier C, owner-scoped reads, same auth gate as `doc_library_*`):**
+  `stocks_portfolio_subscribe { ext_hours?: bool }` (server acks + immediately sends the current
+  snapshot, then pushes on cadence), `stocks_portfolio_unsubscribe`, and `stocks_portfolio_get
+  { ext_hours?: bool }` (one-shot cached snapshot for the manual refresh). Same sanctioned class as
+  `watch_readings_subscribe`; `ext_hours` is a per-connection display/cadence preference (benign,
+  like `set_tts_enabled`). No operator/admin/global write; nothing depowers the daemon.
+- **Frame `stocks_portfolio_update.payload`:** `status` (`ok | not_connected | rate_limited |
+  token_expired | error`), `as_of` (unix), `ext_hours`, `market` (`regular | pre | post | closed`),
+  `total_value / total_day_change / total_day_change_pct / total_unrealized_pl /
+  total_unrealized_pl_pct`, and `accounts[]` (`label` masked "…1234", `value`, `cash`, `day_change`,
+  `unrealized_pl(_pct)`, `positions[]`). Each position: `symbol` (full, incl. an OCC option symbol
+  with embedded spaces - `SCHWAB_SYMBOL_MAX=24`), `asset_type` (`equity | etf | option |
+  mutual_fund | cash_equivalent | other`), `qty`, `price`, `value`, `unrealized_pl(_pct)`,
+  `day_change(_pct)`. All `_pct` are signed (`18.82` = +18.82%); numbers raw (the view formats);
+  negatives honest.
+- **State model (consumer):** the numeric body is present ONLY when the frame carries numbers -
+  `ok` and a **transient error** (`rate_limited`/`error`/`not_connected`-with-a-prior) replay the
+  last-known snapshot with its original `as_of` (Aurora dims + shows an "as of HH:MM" stale badge);
+  `token_expired` and a cold `not_connected` are **state-only** (no numbers), rendered as distinct
+  empty states, never `$NaN`. `token_expired` is transient server-side (self-heals ~5 min after the
+  CLI relink `dawn-admin schwab auth`); Aurora only surfaces the state, never performs the OAuth.
+  A daemon without the feature silently drops the verb, so the panel shows "feed not available on
+  this DAWN" after ~an 8-15s timeout.
+- **Cadence + visibility gating:** 30s during regular hours; off-hours only if the user flips the
+  Extended Hours switch (`ext_hours:true` on subscribe -> 5-min). Aurora subscribes only while the
+  panel is EFFECTIVELY visible (shown AND not standby-asleep AND not a hidden tab) and unsubscribes
+  otherwise, re-subscribing on reconnect - so DAWN fetches from Schwab only while someone is
+  actually watching (mirror of the watch-readings gauge). A closed-market `get` returns the last
+  session's close with a prior-session `as_of` (no live pull), so the stale badge applies.
+- **cash_equivalent** renders as an ordinary labeled position with a separate pinned Cash line
+  (`Σ accounts[].cash`) so holdings + cash reconcile to `total_value`. No cash-fold (the account
+  holds no MMF/sweep and cash/positions reconcile exact-disjoint). Charter: reads only, no new
+  write, the user's own data. Consumed in `src/stocks/` + `dawn-ws.ts`; `stocks_portfolio_*`
+  undocumented in `WEBSOCKET_PROTOCOL.md` (same class as the `doc_library_*` / `watch_*` gaps).
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
@@ -956,3 +997,8 @@ per-iteration grouping. Coordinated with the DAWN + stock-www halves; both clien
 **Tool failure status shipped 2026-08-31 (§9.9; `error:true` on the tool_result payload -> a RED pill,
 neutral on success/unknown, no green; server-derived so not attacker-forceable; live-only v1, reload
 neutral, back-compat. Aurora `9a3a2eb`.)*
+**Stocks portfolio panel consumed 2026-09-21 (§9.11; the `stocks_portfolio_subscribe`/`_unsubscribe`/`_get`
+owner-scoped reads + the `stocks_portfolio_update` frame - status/market/as_of + totals + accounts[].positions[];
+snapshot-present-iff-numbers so a state-only frame never renders NaN; visibility-gated subscribe so DAWN fetches
+from Schwab only while watched; cash_equivalent-as-labeled-position + a Cash line, no fold; default-off. Coordinated
+with the DAWN P0/P1 build; wire contract in DAWN's `docs/STOCKS_PANEL_DESIGN.md` §6. Aurora `9f42bb3`.)*
