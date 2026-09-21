@@ -236,7 +236,9 @@ const libraryPanel = mountLibraryPanel(stage, {
    onSearch: (query) => ingest.searchLibrary(query),
    onLoadMore: (offset) => ingest.loadMoreLibrary(offset),
    fetchOriginal: (blobId) => ingest.fetchDocumentOriginal(blobId),
-   getFullText: (id) => ingest.getDocumentText(id)
+   getFullText: (id) => ingest.getDocumentText(id),
+   saveEdit: (item, text) =>
+      item.isNote ? ingest.updateNote(item.id, item.filename, text) : ingest.updateDocText(item.id, text)
 });
 
 /* The Context panel: a standalone movable view showing what DAWN pulled into context for

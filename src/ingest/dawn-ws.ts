@@ -135,6 +135,11 @@ const MEMORY_DELETE_VERBS: Record<string, { type: string; field: string }> = {
 const RATE_EMA_KEY = "dawn.hero.rateEma";
 const RATE_EMA_ALPHA = 0.15; // higher = more responsive to the latest samples
 
+/* Cumulative cache accounting for the CACHE / CACHE AVG HUD rows: cached / input / saved token
+   sums folded from each idle metrics_update frame, so the average is a token-weighted session
+   hit/savings rate. Persisted so it survives a refresh (like the token-rate EMA). */
+const CACHE_SUM_KEY = "dawn.hero.cacheSums";
+
 interface JobRow {
    conversation_id?: number;
    title?: string;
@@ -456,6 +461,30 @@ function formatCtx(current: number, max: number, usagePct?: number): string {
    return `${abbrevTokens(current)}/${abbrevTokens(max)} · ${pct}%`;
 }
 
+/* Round n/d as a percent; "--" when the denominator is missing. */
+function cachePct(n: number, d: number): string {
+   return d > 0 ? `${Math.round((n / d) * 100)}%` : "--";
+}
+
+/* This turn's CACHE row: hit rate (cached / input prompt tokens) and estimated billing
+   savings (saved / input). Savings is a server-side ESTIMATE from provider list prices, so
+   it is marked "~"; a local model has no billing, so it reads "n/a". It can be negative on a
+   cold cache-WRITE turn (the write is an up-front cost that pays back on later reads) - shown
+   honestly. */
+function formatCacheTurn(cached: number, input: number, saved: number, local: boolean): string {
+   if (input <= 0) return "--";
+   const hit = `${cachePct(cached, input)} hit`;
+   return local ? `${hit} · n/a` : `${hit} · ~${cachePct(saved, input)} saved`;
+}
+
+/* The CACHE AVG row: cumulative session hit rate + estimated savings across turns. Savings is
+   always shown (local turns just fold 0 into the sums), so a mixed cloud/local session stays
+   honest. */
+function formatCacheAvg(s: { cached: number; input: number; saved: number }): string {
+   if (s.input <= 0) return "--";
+   return `${cachePct(s.cached, s.input)} hit · ~${cachePct(s.saved, s.input)} saved`;
+}
+
 function toWatchItem(w: Record<string, unknown>): WatchItem {
    return {
       id: Number(w.id ?? 0),
@@ -640,6 +669,11 @@ export class DawnIngest implements Ingest {
       number,
       { resolve: (v: { text: string; filename: string; filetype: string } | null) => void; timer: number }
    >();
+   /* A single in-flight doc/note EDIT save (doc_library_note_update / _doc_update). Only one
+      edit is ever open (single-instance reader + Save disabled while saving), so one slot
+      resolved by whichever *_update_response arrives is enough - and it sidesteps note_update
+      omitting the id on its error branches (id correlation would miss those). */
+   private pendingDocEdit: { resolve: (err: string | null) => void; timer: number } | null = null;
    private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
    private watchTimer = 0; // polls watch_list (no push exists); refreshes the rule structure
    private watchReadingsWanted = false; // Watches panel visible -> subscribe to the 1 Hz gauge stream
@@ -729,6 +763,20 @@ export class DawnIngest implements Ingest {
       `reconnected:false` path). */
    private keepaliveServerOn = this.keepaliveOn;
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
+   /* Cumulative cache token sums for the CACHE AVG row, restored across a refresh. Corrupt or
+      absent storage starts fresh at zero. */
+   private cacheSum = ((): { cached: number; input: number; saved: number } => {
+      try {
+         const v = localStorage.getItem(CACHE_SUM_KEY);
+         if (v) {
+            const o = JSON.parse(v) as Record<string, unknown>;
+            return { cached: Number(o.cached) || 0, input: Number(o.input) || 0, saved: Number(o.saved) || 0 };
+         }
+      } catch {
+         /* ignore corrupt persisted sums */
+      }
+      return { cached: 0, input: 0, saved: 0 };
+   })();
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
       while the tool runs and its results are processed, so the tool_call state alone
       flickers past unseen. We latch "using tools" from the ping until the turn leaves
@@ -2063,6 +2111,27 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "doc_library_note_update_response":
+         case "doc_library_doc_update_response": {
+            /* Resolve the single in-flight edit save. success:false carries the reason (a label
+               collision, the pre-v63 "re-save to enable editing" reject, ...); surface it
+               verbatim. note_update omits the id on its error branches, which is why this uses
+               one pending slot rather than id correlation. */
+            const pending = this.pendingDocEdit;
+            if (pending) {
+               window.clearTimeout(pending.timer);
+               this.pendingDocEdit = null;
+               const err =
+                  p.success === true
+                     ? null
+                     : typeof p.error === "string" && p.error
+                       ? p.error
+                       : "Save failed.";
+               pending.resolve(err);
+            }
+            break;
+         }
+
          case "ha_status_response":
             /* Configured/connected for the board header. Absent fields => false. */
             this.sinks.ha.setStatus({
@@ -2434,6 +2503,33 @@ export class DawnIngest implements Ingest {
                   this.rateEma > 0 ? this.rateEma + RATE_EMA_ALPHA * (rate - this.rateEma) : rate;
                localStorage.setItem(RATE_EMA_KEY, String(this.rateEma));
                this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
+            }
+            /* Cache hit-rate + savings for the CACHE / CACHE AVG rows, sampled off the FINAL/idle
+               frame ONLY: the mid-stream "thinking" frames fire before usage is parsed and carry
+               the PREVIOUS turn's numbers. On the idle frame input_tokens/cached_tokens are
+               always present (a cache-miss turn honestly reports 0); cache_saved_tokens too (may
+               be negative on a cold write turn). Gate on a NUMERIC input_tokens (the denominator):
+               an older daemon omits it, so the rows stay "--" rather than skewing the session
+               sums; the typeof check also rejects a stray null that would fold a 0 denominator. */
+            if (p.state === "idle" && typeof p.input_tokens === "number") {
+               const cached = Math.max(0, Number(p.cached_tokens ?? 0) || 0);
+               const input = Math.max(0, Number(p.input_tokens) || 0);
+               const saved = Number(p.cache_saved_tokens ?? 0) || 0; // may be negative
+               const local = this.llm.mode === "local"; // local models report no billing savings
+               this.cacheSum = {
+                  cached: this.cacheSum.cached + cached,
+                  input: this.cacheSum.input + input,
+                  saved: this.cacheSum.saved + saved
+               };
+               try {
+                  localStorage.setItem(CACHE_SUM_KEY, JSON.stringify(this.cacheSum));
+               } catch {
+                  /* storage full/disabled - the rows still update in-memory */
+               }
+               this.sinks.telemetry.update({
+                  cache: formatCacheTurn(cached, input, saved, local),
+                  cacheavg: formatCacheAvg(this.cacheSum)
+               });
             }
             break;
          }
@@ -2927,6 +3023,41 @@ export class DawnIngest implements Ingest {
          }, 15000);
          this.pendingDocGets.set(id, { resolve, timer });
          this.send({ type: "doc_library_get", payload: { id } });
+      });
+   }
+
+   /* Save an edited note (doc_library_note_update). label is the note's filename. */
+   updateNote(id: number, label: string, text: string): Promise<string | null> {
+      return this.editSave({ type: "doc_library_note_update", payload: { id, label, text } });
+   }
+
+   /* Save an edited document's stored text (doc_library_doc_update; re-chunks + re-embeds). */
+   updateDocText(id: number, text: string): Promise<string | null> {
+      return this.editSave({ type: "doc_library_doc_update", payload: { id, text } });
+   }
+
+   /* Send an edit frame and resolve on the matching *_update_response: null = saved, else a
+      human-readable error string (a label collision, a pre-v63 "re-save to enable editing"
+      reject, ...). Resolves fast when the link is down; a 15s timeout guards a dropped
+      response. One slot - a second save supersedes the first (shouldn't happen: modal-gated). */
+   private editSave(frame: { type: string; payload: Record<string, unknown> }): Promise<string | null> {
+      return new Promise((resolve) => {
+         if (!this.isLinkLive()) {
+            resolve("Not connected to DAWN - edit not saved.");
+            return;
+         }
+         if (this.pendingDocEdit) {
+            window.clearTimeout(this.pendingDocEdit.timer);
+            this.pendingDocEdit.resolve("Superseded by a newer save.");
+         }
+         const timer = window.setTimeout(() => {
+            if (this.pendingDocEdit?.resolve === resolve) {
+               this.pendingDocEdit = null;
+               resolve("Save timed out.");
+            }
+         }, 15000);
+         this.pendingDocEdit = { resolve, timer };
+         this.send(frame);
       });
    }
 
@@ -3737,6 +3868,13 @@ export class DawnIngest implements Ingest {
          pending.resolve(null);
       }
       this.pendingDocGets.clear();
+      /* Same for an in-flight edit save: clear its 15s timer + resolve so it can't pin this
+         instance across an HMR reload. */
+      if (this.pendingDocEdit) {
+         window.clearTimeout(this.pendingDocEdit.timer);
+         this.pendingDocEdit.resolve("Editor closed.");
+         this.pendingDocEdit = null;
+      }
       this.tts?.dispose();
       this.music.dispose();
       this.mic.dispose();

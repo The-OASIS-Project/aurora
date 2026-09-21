@@ -48,6 +48,9 @@ export interface LibraryPanelOptions {
    /* Fetch a document's reassembled full text (doc_library_get) - the readable body of a
       document with no uploaded original. Resolves null when unavailable. */
    getFullText(id: number): Promise<{ text: string; filename: string; filetype: string } | null>;
+   /* Persist an edit of a note or document (the reader's Edit button). Resolves null on
+      success or a human-readable error string. Routed through ingest (the DAWN boundary). */
+   saveEdit(item: LibraryItem, text: string): Promise<string | null>;
 }
 
 export interface LibraryPanelController extends LibrarySink {
@@ -176,11 +179,19 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
    let reader: DocViewerHandle | null = null;
 
    type SetDownload = (dl: DocDownload | null) => void;
+   type SetEditable = (text: string | null) => void;
 
    /* Reassembled full text (doc_library_get): the readable body of a generated document
       with no uploaded original, or the extracted text of one that has. On success, offer a
-      TEXT download when there is no binary original to fetch (a Friday-generated doc). */
-   const tryFullText = (item: LibraryItem, body: HTMLElement, stale: () => boolean, setDownload: SetDownload): void => {
+      TEXT download when there is no binary original to fetch (a Friday-generated doc), and
+      mark the stored text editable (doc_library_doc_update re-saves it). */
+   const tryFullText = (
+      item: LibraryItem,
+      body: HTMLElement,
+      stale: () => boolean,
+      setDownload: SetDownload,
+      setEditable: SetEditable
+   ): void => {
       setDocBodyMessage(body, "Loading…");
       const hasBinary = Boolean(item.hasOriginal && item.originalBlobId);
       const fallback = (): void =>
@@ -194,6 +205,7 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
                /* A binary original (set at open) is the better download; only synthesize a
                   text file when there is none. */
                if (!hasBinary) setDownload(textDownload(ensureExt(item.filename || "document", "md"), res.text));
+               setEditable(res.text); // the stored text is what an edit re-saves
             } else fallback();
          })
          .catch(() => {
@@ -202,13 +214,23 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
          });
    };
 
-   const populateReader = (item: LibraryItem, body: HTMLElement, stale: () => boolean, setDownload: SetDownload): void => {
+   const populateReader = (
+      item: LibraryItem,
+      body: HTMLElement,
+      stale: () => boolean,
+      setDownload: SetDownload,
+      setEditable: SetEditable
+   ): void => {
       if (item.isNote) {
          setDocBodyText(body, item.text ?? "", true);
+         setEditable(item.text ?? ""); // notes edit their body directly (doc_library_note_update)
          return;
       }
       const ft = cleanType(item);
-      /* 1) An uploaded txt/md original renders with exact fidelity. */
+      /* 1) An uploaded txt/md original renders with exact fidelity. NOT editable: the reader
+         shows the original bytes, but doc_update writes the STORED text - editing here would
+         diverge the two (the download would still be the old file). So we leave the original
+         read-only and only edit via the reassembled-stored-text path below. */
       if (TEXT_TYPES.has(ft) && item.hasOriginal && item.originalBlobId) {
          setDocBodyMessage(body, "Loading…");
          opts
@@ -220,12 +242,12 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
             })
             .catch(() => {
                if (stale()) return;
-               tryFullText(item, body, stale, setDownload); // fall back to reassembled text
+               tryFullText(item, body, stale, setDownload, setEditable); // fall back to reassembled text
             });
          return;
       }
       /* 2) Everything else: reassembled full text (generated docs, extracted pdf/docx). */
-      tryFullText(item, body, stale, setDownload);
+      tryFullText(item, body, stale, setDownload, setEditable);
    };
 
    const openReader = (item: LibraryItem): void => {
@@ -247,7 +269,22 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
          title: item.filename || "(untitled)",
          subtitle,
          download,
-         populate: (body, stale, setDownload) => populateReader(item, body, stale, setDownload)
+         /* Editable content (notes + documents with stored text) reveals an Edit button once
+            populate calls setEditable. Save routes through ingest; on success we reflect a
+            note's new body in the cached item so the list + a reopen stay consistent. */
+         edit: {
+            markdown: true,
+            save: (text) =>
+               opts.saveEdit(item, text).then((err) => {
+                  if (!err && item.isNote) {
+                     item.text = text;
+                     render();
+                  }
+                  return err;
+               })
+         },
+         populate: (body, stale, setDownload, setEditable) =>
+            populateReader(item, body, stale, setDownload, setEditable)
       });
    };
 

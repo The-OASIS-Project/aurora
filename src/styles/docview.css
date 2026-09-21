@@ -105,6 +105,11 @@
    background: color-mix(in srgb, var(--accent) 34%, transparent);
    border-radius: 4px;
 }
+/* While editing, the body is a flex column so the textarea fills its height. */
+.docview-body.editing {
+   display: flex;
+   flex-direction: column;
+}
 .docview-msg {
    font-family: var(--font-mono);
    font-size: var(--fs-data);
@@ -144,6 +149,88 @@
 .docview-download:disabled {
    opacity: 0.5;
    cursor: default;
+}
+
+/* Edit / Save / Cancel share the Download button's machined chrome. Save leads in the accent
+   hue; Edit + Cancel are the quieter neutral outline. */
+.docview-edit,
+.docview-save,
+.docview-cancel {
+   display: inline-flex;
+   align-items: center;
+   gap: 0.35rem;
+   padding: 0.4rem 0.85rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.16em;
+   text-transform: uppercase;
+   border-radius: 2px;
+   cursor: pointer;
+   white-space: nowrap;
+}
+.docview-edit,
+.docview-cancel {
+   color: var(--text-dim);
+   background: color-mix(in srgb, var(--text) 6%, transparent);
+   border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+}
+.docview-edit:hover,
+.docview-cancel:hover {
+   color: var(--text);
+   border-color: color-mix(in srgb, var(--text) 36%, transparent);
+}
+.docview-save {
+   color: var(--accent);
+   background: color-mix(in srgb, var(--accent) 12%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.docview-save:hover {
+   border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+}
+.docview-save:disabled,
+.docview-cancel:disabled {
+   opacity: 0.5;
+   cursor: default;
+}
+
+/* The editor: a full-height mono textarea filling the reader body, same slim phosphor
+   scrollbar as the read view. */
+.docview-editor {
+   flex: 1;
+   width: 100%;
+   min-height: 40vh;
+   box-sizing: border-box;
+   resize: none;
+   padding: 0.7rem 0.8rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-data);
+   line-height: 1.55;
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground) 55%, transparent);
+   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+   border-radius: 3px;
+   outline: none;
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.docview-editor:focus {
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.docview-editor::-webkit-scrollbar {
+   width: 8px;
+}
+.docview-editor::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
+}
+
+/* Inline save-error line above the editor (a label collision, a pre-v63 reject, ...). */
+.docview-edit-error {
+   margin-bottom: 0.5rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--alert);
 }
 
 /* Rendered markdown (notes + md documents). Compact, on-theme. */

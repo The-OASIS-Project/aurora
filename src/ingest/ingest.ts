@@ -628,10 +628,11 @@ export interface Ingest {
    renameConversation(id: number, title: string): void;
    deleteConversation(id: number): void;
    setPinned(id: number, pinned: boolean): void;
-   /* --- Library (document + notes viewer). All reads: doc_library_list (list/search/
-      paginate) plus an original-file fetch. No write verbs are wired (read-mostly). ---
-      refreshLibrary re-lists the first page; searchLibrary runs the BM25 label/body search;
-      loadMoreLibrary pages the plain list (server offset = current loaded count). */
+   /* --- Library (document + notes viewer). Reads: doc_library_list (list/search/paginate)
+      plus an original-file fetch and the full-text get; the two edit writes are below
+      (updateNote / updateDocText). --- refreshLibrary re-lists the first page; searchLibrary
+      runs the BM25 label/body search; loadMoreLibrary pages the plain list (server offset =
+      current loaded count). */
    refreshLibrary(): void;
    searchLibrary(query: string, opts?: { limit?: number; offset?: number }): void;
    loadMoreLibrary(offset: number): void;
@@ -650,6 +651,17 @@ export interface Ingest {
       extracted text of one that has. Resolves with the text + metadata, or null when
       unavailable (owner-scoped, requires stored full text). A read, over the WS. */
    getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null>;
+   /* --- Library WRITE verbs (the reader's Edit button). User-scoped writes on the user's OWN
+      content (in-charter, same class as memory deletes); non-destructive - DAWN archives the
+      prior version server-side, so an edit is undoable. Each resolves null on success or a
+      human-readable error string (surfaced inline in the reader); never rejects for an
+      expected failure. --- */
+   /* Save an edited NOTE (doc_library_note_update). `label` is the note's filename - DAWN keys
+      notes by label and rejects a rename that collides with another note. */
+   updateNote(id: number, label: string, text: string): Promise<string | null>;
+   /* Save an edited DOCUMENT's stored text (doc_library_doc_update; re-chunks + re-embeds). A
+      pre-v63 doc with no stored full text is rejected server-side with that error string. */
+   updateDocText(id: number, text: string): Promise<string | null>;
    /* Stop the live session (disconnect); in-session, audio contexts are kept for reuse. */
    stop(): void;
    /* Final teardown (HMR/unmount): stop AND release the audio graphs. Distinct from stop()

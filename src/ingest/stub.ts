@@ -278,6 +278,16 @@ export class StubIngest implements Ingest {
       };
    }
 
+   async updateNote(id: number, _label: string, text: string): Promise<string | null> {
+      const item = this.libraryItems.find((i) => i.id === id);
+      if (item) item.text = text; // reflect the edit offline so the reader/list stay consistent
+      return null;
+   }
+
+   async updateDocText(_id: number, _text: string): Promise<string | null> {
+      return null; // stub: no persistence, report success so the dev editor flow works
+   }
+
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */
    setEngaged(engaged: boolean): void {
       this.engaged = engaged;
