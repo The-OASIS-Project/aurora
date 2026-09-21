@@ -790,6 +790,17 @@ body.engaged #docks {
    line-height: 1.45;
    max-height: calc(1.45em * 4);
    overflow-y: auto;
+   /* Slim phosphor scrollbar, same language as the conversation/context/library lists, for
+      when the input grows past its 4-line cap. */
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.composer-input::-webkit-scrollbar {
+   width: 8px;
+}
+.composer-input::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
 }
 .composer-input::placeholder {
    color: var(--text-faint);
