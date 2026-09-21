@@ -13,3 +13,6 @@ dist/
 # run.sh background dev-server artifacts
 .run.pid
 .run.log
+
+# Local-only pre-commit extension (holds real names; never pushed)
+*.local.hook
