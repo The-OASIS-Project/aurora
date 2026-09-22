@@ -5,7 +5,7 @@
  * staleness rule stay panel-local - they are not shared concerns.
  */
 
-import type { StockAssetType } from "../ingest/ingest.ts";
+import type { StockAssetType, StockMarket } from "../ingest/ingest.ts";
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const usdSigned = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", signDisplay: "exceptZero" });
@@ -37,6 +37,12 @@ export function compactSymbol(sym: string, isOption: boolean): string {
    const [, root, yy, mm, dd, cp, strike8] = m;
    const strike = (parseInt(strike8, 10) / 1000).toString();
    return `${root} ${parseInt(mm, 10)}/${parseInt(dd, 10)}/${yy} ${cp}${strike}`;
+}
+
+/* Session label for the ext-hours overlay: pre-market -> "PRE", post-market -> "AH" (after-hours).
+   The overlay only appears in an ext window, so "EXT" is just a defensive fallback. */
+export function extSessionLabel(market: StockMarket): string {
+   return market === "pre" ? "PRE" : market === "post" ? "AH" : "EXT";
 }
 
 /* Short asset-type badge next to the symbol. */

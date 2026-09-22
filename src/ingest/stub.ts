@@ -215,19 +215,37 @@ export class StubIngest implements Ingest {
       // A stored-but-unquotable ticker (bad symbol), to exercise the dimmed "no quote" row.
       { symbol: "ZVXX", assetType: "other", price: 0, dayChange: 0, dayChangePct: 0, quotable: false }
    ];
+   private watchExtHours = false; // last Extended-Hours choice from the watch subscribe/get
    private buildFakeWatchlist(status: StockStatus, asOf: number): StockWatchlist {
-      return { status, market: "regular", asOf, symbols: this.fakeWatchSymbols.map((s) => ({ ...s })) };
+      const symbols = this.fakeWatchSymbols.map((s) => {
+         const row = { ...s };
+         if (this.watchExtHours && s.quotable !== false && s.price > 0) {
+            const change = +(s.price * (s.dayChange >= 0 ? 0.0021 : -0.0014)).toFixed(2);
+            row.ext = { price: +(s.price + change).toFixed(2), change, changePct: +((change / s.price) * 100).toFixed(2) };
+         }
+         return row;
+      });
+      return { status, market: this.watchExtHours ? "post" : "regular", asOf, symbols };
    }
 
    private buildFakePortfolio(status: StockStatus, asOf: number, extHours: boolean): StockPortfolio {
-      const positions = this.fakeStockPositions.map((p) => ({ ...p }));
+      // With Extended Hours on, pretend it's post-market and overlay a small per-share ext move on
+      // the equities (cash gets none), so the ext-hours render is exercisable offline.
+      const positions = this.fakeStockPositions.map((p) => {
+         const row = { ...p };
+         if (extHours && p.assetType !== "cash_equivalent") {
+            const change = +(p.price * (p.dayChange >= 0 ? 0.0018 : -0.0012)).toFixed(2);
+            row.ext = { price: +(p.price + change).toFixed(2), change, changePct: +((change / p.price) * 100).toFixed(2) };
+         }
+         return row;
+      });
       const holdings = positions.reduce((s, p) => s + p.value, 0);
       const totalValue = holdings + this.FAKE_CASH;
       const totalDayChange = positions.reduce((s, p) => s + p.dayChange, 0);
       const totalUnrealizedPl = positions.reduce((s, p) => s + p.unrealizedPl, 0);
       return {
          status,
-         market: "regular",
+         market: extHours ? "post" : "regular",
          extHours,
          // Fake Schwab-link expiry ~50h out, so the neutral "expires in 2 days" note shows.
          // Drop the offset under 24h to exercise the amber "reconnect soon" state.
@@ -288,7 +306,8 @@ export class StubIngest implements Ingest {
    }
 
    /* Watchlist feed: jitter the quotes, push on cadence. Independent of the portfolio feed. */
-   stocksWatchSubscribe(enabled: boolean, _extHours: boolean): void {
+   stocksWatchSubscribe(enabled: boolean, extHours: boolean): void {
+      this.watchExtHours = extHours;
       window.clearInterval(this.watchTimer);
       this.watchTimer = 0;
       if (!enabled) return;
@@ -305,7 +324,8 @@ export class StubIngest implements Ingest {
       push(); // immediate snapshot on subscribe, like DAWN
       this.watchTimer = window.setInterval(push, 3000);
    }
-   refreshWatchlist(_extHours: boolean): void {
+   refreshWatchlist(extHours: boolean): void {
+      this.watchExtHours = extHours;
       this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
    }
    /* A small allowlist of "real" tickers; anything else an offline add treats as nonexistent and

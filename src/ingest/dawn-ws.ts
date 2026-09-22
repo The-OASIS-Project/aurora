@@ -41,6 +41,7 @@ import type {
    OutImage,
    StockAccount,
    StockAssetType,
+   StockExt,
    StockMarket,
    StockPortfolio,
    StockPosition,
@@ -538,6 +539,15 @@ function finNum(v: unknown): number {
    return typeof v === "number" && isFinite(v) ? v : 0;
 }
 
+/* The optional ext-hours overlay: present only when the row carries a real extended price. A finite
+   `price` gates it (change/change_pct default to 0); absent/malformed -> undefined (render as today). */
+function toStockExt(v: unknown): StockExt | undefined {
+   if (!v || typeof v !== "object") return undefined;
+   const o = v as Record<string, unknown>;
+   if (typeof o.price !== "number" || !isFinite(o.price)) return undefined;
+   return { price: o.price, change: finNum(o.change), changePct: finNum(o.change_pct) };
+}
+
 /* Optional instrument name: trimmed, length-capped, undefined when absent/empty (an older
    daemon omits it -> no tooltip). Untrusted wire text; the view binds it via the DOM `title`
    property (a plain string set, not an HTML sink). */
@@ -558,7 +568,8 @@ function toStockPosition(r: Record<string, unknown>): StockPosition {
       unrealizedPl: finNum(r.unrealized_pl),
       unrealizedPlPct: finNum(r.unrealized_pl_pct),
       dayChange: finNum(r.day_change),
-      dayChangePct: finNum(r.day_change_pct)
+      dayChangePct: finNum(r.day_change_pct),
+      ext: toStockExt(r.ext)
    };
 }
 function toStockAccount(a: Record<string, unknown>): StockAccount {
@@ -615,6 +626,7 @@ function toStockWatchSymbol(r: Record<string, unknown>): StockWatchSymbol {
       price: finNum(r.price),
       dayChange: finNum(r.day_change),
       dayChangePct: finNum(r.day_change_pct),
+      ext: toStockExt(r.ext),
       quotable: typeof r.quotable === "boolean" ? r.quotable : undefined
    };
 }

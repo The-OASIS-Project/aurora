@@ -31,7 +31,7 @@ import { addCorners } from "../render/corners.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
-import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
+import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, extSessionLabel, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
 
 export interface StocksPanelOptions {
    /* Subscribe (true) / unsubscribe (false) the portfolio push, with the current ext-hours
@@ -459,7 +459,20 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       day.textContent = `${dirGlyph(p.dayChangePct)} ${moneySigned(p.dayChange)} (${pct(p.dayChangePct)})`;
       l2.append(qty, day);
 
-      row.append(l1, l2);
+      // Extended-hours overlay: the ext delta is PER-SHARE, so derive the POSITION-total dollar
+      // (change * qty) to match the position-total day change above. Redact-aware.
+      if (p.ext) {
+         const extEl = document.createElement("div");
+         const posChange = p.ext.change * p.qty; // per-share ext delta -> position dollar
+         // Sign glyph/tint/pct off the POSITION, not the per-share pct: for a short (qty < 0) a rising
+         // quote is a loss, so the arrow/color must match the (negative) position dollar.
+         const posPct = p.ext.changePct * Math.sign(p.qty || 1);
+         extEl.className = `stocks-row-ext ${dirClass(posPct)}`;
+         extEl.textContent = `${extSessionLabel(portfolio?.market ?? "closed")} ${dirGlyph(posPct)} ${moneySigned(posChange)} (${pct(posPct)})`;
+         row.append(l1, l2, extEl);
+      } else {
+         row.append(l1, l2);
+      }
       return row;
    };
 

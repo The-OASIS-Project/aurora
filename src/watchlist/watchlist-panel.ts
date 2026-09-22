@@ -26,7 +26,7 @@ import { addCorners } from "../render/corners.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
-import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
+import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, extSessionLabel, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
 
 export interface WatchlistPanelOptions {
    /* Subscribe (true) / unsubscribe (false) the watch push, with the current ext-hours choice.
@@ -281,7 +281,16 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
          opts.onWatchSet([], [s.symbol]); // trivially reversible (re-add) -> no confirm gate
       });
 
-      row.append(l1, l2, remove);
+      // Extended-hours overlay: not held, so the per-share ext quote renders as-is (price + change).
+      // Only quotable rows carry ext (an unquotable row has no quote at all) - guarded defensively.
+      if (s.ext && !unquotable) {
+         const extEl = document.createElement("div");
+         extEl.className = `watchlist-ext ${dirClass(s.ext.changePct)}`;
+         extEl.textContent = `${extSessionLabel(watchlist?.market ?? "closed")} ${fmtUsd(s.ext.price)} ${dirGlyph(s.ext.changePct)} ${fmtSignedUsd(s.ext.change)} (${fmtPct(s.ext.changePct)})`;
+         row.append(l1, l2, extEl, remove);
+      } else {
+         row.append(l1, l2, remove);
+      }
       return row;
    };
 

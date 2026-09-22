@@ -381,6 +381,17 @@ export type StockAssetType = "equity" | "etf" | "option" | "mutual_fund" | "cash
 
 /* One holding. `qty`/`price`/`value` are raw; the view formats. `dayChangePct` /
    `unrealizedPlPct` are signed (18.82 = +18.82%). `dayChange` can be negative honestly. */
+/* Extended-hours (pre/post-market) quote overlay for one row. PER-SHARE on the wire (aligned with
+   `price`): `change` = ext last - regular-session close, `changePct` signed. Present only in an ext
+   window with ext-hours on AND the row actually traded extended; omitted otherwise. Optional +
+   feature-detected. On the portfolio panel derive a position-level dollar via `change * qty` (its
+   sibling day-change is a position total); on the watchlist it is used per-share as-is. */
+export interface StockExt {
+   price: number;
+   change: number;
+   changePct: number;
+}
+
 export interface StockPosition {
    symbol: string; // full string incl. an OCC option symbol (compacted for display only)
    /* Instrument name (Schwab's instrument.description, e.g. "Apple Inc."). Optional +
@@ -394,6 +405,7 @@ export interface StockPosition {
    unrealizedPlPct: number;
    dayChange: number;
    dayChangePct: number;
+   ext?: StockExt; // pre/post-market overlay (per-share); render position-level via change * qty
 }
 
 export interface StockAccount {
@@ -449,6 +461,7 @@ export interface StockWatchSymbol {
    price: number;
    dayChange: number;
    dayChangePct: number;
+   ext?: StockExt; // pre/post-market overlay (per-share; not held, so used as-is)
    /* false = stored on the watchlist but Schwab returned no quote (a well-formed typo that isn't a
       real ticker; requested-minus-returned server-side). The row renders dimmed "no quote" so the
       user can see + prune it. Optional + feature-detected: absent means quotable (older daemon never

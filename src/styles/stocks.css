@@ -223,6 +223,17 @@
    text-align: right;
 }
 
+/* Extended-hours (pre/post) overlay: a quiet secondary line under the day change, tinted by its
+   own direction (stk-gain/loss applied inline). Only present in an ext window with ext-hours on. */
+.stocks-row-ext {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.05em;
+   text-align: right;
+   opacity: 0.9;
+   font-variant-numeric: tabular-nums;
+}
+
 /* Per-account group header (only when more than one account). */
 .stocks-acct {
    margin-top: 0.3rem;
