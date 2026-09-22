@@ -70,11 +70,16 @@ const REFRESH_LOCKOUT_MS = 3000;
 /* No frame within this long after subscribing => the feed is not available on this DAWN (an
    older daemon silently drops the unknown verb), distinct from the brief initial "loading". */
 const UNAVAILABLE_MS = 8000;
-/* How long a snapshot stays "live" before the stamp escalates to stale, by market state. */
-function staleAfterSec(market: StockPortfolio["market"]): number {
+/* How long a snapshot stays "live" before the stamp escalates to stale, by market state.
+   Keyed on whether updates are EXPECTED: a stamp is only "stale" when we were waiting for a
+   refresh that did not arrive. Regular hours always push (90s cadence). Pre/post push ONLY
+   when the user has Extended Hours on (15 min cadence); with it off we never subscribed to
+   off-hours updates, so a frozen pre/post stamp is expected, not stale. Closed never pushes.
+   So: never "stale by age" unless an update was actually due. */
+function staleAfterSec(market: StockPortfolio["market"], extHours: boolean): number {
    if (market === "regular") return 90;
-   if (market === "pre" || market === "post") return 900; // 15 min ext-hours cadence
-   return Infinity; // closed: the stamp is a prior-session time by design, never "stale by age"
+   if ((market === "pre" || market === "post") && extHours) return 900; // 15 min ext-hours cadence
+   return Infinity; // closed, or pre/post with ext-hours off: no updates expected -> never stale by age
 }
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -314,8 +319,12 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          return new Intl.DateTimeFormat("en-US", fmtOpts).format(d);
       }
    };
+   /* Only a snapshot we are actively awaiting a refresh for can be "stale". If the panel is
+      not subscribed (suspended in standby, a hidden tab, or otherwise not watched), no update
+      is due, so a frozen stamp is expected - never stale. Combined with staleAfterSec's
+      market/ext-hours gating, this is the full "don't cry stale when no update is due" rule. */
    const isStale = (snap: StockSnapshot, market: StockPortfolio["market"]): boolean =>
-      Date.now() / 1000 - snap.asOf > staleAfterSec(market);
+      subscribed && Date.now() / 1000 - snap.asOf > staleAfterSec(market, extHours);
 
    /* --- ordering + spike -------------------------------------------------- */
    const posKey = (acct: number, symbol: string): string => `${acct}:${symbol}`;
