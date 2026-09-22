@@ -144,6 +144,18 @@
    color: var(--loss);
 }
 
+/* Schwab-link expiry note: a quiet phosphor line, escalating to amber warn when close. */
+.stocks-link {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-dim);
+   margin-top: 0.15rem;
+}
+.stocks-link-urgent {
+   color: var(--warn);
+}
+
 /* Positions list. Each row is two lines: symbol + value, then qty@price + day change. */
 .stocks-list {
    display: flex;

@@ -216,6 +216,9 @@ export class StubIngest implements Ingest {
          status,
          market: "regular",
          extHours,
+         // Fake Schwab-link expiry ~50h out, so the neutral "expires in 2 days" note shows.
+         // Drop the offset under 24h to exercise the amber "reconnect soon" state.
+         linkExpiresAt: asOf + 50 * 3600,
          snapshot: {
             asOf,
             totalValue,

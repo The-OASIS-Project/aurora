@@ -66,6 +66,11 @@ const SPIKE_PP = 0.5; // day-change percent swing, in percentage points
 const SPIKE_VALUE_FRAC = 0.005; // fractional value move
 const SPIKE_VALUE_MIN = 50; // ...or this absolute $ move, whichever is larger
 
+/* Schwab-link expiry warning bands (the link lives ~7 days). Stay silent when comfortably
+   ahead; a neutral note within LINK_WARN_SEC; amber within LINK_URGENT_SEC. */
+const LINK_WARN_SEC = 72 * 3600; // 3 days: start showing a quiet note
+const LINK_URGENT_SEC = 24 * 3600; // 1 day: escalate to amber "reconnect soon"
+
 const REFRESH_LOCKOUT_MS = 3000;
 /* No frame within this long after subscribing => the feed is not available on this DAWN (an
    older daemon silently drops the unknown verb), distinct from the brief initial "loading". */
@@ -229,10 +234,17 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    const statusEl = document.createElement("div");
    statusEl.className = "stocks-status";
 
+   /* Schwab-link expiry warning: hidden until the link is within the warn window, then a
+      quiet note, then an amber "reconnect soon" as it gets close. Read-only - it points at
+      the CLI relink, never performs the OAuth itself. */
+   const linkEl = document.createElement("div");
+   linkEl.className = "stocks-link";
+   linkEl.hidden = true;
+
    const list = document.createElement("div");
    list.className = "stocks-list";
 
-   el.append(head, headline, statusEl, list);
+   el.append(head, headline, statusEl, linkEl, list);
    root.appendChild(el);
 
    const card = makeListCard(el, list, { storageKey: LIST_H_KEY });
@@ -390,6 +402,9 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          statusEl.hidden = false;
          statusEl.className = "stocks-status";
          statusEl.textContent = emptyStateText(portfolio, subscribed, lastFrameAt);
+         // A state-only frame (e.g. token_expired) owns its own reconnect messaging; the
+         // proactive expiry note only rides alongside a live snapshot.
+         linkEl.hidden = true;
          card.refresh();
          return;
       }
@@ -410,6 +425,14 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       statusEl.className = `stocks-status${degraded || stale ? " stocks-status-stale" : ""}`;
       const asOf = `as of ${fmtAsOf(snap.asOf)}`;
       statusEl.textContent = degraded || stale ? `${market.toUpperCase()} · stale · ${asOf}` : `${market.toUpperCase()} · ${asOf}`;
+
+      // Schwab-link expiry note (feature-detected; absent when the daemon omits it).
+      const note = linkNote(portfolio?.linkExpiresAt, Date.now() / 1000);
+      linkEl.hidden = !note;
+      if (note) {
+         linkEl.className = `stocks-link${note.urgent ? " stocks-link-urgent" : ""}`;
+         linkEl.textContent = note.text;
+      }
 
       // Index the current positions by key + keep the account for a header lookup.
       const posByKey = new Map<string, StockPosition>();
@@ -606,6 +629,23 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       }
    };
    return controller;
+}
+
+/* The Schwab-link expiry note for a given expiry (unix sec) and now, or null to show nothing.
+   Silent when comfortably ahead; a neutral note within LINK_WARN_SEC; amber within
+   LINK_URGENT_SEC or already lapsed. Read-only copy - it points at the CLI relink. */
+function linkNote(expiresAt: number | undefined, nowSec: number): { text: string; urgent: boolean } | null {
+   if (typeof expiresAt !== "number") return null;
+   const rem = expiresAt - nowSec;
+   if (rem > LINK_WARN_SEC) return null; // comfortably ahead: stay quiet
+   if (rem <= 0) return { text: "Reconnect Schwab (link expired)", urgent: true };
+   if (rem <= LINK_URGENT_SEC) {
+      // round, not ceil: never overstate the runway on a warning meant to prompt a relink.
+      const h = Math.max(1, Math.round(rem / 3600));
+      return { text: `Reconnect Schwab soon (expires in ${h}h)`, urgent: true };
+   }
+   const d = Math.max(1, Math.round(rem / 86400));
+   return { text: `Schwab link expires in ${d} day${d === 1 ? "" : "s"}`, urgent: false };
 }
 
 /* The four empty states, distinct copy each. */

@@ -423,6 +423,13 @@ export interface StockPortfolio {
    status: StockStatus;
    market: StockMarket;
    extHours: boolean;
+   /* The Schwab OAuth link (refresh-token) expiry, unix seconds. One link covers all
+      accounts, so it is top-level. Present on ANY frame once known - including the
+      state-only token_expired frame - and OMITTED (undefined) when unknown (not linked /
+      before the first refresher cycle). Can be in the PAST (already lapsed). Optional +
+      feature-detected: an older daemon omits it. Lets the panel warn ahead of the silent
+      weekly relink. */
+   linkExpiresAt?: number;
    snapshot?: StockSnapshot;
 }
 

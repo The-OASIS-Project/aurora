@@ -588,10 +588,17 @@ function toStockPortfolio(p: Record<string, unknown>): StockPortfolio {
            accounts: (p.accounts as Array<Record<string, unknown>>).map(toStockAccount)
         }
       : undefined;
+   /* link_expires_at: emitted only when > 0 (older daemon omits it). Can be in the past
+      (a lapsed link) - kept as-is; the view treats a past/near value as "reconnect now". */
+   const linkExpiresAt =
+      typeof p.link_expires_at === "number" && isFinite(p.link_expires_at) && p.link_expires_at > 0
+         ? p.link_expires_at
+         : undefined;
    return {
       status: asStockStatus(p.status),
       market: asStockMarket(p.market),
       extHours: p.ext_hours === true,
+      linkExpiresAt,
       snapshot
    };
 }
