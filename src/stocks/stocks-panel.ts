@@ -31,6 +31,7 @@ import { addCorners } from "../render/corners.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
+import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
 
 export interface StocksPanelOptions {
    /* Subscribe (true) / unsubscribe (false) the portfolio push, with the current ext-hours
@@ -87,80 +88,15 @@ function staleAfterSec(market: StockPortfolio["market"], extHours: boolean): num
    return Infinity; // closed, or pre/post with ext-hours off: no updates expected -> never stale by age
 }
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-const usdSigned = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", signDisplay: "exceptZero" });
-
-function fmtUsd(n: number): string {
-   return usd.format(n);
-}
-function fmtSignedUsd(n: number): string {
-   return usdSigned.format(n);
-}
-function fmtPct(n: number): string {
-   return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
-}
 /* Redaction replaces every DIGIT with a bullet, keeping the surrounding $ , . % + - and the
    width intact (with tabular-nums, no layout shift). So the real value is never in the DOM
    while hidden. */
 function maskFigure(s: string): string {
    return s.replace(/\d/g, "•");
 }
-/* Direction is ALWAYS carried by a glyph too, never color alone (colorblind + redacted safe). */
-function dirGlyph(n: number): string {
-   return n > 0 ? "▲" : n < 0 ? "▼" : "–"; // ▲ ▼ –
-}
-function dirClass(n: number): string {
-   return n > 0 ? "stk-gain" : n < 0 ? "stk-loss" : "stk-flat";
-}
 function fmtQty(q: number): string {
    if (Number.isInteger(q)) return String(q);
    return q.toFixed(4).replace(/\.?0+$/, "");
-}
-
-/* An OCC option symbol ("AAPL  260116C00250000") is 21 chars with embedded spaces - compact it
-   for display only (the full string is kept for identity). Non-option symbols pass through. */
-function compactSymbol(sym: string, isOption: boolean): string {
-   if (!isOption) return sym;
-   const m = /^\s*([A-Z.]+)\s+(\d{2})(\d{2})(\d{2})([CP])(\d{8})\s*$/.exec(sym);
-   if (!m) return sym.replace(/\s+/g, " ").trim();
-   const [, root, yy, mm, dd, cp, strike8] = m;
-   const strike = (parseInt(strike8, 10) / 1000).toString();
-   return `${root} ${parseInt(mm, 10)}/${parseInt(dd, 10)}/${yy} ${cp}${strike}`;
-}
-
-function assetBadge(t: StockPosition["assetType"]): string {
-   switch (t) {
-      case "equity":
-         return "EQ";
-      case "etf":
-         return "ETF";
-      case "option":
-         return "OPT";
-      case "mutual_fund":
-         return "FUND";
-      case "cash_equivalent":
-         return "CASH";
-      default:
-         return "—";
-   }
-}
-
-/* The full asset-type name, for the badge's hover tooltip (native `title`). */
-function assetLabel(t: StockPosition["assetType"]): string {
-   switch (t) {
-      case "equity":
-         return "Equity";
-      case "etf":
-         return "Exchange-traded fund";
-      case "option":
-         return "Option";
-      case "mutual_fund":
-         return "Mutual fund";
-      case "cash_equivalent":
-         return "Cash equivalent";
-      default:
-         return "Other";
-   }
 }
 
 /* One entry in the frozen render order: an account header, or a position keyed by acct:symbol. */

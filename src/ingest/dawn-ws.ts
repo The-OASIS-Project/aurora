@@ -46,6 +46,8 @@ import type {
    StockPosition,
    StockSnapshot,
    StockStatus,
+   StockWatchlist,
+   StockWatchSymbol,
    ToolCall,
    UploadedDoc,
    UploadedImage,
@@ -603,6 +605,63 @@ function toStockPortfolio(p: Record<string, unknown>): StockPortfolio {
    };
 }
 
+/* --- stocks_watch_update mapping. Quote-only rows (no qty/value): a watched symbol is not
+   held. Same allowlist + finite guards as the portfolio mapping. --- */
+function toStockWatchSymbol(r: Record<string, unknown>): StockWatchSymbol {
+   return {
+      symbol: String(r.symbol ?? ""),
+      description: stockDesc(r.description),
+      assetType: asStockAssetType(r.asset_type),
+      price: finNum(r.price),
+      dayChange: finNum(r.day_change),
+      dayChangePct: finNum(r.day_change_pct),
+      quotable: typeof r.quotable === "boolean" ? r.quotable : undefined
+   };
+}
+function toStockWatchlist(p: Record<string, unknown>): StockWatchlist {
+   return {
+      status: asStockStatus(p.status),
+      market: asStockMarket(p.market),
+      asOf: typeof p.as_of === "number" && isFinite(p.as_of) ? p.as_of : undefined,
+      symbols: Array.isArray(p.symbols)
+         ? (p.symbols as Array<Record<string, unknown>>).map(toStockWatchSymbol)
+         : []
+   };
+}
+
+/* stocks_watch_set_response reject reporting (feature-detected: an older daemon omits it).
+   Maps a short reason enum to user-facing copy; an unknown reason degrades to a generic line. */
+function watchRejectReason(reason: unknown): string {
+   switch (reason) {
+      case "unknown":
+      case "invalid":
+         return "not a recognized symbol";
+      case "limit":
+         return "watchlist full (25 max)";
+      case "duplicate":
+         return "already watching";
+      default:
+         return "could not be added";
+   }
+}
+/* Build a single notice for whatever the set rejected, or null if it rejected nothing. Untrusted
+   wire strings are length-capped; they reach the DOM only through the notice layer's textContent. */
+function watchRejectMessage(rejected: unknown): string | null {
+   if (!Array.isArray(rejected) || rejected.length === 0) return null;
+   const parts = rejected
+      .map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>) : null))
+      .map((r) => {
+         if (!r) return null;
+         const sym = String(r.symbol ?? "")
+            .toUpperCase()
+            .replace(/[^A-Z0-9.]/g, "")
+            .slice(0, 12);
+         return sym ? `${sym} (${watchRejectReason(r.reason)})` : null;
+      })
+      .filter((s): s is string => s !== null);
+   return parts.length ? `Couldn't add ${parts.join(", ")}.` : null;
+}
+
 /* DAWN's conversation history and transcripts carry raw Anthropic content blocks: a tool
    call is an assistant turn whose `content` is a `[{type:"tool_use",...}]` array (as a JSON
    string), and a tool result is a `user` turn holding `[{type:"tool_result",...}]`. Those
@@ -774,6 +833,8 @@ export class DawnIngest implements Ingest {
    private watchReadingsWanted = false; // Watches panel visible -> subscribe to the 1 Hz gauge stream
    private stocksPortfolioWanted = false; // Stocks panel effectively visible -> subscribe to the portfolio push
    private stocksExtHours = false; // the panel's Extended-Hours choice, re-sent on reconnect
+   private stocksWatchWanted = false; // Watchlist panel effectively visible -> subscribe to the watch push
+   private stocksWatchExtHours = false; // the Watchlist panel's Extended-Hours choice, re-sent on reconnect
    /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
       realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
       re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
@@ -1080,6 +1141,10 @@ export class DawnIngest implements Ingest {
             an immediate fresh snapshot, so a reconnect / standby-wake has no visible lag. */
          if (this.stocksPortfolioWanted) {
             this.send({ type: "stocks_portfolio_subscribe", payload: { ext_hours: this.stocksExtHours } });
+         }
+         /* Same for the watchlist push (its own independent per-connection subscription). */
+         if (this.stocksWatchWanted) {
+            this.send({ type: "stocks_watch_subscribe", payload: { ext_hours: this.stocksWatchExtHours } });
          }
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
@@ -2377,11 +2442,26 @@ export class DawnIngest implements Ingest {
             this.sinks.stocks.setPortfolio(toStockPortfolio(p));
             break;
 
+         case "stocks_watch_update":
+            /* Watchlist push (immediate on subscribe, on cadence, on a set, or a one-shot get). */
+            this.sinks.watchlist.setWatchlist(toStockWatchlist(p));
+            break;
+
          /* Acks for the subscribe/unsubscribe verbs - the data arrives as its own frame, so
             these are no-ops. Present so the default arm does not console.debug the payload. */
          case "stocks_portfolio_subscribe_response":
          case "stocks_portfolio_unsubscribe_response":
+         case "stocks_watch_subscribe_response":
+         case "stocks_watch_unsubscribe_response":
             break;
+
+         case "stocks_watch_set_response": {
+            /* Surface any rejected add (typo / unknown symbol / hit the 25 cap) as a notice, so an
+               invalid add is not a silent no-op. Feature-detected: no `rejected` => nothing shown. */
+            const msg = watchRejectMessage(p.rejected);
+            if (msg) this.notifyUser(msg);
+            break;
+         }
 
          case "watch_readings_subscribe_response":
             break; // just an ack; the readings frames are what matter
@@ -3316,6 +3396,23 @@ export class DawnIngest implements Ingest {
    /* One-shot cached snapshot for the manual refresh button. A read; the server TTL-clamps it. */
    refreshStocks(extHours: boolean): void {
       this.send({ type: "stocks_portfolio_get", payload: { ext_hours: extHours } });
+   }
+
+   /* Watchlist: its own subscription, independent of the portfolio's, gated on the Watchlist
+      panel's own effective visibility. Re-sent on reconnect if still wanted (see onopen). */
+   stocksWatchSubscribe(enabled: boolean, extHours: boolean): void {
+      this.stocksWatchWanted = enabled;
+      this.stocksWatchExtHours = extHours;
+      if (enabled) this.send({ type: "stocks_watch_subscribe", payload: { ext_hours: extHours } });
+      else this.send({ type: "stocks_watch_unsubscribe" });
+   }
+   refreshWatchlist(extHours: boolean): void {
+      this.send({ type: "stocks_watch_get", payload: { ext_hours: extHours } });
+   }
+   /* User-scoped write: the user curating their own watchlist. Delta add/remove; the server
+      dedups, clamps, ignores invalid, and answers with a fresh stocks_watch_update. */
+   stocksWatchSet(add: string[], remove: string[]): void {
+      this.send({ type: "stocks_watch_set", payload: { add, remove } });
    }
 
    getMusicAudio(): MusicAudio {

@@ -1,0 +1,282 @@
+/*
+ * Watchlist panel. The user's tracked (not-held) Schwab symbols, sibling to the Stocks portfolio
+ * panel and in the same machined/frosted language, but quote-only rows (no value/qty, no redact).
+ * Reuses the shared directional classes (.stk-gain / .stk-loss / .stk-flat) and the .panel-refresh
+ * icon. Phosphor tokens only; tabular-nums so ticking quotes do not jitter.
+ */
+
+.watchlist {
+   position: absolute;
+   left: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.6rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+   -webkit-backdrop-filter: blur(7px);
+   cursor: default;
+}
+.watchlist.movable-dragging {
+   cursor: grabbing;
+}
+.watchlist.watchlist-off {
+   display: none;
+}
+.watchlist .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Header (drag handle): title + ext pill + refresh, vertically centered. */
+.watchlist-head {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   cursor: grab;
+}
+.watchlist.movable-dragging .watchlist-head {
+   cursor: grabbing;
+}
+.watchlist-title {
+   flex: 1 1 auto;
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.watchlist-ext {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.1em;
+   padding: 0.05rem 0.3rem;
+   border-radius: 2px;
+   cursor: pointer;
+   color: var(--text-faint);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   transition:
+      color 0.15s ease,
+      border-color 0.15s ease;
+}
+.watchlist-ext.on {
+   color: var(--accent);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Status / market line. */
+.watchlist-status {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   text-transform: uppercase;
+}
+.watchlist-status-stale {
+   color: var(--loss);
+}
+
+/* Add-symbol row: a compact input + a phosphor "+" button. */
+.watchlist-add {
+   display: flex;
+   gap: 0.4rem;
+   align-items: stretch;
+}
+.watchlist-add-input {
+   flex: 1 1 auto;
+   min-width: 0;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.08em;
+   text-transform: uppercase;
+   color: var(--text);
+   background: color-mix(in srgb, var(--ground-raise) 40%, transparent);
+   border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+   border-radius: 3px;
+   padding: 0.2rem 0.4rem;
+   outline: none;
+   transition: border-color 0.15s ease;
+}
+.watchlist-add-input::placeholder {
+   color: var(--text-faint);
+   text-transform: none;
+   letter-spacing: 0.02em;
+}
+.watchlist-add-input:focus {
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.watchlist-add-input:disabled {
+   opacity: 0.5;
+}
+.watchlist-add-btn {
+   flex: none;
+   width: 1.7rem;
+   font-size: var(--fs-data);
+   line-height: 1;
+   color: var(--accent);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+   border-radius: 3px;
+   cursor: pointer;
+   transition:
+      color 0.15s ease,
+      border-color 0.15s ease;
+}
+.watchlist-add-btn:hover:not(:disabled) {
+   border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.watchlist-add-btn:disabled {
+   opacity: 0.4;
+   cursor: default;
+}
+
+/* Quote list. Each row is two lines: symbol + price, then name + day change. A per-row remove
+   × floats at the right, revealed on hover. */
+.watchlist-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.4rem;
+}
+.watchlist-row {
+   position: relative;
+   display: flex;
+   flex-direction: column;
+   gap: 0.05rem;
+   padding: 0.1rem 1.1rem 0.1rem 0; /* right room for the remove control */
+}
+.watchlist-row-l1,
+.watchlist-row-l2 {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.75rem;
+}
+.watchlist-row-main {
+   display: flex;
+   align-items: baseline;
+   gap: 0.45rem;
+   min-width: 0;
+}
+.watchlist-sym {
+   color: var(--text);
+   font-size: var(--fs-label);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.watchlist-badge {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   color: var(--text-faint);
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   border-radius: 2px;
+   padding: 0 0.25rem;
+   text-transform: uppercase;
+}
+.watchlist-price {
+   flex: none;
+   color: var(--text);
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+}
+.watchlist-name {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.02em;
+   color: var(--text-faint);
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+}
+.watchlist-day {
+   flex: none;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   font-variant-numeric: tabular-nums;
+   text-align: right;
+}
+
+/* Per-row remove: a quiet × at the right edge, brightening on row/self hover. Keyboard-focusable
+   so it is not hover-only. */
+.watchlist-remove {
+   position: absolute;
+   right: 0;
+   top: 50%;
+   transform: translateY(-50%);
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   width: 1rem;
+   height: 1rem;
+   padding: 0;
+   font-size: var(--fs-label);
+   line-height: 1;
+   color: var(--text-faint);
+   background: none;
+   border: none;
+   cursor: pointer;
+   opacity: 0;
+   transition:
+      opacity 0.15s ease,
+      color 0.15s ease;
+}
+.watchlist-row:hover .watchlist-remove,
+.watchlist-remove:focus-visible {
+   opacity: 0.8;
+}
+.watchlist-remove:hover {
+   opacity: 1;
+   color: var(--loss);
+}
+.watchlist-remove:disabled {
+   display: none;
+}
+
+/* Unquotable row: stored but Schwab returned no quote (a well-formed ticker that isn't real).
+   Dimmed, with "no quote" / "not recognized" in place of the price + day change, but kept visible
+   and removable so the user can prune the bad entry. */
+.watchlist-unquotable {
+   opacity: 0.55;
+}
+.watchlist-noquote {
+   color: var(--text-faint);
+   font-style: italic;
+   letter-spacing: 0.02em;
+}
+
+/* Material-move spike: a brief directional wash, then gone. Only on a meaningful move. */
+.watchlist-spike-gain {
+   animation: watchlist-spike-gain 1.4s ease-out;
+}
+.watchlist-spike-loss {
+   animation: watchlist-spike-loss 1.4s ease-out;
+}
+@keyframes watchlist-spike-gain {
+   from {
+      background: color-mix(in srgb, var(--gain) 26%, transparent);
+   }
+   to {
+      background: transparent;
+   }
+}
+@keyframes watchlist-spike-loss {
+   from {
+      background: color-mix(in srgb, var(--loss) 26%, transparent);
+   }
+   to {
+      background: transparent;
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .watchlist-spike-gain,
+   .watchlist-spike-loss {
+      animation: none;
+   }
+}

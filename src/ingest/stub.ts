@@ -11,7 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
-import type { Ingest, IngestSinks, LibraryItem, OutImage, StockPosition, StockPortfolio, StockStatus, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
+import type { Ingest, IngestSinks, LibraryItem, OutImage, StockPosition, StockPortfolio, StockStatus, StockWatchlist, StockWatchSymbol, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -206,6 +206,19 @@ export class StubIngest implements Ingest {
    ];
    private readonly FAKE_CASH = 5000;
 
+   /* --- Watchlist (fake feed: non-held tracked symbols, quote-only) ------------ */
+   private watchTimer = 0;
+   private fakeWatchSymbols: StockWatchSymbol[] = [
+      { symbol: "TSLA", description: "Tesla Inc.", assetType: "equity", price: 251.4, dayChange: 6.2, dayChangePct: 2.53 },
+      { symbol: "AMD", description: "Advanced Micro Devices", assetType: "equity", price: 168.9, dayChange: -3.1, dayChangePct: -1.8 },
+      { symbol: "QQQ", description: "Invesco QQQ Trust", assetType: "etf", price: 512.7, dayChange: 1.4, dayChangePct: 0.27 },
+      // A stored-but-unquotable ticker (bad symbol), to exercise the dimmed "no quote" row.
+      { symbol: "ZVXX", assetType: "other", price: 0, dayChange: 0, dayChangePct: 0, quotable: false }
+   ];
+   private buildFakeWatchlist(status: StockStatus, asOf: number): StockWatchlist {
+      return { status, market: "regular", asOf, symbols: this.fakeWatchSymbols.map((s) => ({ ...s })) };
+   }
+
    private buildFakePortfolio(status: StockStatus, asOf: number, extHours: boolean): StockPortfolio {
       const positions = this.fakeStockPositions.map((p) => ({ ...p }));
       const holdings = positions.reduce((s, p) => s + p.value, 0);
@@ -272,6 +285,50 @@ export class StubIngest implements Ingest {
    }
    refreshStocks(extHours: boolean): void {
       this.sinks.stocks.setPortfolio(this.buildFakePortfolio("ok", Math.floor(Date.now() / 1000), extHours));
+   }
+
+   /* Watchlist feed: jitter the quotes, push on cadence. Independent of the portfolio feed. */
+   stocksWatchSubscribe(enabled: boolean, _extHours: boolean): void {
+      window.clearInterval(this.watchTimer);
+      this.watchTimer = 0;
+      if (!enabled) return;
+      const push = (): void => {
+         for (const s of this.fakeWatchSymbols) {
+            if (s.quotable === false) continue; // no quote to jitter
+            const drift = (Math.random() - 0.46) * s.price * 0.004;
+            s.price = Math.max(0.01, s.price + drift);
+            s.dayChange += drift;
+            s.dayChangePct = (s.dayChange / Math.max(1, s.price - s.dayChange)) * 100;
+         }
+         this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
+      };
+      push(); // immediate snapshot on subscribe, like DAWN
+      this.watchTimer = window.setInterval(push, 3000);
+   }
+   refreshWatchlist(_extHours: boolean): void {
+      this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
+   }
+   /* A small allowlist of "real" tickers; anything else an offline add treats as nonexistent and
+      returns unquotable (quotable:false), mirroring DAWN's requested-minus-returned logic so the
+      dimmed "no quote" row is testable without the live daemon. */
+   private readonly KNOWN_TICKERS = new Set([
+      "NVDA", "AAPL", "TSLA", "AMD", "QQQ", "SPY", "MSFT", "GOOG", "GOOGL", "AMZN",
+      "META", "VTI", "INTC", "MU", "TSM", "ARM", "AVGO", "NFLX", "DIS", "BA", "MRVL", "ALAB"
+   ]);
+   stocksWatchSet(add: string[], remove: string[]): void {
+      const rm = new Set(remove.map((s) => s.toUpperCase()));
+      this.fakeWatchSymbols = this.fakeWatchSymbols.filter((s) => !rm.has(s.symbol));
+      for (const raw of add) {
+         const sym = raw.toUpperCase().trim();
+         if (!sym || this.fakeWatchSymbols.some((s) => s.symbol === sym)) continue;
+         if (this.KNOWN_TICKERS.has(sym)) {
+            this.fakeWatchSymbols.push({ symbol: sym, description: sym, assetType: "equity", price: 50 + Math.random() * 400, dayChange: 0, dayChangePct: 0 });
+         } else {
+            // Unknown -> nonexistent ticker: comes back unquotable, like a real typo.
+            this.fakeWatchSymbols.push({ symbol: sym, assetType: "other", price: 0, dayChange: 0, dayChangePct: 0, quotable: false });
+         }
+      }
+      this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
    }
 
    /* --- Conversation picker (fake data so offline dev shows the panel) ------- */
@@ -384,6 +441,8 @@ export class StubIngest implements Ingest {
       this.watchReadingsTimer = 0;
       window.clearInterval(this.stocksTimer);
       this.stocksTimer = 0;
+      window.clearInterval(this.watchTimer);
+      this.watchTimer = 0;
       this.intervals = [];
       this.timeouts = [];
    }

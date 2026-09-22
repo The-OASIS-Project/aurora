@@ -439,6 +439,41 @@ export interface StocksSink {
    setPortfolio(portfolio: StockPortfolio): void;
 }
 
+/* One watched (not-held) symbol: quote data only - no qty/value/unrealized, since it is not a
+   holding. `description` is the instrument name (same messy-until-normalized source as a
+   position's), optional + feature-detected. All `_pct` signed. */
+export interface StockWatchSymbol {
+   symbol: string;
+   description?: string;
+   assetType: StockAssetType;
+   price: number;
+   dayChange: number;
+   dayChangePct: number;
+   /* false = stored on the watchlist but Schwab returned no quote (a well-formed typo that isn't a
+      real ticker; requested-minus-returned server-side). The row renders dimmed "no quote" so the
+      user can see + prune it. Optional + feature-detected: absent means quotable (older daemon never
+      includes unquotable symbols). price/day fields are meaningless when this is false. */
+   quotable?: boolean;
+}
+
+/* The user's watchlist quote frame (stocks_watch_update). `symbols` is empty when nothing is
+   watched (a distinct empty state from a link error). `asOf` is present only when the frame
+   carries quotes; a state-only frame (token_expired / cold not_connected) omits it, like the
+   portfolio frame. Shares the Schwab link with the portfolio. */
+export interface StockWatchlist {
+   status: StockStatus;
+   market: StockMarket;
+   asOf?: number;
+   symbols: StockWatchSymbol[];
+}
+
+export interface WatchlistSink {
+   /* A watchlist update: immediate on subscribe, then on cadence, on a set (add/remove), or
+      one-shot from get. Gated on the WATCHLIST panel's own visibility (its own subscription,
+      independent of the portfolio). */
+   setWatchlist(watchlist: StockWatchlist): void;
+}
+
 /* A transient attention card: a proactive alert, a ringing alarm, a job/observation
    toast. `tone:"attention"` is the warm needs-you channel. `persist` marks a needs-you
    notice that settles to a quiet float instead of auto-dismissing when left unsnapped.
@@ -582,6 +617,7 @@ export interface IngestSinks {
    ha: HASink;
    watches: WatchesSink;
    stocks: StocksSink;
+   watchlist: WatchlistSink;
    library: LibrarySink;
    context: ContextSink;
    notifications: NotificationsSink;
@@ -691,6 +727,14 @@ export interface Ingest {
    stocksPortfolioSubscribe(enabled: boolean, extHours: boolean): void;
    /* One-shot cached snapshot (the manual refresh button) - stocks_portfolio_get. */
    refreshStocks(extHours: boolean): void;
+   /* --- Watchlist (non-held tracked symbols), its OWN subscription independent of the
+      portfolio's, gated on the Watchlist panel's effective visibility (mirror of the above).
+      refreshWatchlist is the one-shot get. stocksWatchSet is a user-scoped WRITE - the user
+      curating their own watchlist (add/remove symbols; same sanctioned class as the Watches
+      panel's watch_add/remove), delta-applied server-side (dedup, clamp). --- */
+   stocksWatchSubscribe(enabled: boolean, extHours: boolean): void;
+   refreshWatchlist(extHours: boolean): void;
+   stocksWatchSet(add: string[], remove: string[]): void;
    /* --- Conversation picker (request/response). listConversations paginates; searchConversations
       filters (title, or message content when `content`). loadConversation / newConversation are
       the already-sanctioned reads/opens. rename / delete / setPinned are deliberate, user-initiated

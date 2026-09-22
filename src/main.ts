@@ -31,6 +31,7 @@ import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/watches.css";
 import "./styles/stocks.css";
+import "./styles/watchlist.css";
 import "./styles/library.css";
 import "./styles/docview.css";
 import "./styles/context.css";
@@ -73,6 +74,7 @@ import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 import { mountWatchesPanel } from "./watches/watches-panel.ts";
 import { mountStocksPanel } from "./stocks/stocks-panel.ts";
+import { mountWatchlistPanel } from "./watchlist/watchlist-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
@@ -184,6 +186,7 @@ const standby = mountStandby({
       /* Standby is "nobody watching": suspend the portfolio push so DAWN stops fetching from
          Schwab while the screensaver is up (resume gets a fresh snapshot instantly on wake). */
       stocksPanel.setSuspended(on);
+      watchlistPanel.setSuspended(on);
    },
    isAlarmRinging: () => dawn.isAlarmRinging()
 });
@@ -242,6 +245,18 @@ const watchesPanel = mountWatchesPanel(stage, {
 const stocksPanel = mountStocksPanel(stage, {
    onPortfolioSubscribe: (enabled, extHours) => ingest.stocksPortfolioSubscribe(enabled, extHours),
    onRefresh: (extHours) => ingest.refreshStocks(extHours),
+   isLive: () => dawn.isLinkLive(),
+   notify: (m) => dawn.notifyUser(m)
+});
+
+/* The Watchlist panel: the user's tracked (NOT held) Schwab symbols, its OWN standalone panel and
+   its OWN subscription, independent of and gated separately from the portfolio (Portfolio = held,
+   Watchlist = tracked). In-charter: quote reads + a user-scoped watchlist write (add/remove, the
+   same class as the Watches panel verbs); no operator/OAuth surface. */
+const watchlistPanel = mountWatchlistPanel(stage, {
+   onWatchSubscribe: (enabled, extHours) => ingest.stocksWatchSubscribe(enabled, extHours),
+   onRefresh: (extHours) => ingest.refreshWatchlist(extHours),
+   onWatchSet: (add, remove) => ingest.stocksWatchSet(add, remove),
    isLive: () => dawn.isLinkLive(),
    notify: (m) => dawn.notifyUser(m)
 });
@@ -402,6 +417,7 @@ const menu = mountMenu(stage, {
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
       { id: "stocks", label: "Stocks", enabled: stocksPanel.isVisible() },
+      { id: "watchlist", label: "Watchlist", enabled: watchlistPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "context", label: "Context", enabled: contextPanel.isVisible() },
       { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
@@ -414,6 +430,7 @@ const menu = mountMenu(stage, {
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else if (id === "watches") watchesPanel.setVisible(!watchesPanel.isVisible());
       else if (id === "stocks") stocksPanel.setVisible(!stocksPanel.isVisible());
+      else if (id === "watchlist") watchlistPanel.setVisible(!watchlistPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
       else if (id === "clock") hud.clock.setVisible(!hud.clock.isVisible());
@@ -675,6 +692,7 @@ ingest.start({
          hud.setTimezone(tz);
          standby.setTimezone(tz); // the standby clock renders in the DAWN user's tz too
          stocksPanel.setTimezone(tz); // the portfolio "as of" stamp too
+         watchlistPanel.setTimezone(tz); // and the watchlist "as of" stamp
       }
    },
    music: musicPlayer,
@@ -682,6 +700,7 @@ ingest.start({
    ha: haPanel,
    watches: watchesPanel,
    stocks: stocksPanel,
+   watchlist: watchlistPanel,
    library: libraryPanel,
    context: contextPanel,
    notifications,
@@ -776,6 +795,7 @@ function dispose(): void {
    haPanel.destroy();
    watchesPanel.destroy();
    stocksPanel.destroy();
+   watchlistPanel.destroy();
    libraryPanel.destroy();
    contextPanel.destroy();
    conversationPicker.destroy();
