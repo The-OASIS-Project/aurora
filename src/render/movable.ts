@@ -76,10 +76,21 @@ interface Snap {
 /* Persisted position is per-axis INTENT, not a resolved pixel, so it survives a
    viewport resize AND the element scaling itself (a right/bottom dock stays flush as
    the card grows). `lo`/`hi` = flush to the near/far viewport edge (the `edge` gutter);
-   `center` = viewport-centered; `free` = a fraction of the free travel (`f` in 0..1),
-   which is where sibling snaps and un-snapped drops land (siblings are NOT persisted as
-   references - they re-snap live on the next drag). X never persists `center` (the
-   central dead zone filters it), but the type allows it so one axisPos covers both. */
+   `center` = viewport-centered; `free` = the top-left corner as a fraction of the
+   VIEWPORT (`f` in 0..1, `top = f * V`), which is where sibling snaps and un-snapped
+   drops land (siblings are NOT persisted as references - they re-snap live on the next
+   drag). X never persists `center` (the central dead zone filters it), but the type
+   allows it so one axisPos covers both.
+
+   `free` is VIEWPORT-relative, NOT travel-relative (`f * (V - size)`), on purpose: the
+   corner must not depend on the element's own current size. That decoupling is what makes
+   a same-resolution restore land pixel-exact even when the card is a different height at
+   restore than at drop (e.g. the Stocks panel restores EMPTY, then grows once the feed
+   arrives - a travel-relative anchor resolved against the empty height and then froze the
+   card at the wrong spot). A resolution change still repositions proportionally (`f * newV`).
+   NOTE: this changed the `free` meaning, so a `free` position saved by the older
+   travel-relative build shifts ONCE on first load (by V/(V-size)); the next drag re-saves
+   it correctly. Edge docks (lo/hi/center) are unchanged and never shift. */
 type Anchor = { a: "lo" | "hi" | "center" } | { a: "free"; f: number };
 interface StoredPos {
    x: Anchor;
@@ -145,8 +156,9 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
    };
 
    /* Resolve one axis anchor to a pixel, given the current viewport dimension V and the
-      element's current layout SIZE. lo/center/hi track the viewport + size; free scales
-      with the free travel. `V - size` can go <= 0 on a tiny viewport, so clamp it. */
+      element's current layout SIZE. lo/hi/center track the viewport + size; free is a
+      fraction of the viewport (`f * V`), size-independent. `V - size` (the `travel`, used
+      only by center now) can go <= 0 on a tiny viewport, so it is floored at 0. */
    const axisPos = (anc: Anchor, V: number, size: number): number => {
       const travel = Math.max(0, V - size);
       switch (anc.a) {
@@ -157,7 +169,7 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
          case "center":
             return travel / 2;
          case "free":
-            return anc.f * travel;
+            return anc.f * V; // top-left as a fraction of the viewport (size-independent)
       }
    };
 
@@ -341,17 +353,14 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
             if (applyStored("all")) appliedRealSize = true;
             return;
          }
-         /* Legacy px `{x, y}`: convert to free-fractions against the CURRENT viewport +
-            size so it lands roughly where it was. Not written back here (applyStored never
-            persists); the next drop upgrades it to a real anchor. */
+         /* Legacy px `{x, y}`: convert to a free VIEWPORT-fraction so it lands roughly
+            where it was. Not written back here (applyStored never persists); the next drop
+            upgrades it to a real anchor. */
          if (typeof p.x === "number" && typeof p.y === "number") {
-            const w = el.offsetWidth;
-            const h = el.offsetHeight;
-            const frac = (px: number, V: number, size: number): number =>
-               Math.min(1, Math.max(0, px / Math.max(1, V - size)));
+            const frac = (px: number, V: number): number => Math.min(1, Math.max(0, px / Math.max(1, V)));
             stored = {
-               x: { a: "free", f: frac(p.x, window.innerWidth, w) },
-               y: { a: "free", f: frac(p.y, window.innerHeight, h) }
+               x: { a: "free", f: frac(p.x, window.innerWidth) },
+               y: { a: "free", f: frac(p.y, window.innerHeight) }
             };
             if (applyStored("all")) appliedRealSize = true;
          }
@@ -443,11 +452,12 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
          free, with the fraction read from the PLACED (post-clamp) pixel so it round-trips. */
       const w = el.offsetWidth;
       const h = el.offsetHeight;
-      const anchorFor = (prev: AxisPreview, snapped: boolean, placed: number, V: number, size: number): Anchor => {
+      const anchorFor = (prev: AxisPreview, snapped: boolean, placed: number, V: number, _size: number): Anchor => {
          if (prev && prev.type === "edge") return { a: prev.side === "lo" ? "lo" : "hi" };
          if (snapped && !prev) return { a: "center" };
-         const travel = Math.max(1, V - size); // divisor floor of 1 (axisPos's multiplier floors at 0)
-         return { a: "free", f: Math.min(1, Math.max(0, placed / travel)) };
+         /* free = the placed top-left corner as a fraction of the viewport (size-independent),
+            so a same-resolution restore reproduces this exact pixel. */
+         return { a: "free", f: Math.min(1, Math.max(0, placed / Math.max(1, V))) };
       };
       stored = {
          x: anchorFor(snap.xPrev, snap.xSnapped, parseFloat(el.style.left) || 0, window.innerWidth, w),
