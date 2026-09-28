@@ -15,6 +15,10 @@ export interface DialogAction {
    label: string;
    onClick: () => void;
    danger?: boolean; // a slightly destructive action (e.g. Disconnect), styled in the alert hue
+   /* Take initial focus instead of the close control. A dialog that can open unprompted (after a
+      server reply) and offers a destructive action sets this on its SAFE choice, so a stray
+      Enter keeps rather than destroys. */
+   autofocus?: boolean;
 }
 
 /* A selectable option in a radio-style list (e.g. the microphone picker). */
@@ -30,18 +34,59 @@ export interface DialogOptions {
    /* A paragraph of readable body prose (e.g. a consent explanation). Distinct from `sub`,
       which is a short uppercase subtitle - a sentence in `sub` renders as tracked all-caps. */
    body?: string;
+   /* A smaller, dimmer paragraph under the body: the fine print (scope, caveats). */
+   note?: string;
    rows?: DialogRow[];
    /* A radio list; choosing one calls onChoose and closes the dialog. */
    choices?: DialogChoice[];
    onChoose?: (value: string) => void;
    link?: { label: string; href: string };
    actions?: DialogAction[];
+   /* Keep the danger actions inert for this long after mount. For a dialog that opens unprompted,
+      so a click already on its way to something else can't land on a destructive button. */
+   armDelayMs?: number;
+   /* For a queued unprompted dialog (openDialogWhenFree): re-checked when it would open, and
+      dropped if false (what it asks about may no longer hold by then). */
+   stillValid?: () => boolean;
+   /* Queue identity: a second queued dialog with the same key is dropped as a duplicate. */
+   key?: string;
 }
 
-let openOverlay: HTMLElement | null = null;
+/* The open dialog's own close: it also drops that dialog's keydown listener and restores
+   focus, so replacing one dialog with another tears the first down fully. */
+let closeOpen: (() => void) | null = null;
+/* Dialogs that open unprompted wait here while the user has one open (openDialogWhenFree). */
+const waiting: DialogOptions[] = [];
+/* Set while openDialog closes the old dialog to replace it: the queue must not drain into
+   that gap (the replacement is about to take the slot). */
+let replacing = false;
+
+/* Open a dialog that was NOT asked for by a gesture (e.g. after a server reply). Never
+   replaces a dialog the user already has open: it queues and opens once that one closes. */
+export function openDialogWhenFree(opts: DialogOptions): void {
+   if (!closeOpen) {
+      openDialog(opts);
+      return;
+   }
+   if (opts.key && waiting.some((w) => w.key === opts.key)) return;
+   waiting.push(opts);
+}
+
+/* Open the next queued dialog that still holds, dropping any whose moment has passed. */
+function drainWaiting(): void {
+   while (waiting.length) {
+      const next = waiting.shift()!;
+      if (!next.stillValid || next.stillValid()) {
+         openDialog(next);
+         return;
+      }
+   }
+}
 
 export function openDialog(opts: DialogOptions): void {
-   closeDialog(); // only one at a time
+   replacing = true;
+   closeOpen?.(); // only one at a time
+   replacing = false;
    const prevFocus = document.activeElement as HTMLElement | null;
 
    const overlay = document.createElement("div");
@@ -53,14 +98,31 @@ export function openDialog(opts: DialogOptions): void {
    card.setAttribute("aria-modal", "true");
    card.setAttribute("aria-label", opts.title);
 
+   /* Idempotent: an action's onClick may already have replaced this dialog (openDialog closes
+      it), and a second run would steal focus back from the new dialog's autofocus target. */
+   let closed = false;
    const close = (): void => {
+      if (closed) return;
+      closed = true;
       overlay.remove();
       document.removeEventListener("keydown", onKey);
-      if (openOverlay === overlay) openOverlay = null;
+      if (closeOpen === close) closeOpen = null;
       prevFocus?.focus?.();
+      /* A queued unprompted dialog opens only once nothing replaced this one. */
+      if (!closeOpen && !replacing) drainWaiting();
    };
    const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") close();
+      /* Modal: Tab cycles within the card, so focus can't leave it (or wander from a safe
+         initial choice to a destructive one and then out of sight). */
+      if (e.key === "Tab") {
+         const items = Array.from(card.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]"));
+         if (!items.length) return;
+         const i = items.indexOf(document.activeElement as HTMLElement);
+         const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : i < 0 || i === items.length - 1 ? 0 : i + 1;
+         e.preventDefault();
+         items[next].focus();
+      }
    };
 
    const closeBtn = document.createElement("button");
@@ -87,6 +149,13 @@ export function openDialog(opts: DialogOptions): void {
       body.className = "dialog-body";
       body.textContent = opts.body;
       card.append(body);
+   }
+
+   if (opts.note) {
+      const note = document.createElement("p");
+      note.className = "dialog-note";
+      note.textContent = opts.note;
+      card.append(note);
    }
 
    if (opts.rows?.length) {
@@ -140,6 +209,7 @@ export function openDialog(opts: DialogOptions): void {
       card.append(a);
    }
 
+   let focusTarget: HTMLElement = closeBtn;
    if (opts.actions?.length) {
       const bar = document.createElement("div");
       bar.className = "dialog-actions";
@@ -152,6 +222,13 @@ export function openDialog(opts: DialogOptions): void {
             act.onClick();
             close();
          });
+         if (act.autofocus) focusTarget = btn;
+         if (act.danger && opts.armDelayMs && opts.armDelayMs > 0) {
+            btn.disabled = true;
+            window.setTimeout(() => {
+               btn.disabled = false;
+            }, opts.armDelayMs);
+         }
          bar.append(btn);
       }
       card.append(bar);
@@ -163,11 +240,12 @@ export function openDialog(opts: DialogOptions): void {
    });
    document.addEventListener("keydown", onKey);
    document.body.append(overlay);
-   openOverlay = overlay;
-   closeBtn.focus();
+   closeOpen = close;
+   focusTarget.focus();
 }
 
+/* Close everything, queued unprompted dialogs included (teardown). */
 export function closeDialog(): void {
-   openOverlay?.remove();
-   openOverlay = null;
+   waiting.length = 0;
+   closeOpen?.();
 }

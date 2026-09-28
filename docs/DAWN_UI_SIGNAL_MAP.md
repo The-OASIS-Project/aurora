@@ -960,6 +960,42 @@ build (P0 parser, P1 fetch/cache/refresher/verbs/fan-out).
   write, the user's own data. Consumed in `src/stocks/` + `dawn-ws.ts`; `stocks_portfolio_*`
   undocumented in `WEBSOCKET_PROTOCOL.md` (same class as the `doc_library_*` / `watch_*` gaps).
 
+### 9.12 Forget what a private conversation taught + background-turn frames - consumed 2026-09-27
+
+DAWN's memory-correctness work (branch `adaptive_dwell`, uncommitted at the time; verified against
+`dawn/src/webui/webui_conv_memory.c` and the reference client `www/js/ui/settings/forget-learned.js`).
+
+- **`set_private_response`** now carries optional **`also_private: int64[]`** (continuations that went
+  private with it). Aurora reconciles with a debounced page-0 picker refresh on success (no per-id
+  patch) and surfaces a failure as a notice.
+- **`conversation_learned`** (unsolicited, only after `set_private{is_private:true}`):
+  `{conversation_id, success, memories, facts, outdated, summaries, preferences, relations}`.
+  `memories` = facts + summaries + preferences (what the Memory panel lists). Failure is
+  `{success:false, conversation_id, busy}`; on `busy` re-ask with
+  `conversation_learned_request {conversation_id}` every 5s, up to 12 tries (that verb only works on a
+  PRIVATE conversation). Aurora offers the forget only for the conversation on screen, still private,
+  with `memories + outdated + relations > 0`; the dialog starts focused on Keep (it opens unprompted).
+- **`forget_conversation_memories {conversation_id}`** (needs only ownership, private or not) ->
+  `forget_conversation_memories_response` with the same counts, or `{success:false, conversation_id,
+  error}` (user-ready strings). One count/forget per user at a time; the server waits up to ~120s for
+  an in-flight extraction, so Aurora shows a sticky "Forgetting..." card and gives up after 150s. A
+  failure card offers Retry. Also reachable from the picker's per-row Forget (no count up front).
+- **Background-turn frames.** A turn can now finish on a conversation the user switched away from.
+  Its tagged frames (`state`, `metrics_update`, `stream_*`, `transcript`, `context_injection`,
+  `context_citations`) are dropped when `conversation_id` is set and differs from the one on screen
+  (a fresh unbound view counts as different: DAWN always delivers `new_conversation_response` before
+  a new conversation's turn streams). `context` is untagged (`send_context_impl`), so it is not gated.
+  Every switch/unbind path settles the reactor/chip to idle, since that turn's own idle is now
+  dropped. A foreign `speaking`/`idle` still drives the echo-mute: DAWN keeps sending the origin that
+  turn's audio whatever it views. A `conversation_reset` (tool) arrives mid-turn and the reply stays
+  tagged with the old conversation, so that one turn stays on screen until it goes idle.
+  `tool_step` and `message_appended` keep their own checks. Aurora does not consume
+  `context_compacted`. Bystander fan `state` frames (`visit_tts_send` / `visit_tts_idle`) used to be
+  tagged with the recipient's stale `stream_conversation_id`; DAWN now tags them with the conversation
+  being spoken (`webui_send_state_for_conversation`, found in this review, 2026-09-27).
+- Not consumed: the two new `memory.focus_injection.*_min_relevance` settings (`set_config`,
+  operator territory).
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and

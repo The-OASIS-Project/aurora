@@ -67,7 +67,7 @@ import {
 import { mountHud } from "./hud/hud.ts";
 import { mountConversation } from "./conversation/conversation.ts";
 import { mountMenu } from "./menu/menu.ts";
-import { openDialog } from "./menu/dialog.ts";
+import { openDialog, closeDialog } from "./menu/dialog.ts";
 import { mountLogin } from "./auth/login-panel.ts";
 import { mountMusicPlayer } from "./music/music-player.ts";
 import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
@@ -78,6 +78,7 @@ import { mountWatchlistPanel } from "./watchlist/watchlist-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
+import { mountForgetLearned } from "./memory/forget-memories.ts";
 import { Notifications } from "./notify/notifications.ts";
 
 /* 1. Design foundation: mirror the palette into CSS custom properties so the
@@ -292,7 +293,14 @@ const conversationPicker = mountConversationPicker(stage, {
    onRename: (id, title) => ingest.renameConversation(id, title),
    onDelete: (id) => ingest.deleteConversation(id),
    onPin: (id, pinned) => ingest.setPinned(id, pinned),
+   onForgetMemories: (id) => ingest.forgetConversationMemories(id),
    onLoadMore: (offset) => ingest.listConversations({ limit: 50, offset })
+});
+
+/* The offer to forget what a conversation taught once it goes private (DAWN counts it after
+   set_private). A named confirm; only its Forget button reaches the destructive write. */
+const forgetLearned = mountForgetLearned({
+   onForget: (id) => ingest.forgetConversationMemories(id)
 });
 
 /* System > About: what this is, the daemon + interface versions, and the project link.
@@ -704,7 +712,8 @@ ingest.start({
    library: libraryPanel,
    context: contextPanel,
    notifications,
-   conversationList: conversationPicker
+   conversationList: conversationPicker,
+   memoryForget: forgetLearned
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -788,6 +797,7 @@ function dispose(): void {
    window.clearTimeout(bootLeadTimer); // pending boot-cinematic one-shots
    window.clearTimeout(bootRevealTimer);
    window.clearTimeout(bootCleanupTimer);
+   closeDialog(); // an open (or queued) dialog would outlive the reload, wired to the old ingest
    ingest.dispose(); // full teardown: also closes the audio graphs so HMR doesn't stack AudioContexts
    conversation.destroy();
    musicPlayer.destroy();

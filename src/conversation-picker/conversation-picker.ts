@@ -20,6 +20,7 @@ import { addCorners } from "../render/corners.ts";
 import { makeMovable } from "../render/movable.ts";
 import { onActivate } from "../render/activate.ts";
 import { openDialog } from "../menu/dialog.ts";
+import { confirmForgetMemories } from "../memory/forget-memories.ts";
 import { relativeTime, dayBucket } from "../util/time.ts";
 
 export interface ConversationPickerOptions {
@@ -29,6 +30,9 @@ export interface ConversationPickerOptions {
    onRename(id: number, title: string): void;
    onDelete(id: number): void;
    onPin(id: number, pinned: boolean): void;
+   /* Forget what the conversation taught memory. DESTRUCTIVE: fired only after the row's
+      named confirm (confirmForgetMemories). */
+   onForgetMemories(id: number): void;
    /* Request the next page (server offset = current loaded count). */
    onLoadMore(offset: number): void;
 }
@@ -251,6 +255,7 @@ export function mountConversationPicker(
       };
       act("cpick-act-pin", c.isPinned ? "Unpin" : "Pin", () => togglePin(c));
       act("cpick-act-rename", "Rename", () => beginRename(row, c));
+      act("cpick-act-forget", "Forget memories", () => confirmForgetMemories(c.title, () => opts.onForgetMemories(c.id)));
       act("cpick-act-delete", "Delete", () => confirmDelete(c));
       if (c.isPinned) row.classList.add("pinned");
 

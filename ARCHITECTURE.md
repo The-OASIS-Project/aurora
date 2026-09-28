@@ -34,7 +34,8 @@ ingest  ->  state  ->  choreography  ->  render
 - **ingest** (`src/ingest/`) is the single boundary to DAWN. An `Ingest` implementation
   feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
   HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar, watches,
-  stocks, Home Assistant, library, context, notifications, conversation list). `StubIngest` (fake data) and
+  stocks, Home Assistant, library, context, notifications, conversation list, and the memory-forget
+  offer). `StubIngest` (fake data) and
   `DawnIngest` (the real WebSocket client) are interchangeable; swapping DAWN in is one
   line in `main.ts`.
 - **state** (`src/state/`) is the `Store` of `ElementState`: what is true right now
@@ -121,10 +122,13 @@ persistence for the UI's own conversation, music transport (`music_subscribe` pl
 binary frames for push-to-talk; continuous listening toggles `always_on_enable` /
 `always_on_disable`), the conversation picker's management verbs (`rename_conversation`,
 `set_pinned`, and the confirm-gated `delete_conversation`), the Watches panel's watch verbs,
-and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel).
+and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel; and
+`forget_conversation_memories`, everything one conversation taught, offered after marking it
+private or from the picker).
 All are benign and user-initiated - the user's own data, not operator control of the daemon.
 The **destructive** ones (`delete_conversation` - which cascade-deletes the conversation's
-images + child background jobs server-side; `watch_remove`; `delete_memory_*`) are gated
+images + child background jobs server-side; `watch_remove`; `delete_memory_*`;
+`forget_conversation_memories`) are gated
 behind a named confirm and reachable only from a deliberate user gesture, never a frame
 handler. What stays out is operator/admin/global (`set_config`, `set_secrets`, `restart`,
 user management, the global SAGE flag) - that lives in DAWN's own WebUI.
@@ -144,6 +148,8 @@ src/
                      display + the composer's attach/upload (attachments.ts), and the
                      ordered/expandable tool-use pills (live tool_step + reload rehydration)
   conversation-picker/  the top-band history panel
+  memory/            the "forget what a conversation taught" confirms (the post-private
+                     offer sink + the picker's per-row Forget)
   context/           the movable "why did it say that" panel (context_injection + gold)
   library/           the movable notes + documents viewer
   notify/            the self-owned movable notification cards + importance model

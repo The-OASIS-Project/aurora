@@ -619,6 +619,29 @@ export interface ContextSink {
    applyCitations(conversationId: number, turnId: number, citedItemIds: string[]): void;
 }
 
+/* What memory had already learned from a conversation when it was marked private
+   (conversation_learned). `memories` is what the Memory panel lists (facts + summaries +
+   preferences); `outdated` are superseded older versions; `relations` are graph links. */
+export interface LearnedCounts {
+   memories: number;
+   outdated: number;
+   relations: number;
+}
+
+/* The offer to forget what a just-privated conversation taught. Ingest calls it only for the
+   conversation on screen, still private, with something to forget; the view shows the
+   confirm, and only its Forget button reaches Ingest.forgetConversationMemories. */
+export interface MemoryForgetSink {
+   /* `stillValid` re-checks "on screen and still private" if the offer has to wait for another
+      dialog to close first. */
+   offerForgetLearned(
+      conversationId: number,
+      counts: LearnedCounts,
+      assistantName: string,
+      stillValid: () => boolean
+   ): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -635,6 +658,7 @@ export interface IngestSinks {
    context: ContextSink;
    notifications: NotificationsSink;
    conversationList: ConversationListSink;
+   memoryForget: MemoryForgetSink;
 }
 
 /* A document uploaded via POST /api/documents: DAWN extracts its text server-side and
@@ -760,6 +784,11 @@ export interface Ingest {
    renameConversation(id: number, title: string): void;
    deleteConversation(id: number): void;
    setPinned(id: number, pinned: boolean): void;
+   /* Forget every memory learned from a conversation and its continuations
+      (forget_conversation_memories). DESTRUCTIVE, the user's own memory: the caller MUST gate
+      it behind a named confirm reached from a deliberate gesture, never a frame handler.
+      Progress + the result surface as a notice (the reply can take ~2 min). */
+   forgetConversationMemories(id: number): void;
    /* --- Library (document + notes viewer). Reads: doc_library_list (list/search/paginate)
       plus an original-file fetch and the full-text get; the two edit writes are below
       (updateNote / updateDocText). --- refreshLibrary re-lists the first page; searchLibrary

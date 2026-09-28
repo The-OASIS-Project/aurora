@@ -100,6 +100,26 @@ const PONG_TIMEOUT_MS = 6000; // a ping unanswered this long counts as one miss
 const MAX_MISSED_PONGS = 2; // consecutive misses -> the link is dead, force a reconnect
 const MAX_UNSUPPORTED_PROBES = 3; // no pong EVER -> assume an older DAWN, stop probing (no false dead)
 const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
+/* Forget-what-was-learned (conversation_learned / forget_conversation_memories). DAWN counts
+   and forgets one request per user at a time and answers `busy` meanwhile: re-ask the count
+   every 5s, up to 12 times (DAWN's own client's limits). A forget waits up to ~120s for an
+   in-flight memory save server-side; past 150s with no reply the outcome is unknown. */
+const LEARNED_RETRY_MS = 5000;
+const LEARNED_RETRY_MAX = 12;
+const FORGET_REPLY_TIMEOUT_MS = 150000;
+const FORGET_NOTICE_ID = "memory-forget";
+/* Per-turn frames that must not render into the view when they belong to a conversation other
+   than the one on screen (see isForeignConv). Global/untagged frames are never foreign. */
+const FOREIGN_GATED_FRAMES = new Set([
+   "state",
+   "metrics_update",
+   "stream_start",
+   "stream_delta",
+   "stream_end",
+   "transcript",
+   "context_injection",
+   "context_citations"
+]);
 const CONV_LIST_DEBOUNCE_MS = 700; // coalesce a turn's >=2 bumped conversation_list_changed frames into one refresh
 const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
 const REANCHOR_FALLBACK_MS = 3000; // no set_active_conversation_response in this long -> older DAWN, fall back to load_conversation
@@ -988,6 +1008,22 @@ export class DawnIngest implements Ingest {
    private localModels: string[] = [];
    private pendingNewConvTitle = ""; // title derived from the first message, applied on new_conversation_response
    private isPrivate = false;
+   /* The conversation a tool reset just left, whose in-flight reply still renders here until
+      that turn goes idle (see conversation_reset); 0 = none. */
+   private resetTurnConv = 0;
+   private lastState = "idle"; // last applied DAWN machine state (settleTurnOnSwitch)
+   private assistantName = "DAWN"; // config ai_name, for the forget-learned prompt's wording
+   /* Busy re-asks of conversation_learned so far, per conversation, and their pending timers. */
+   private readonly learnedRetries = new Map<number, number>();
+   private readonly learnedRetryTimers = new Set<number>();
+   /* The forget THIS client sent and is awaiting (0 = none), its no-reply timer, and the id a
+      failure's Retry re-sends (always one this client sent after the user confirmed it). */
+   private pendingForgetId = 0;
+   private forgetTimer = 0;
+   /* A forget that hit the no-reply timeout: its late reply is still the only confirmation of
+      what happened, so it is accepted while nothing newer is pending. */
+   private timedOutForgetId = 0;
+   private forgetRetryId = 0;
    private readonly llmListeners: Array<() => void> = [];
    private readonly seenUnhandled = new Set<string>();
 
@@ -1416,6 +1452,26 @@ export class DawnIngest implements Ingest {
       const type = msg.type ?? "";
       const p = (msg.payload ?? {}) as Record<string, unknown>;
 
+      /* A turn can run to completion on a conversation the user has switched away from (DAWN
+         keeps it in that conversation's own history). Its live frames are tagged with that
+         conversation_id; drop them so they never render into the conversation on screen.
+         tool_step and message_appended apply their own conversation checks below. */
+      if (FOREIGN_GATED_FRAMES.has(type)) {
+         /* context_injection / context_citations are FLAT AT THE ROOT (no payload wrapper). */
+         const src = type === "context_injection" || type === "context_citations" ? (msg as Record<string, unknown>) : p;
+         /* The llm_state_update smuggled in a transcript is session-wide, not a turn's row. */
+         if (!(type === "transcript" && p.role === "__llm_state__") && this.isForeignConv(src)) {
+            /* A foreign turn's voice still plays here: DAWN keeps sending the origin a turn's audio
+               after it switches away (conn_is_audio_target), so that turn's speaking/idle state
+               still drives the echo-mute; only the visuals are skipped. */
+            if (type === "state") {
+               this.dawnSpeaking = p.state === "speaking";
+               this.updateMicMute();
+            }
+            return;
+         }
+      }
+
       switch (type) {
          case "session":
             /* Store the token so a reload resumes this same session (see TOKEN_KEY).
@@ -1567,9 +1623,8 @@ export class DawnIngest implements Ingest {
             };
             const name = cfg.general?.ai_name;
             if (name) {
-               this.sinks.conversation.setAssistantName(
-                  name.charAt(0).toUpperCase() + name.slice(1)
-               );
+               this.assistantName = name.charAt(0).toUpperCase() + name.slice(1);
+               this.sinks.conversation.setAssistantName(this.assistantName);
             }
             const c = cfg.llm?.cloud;
             if (c) {
@@ -1753,6 +1808,7 @@ export class DawnIngest implements Ingest {
                   /* The persisted conversation is gone or inaccessible: silently fall
                      back to a fresh chat - no error notice for an auto-resume. */
                   this.resumingStored = false;
+                  this.settleTurnOnSwitch();
                   this.convId = 0;
                   localStorage.removeItem(CONV_KEY);
                   this.sinks.conversationList.setActive(0);
@@ -1763,6 +1819,7 @@ export class DawnIngest implements Ingest {
                      away: drop to a fresh chat so the next turn opens a new one via the
                      convId===0 path, rather than tagging turns to a dead id. Silent. */
                   this.reanchoring = false;
+                  this.settleTurnOnSwitch();
                   this.convId = 0;
                   localStorage.removeItem(CONV_KEY);
                   this.sinks.conversationList.setActive(0);
@@ -1869,6 +1926,7 @@ export class DawnIngest implements Ingest {
             if (!this.reanchoring) break; // not our in-flight re-anchor
             this.reanchoring = false;
             if ((p as { success?: boolean }).success === false) {
+               this.settleTurnOnSwitch();
                this.convId = 0;
                localStorage.removeItem(CONV_KEY);
                this.sinks.conversationList.setActive(0);
@@ -1924,6 +1982,118 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "set_private_response": {
+            /* The conversation's privacy is persisted; a private flip also privated its
+               continuations (`also_private`). Refetch the picker so every affected row's badge is
+               right, rather than patching ids one by one. A failure is surfaced; the toggle keeps
+               the user's intent (a later load reflects the server's real value). */
+            if ((p as { success?: boolean }).success === false) {
+               const err = String((p as { error?: string }).error ?? "");
+               this.spikeNotice("privacy", "attention", err || "Couldn't change privacy", {
+                  x: 0,
+                  y: -0.4,
+                  hold: 5,
+                  tone: "attention"
+               });
+               break;
+            }
+            this.scheduleListRefresh();
+            break;
+         }
+
+         case "conversation_learned": {
+            /* Unsolicited after a set_private{true}: what memory had already learned from the
+               conversation. Busy = another count/forget is running for this user -> re-ask. Only
+               OFFERS a forget; the delete itself fires solely from the dialog's Forget button. */
+            const lp = p as {
+               conversation_id?: number;
+               success?: boolean;
+               busy?: boolean;
+               memories?: number;
+               outdated?: number;
+               relations?: number;
+            };
+            const cid = Number(lp.conversation_id ?? 0);
+            if (!cid) break;
+            if (lp.success !== true && lp.busy === true) {
+               const tries = (this.learnedRetries.get(cid) ?? 0) + 1;
+               if (tries <= LEARNED_RETRY_MAX) {
+                  this.learnedRetries.set(cid, tries);
+                  const timer = window.setTimeout(() => {
+                     this.learnedRetryTimers.delete(timer);
+                     /* Link down: the re-ask would be dropped and never answered, so end the chain
+                        and drop its count (a later busy chain starts with the full budget). */
+                     if (!this.isLinkLive()) {
+                        this.learnedRetries.delete(cid);
+                        return;
+                     }
+                     this.send({ type: "conversation_learned_request", payload: { conversation_id: cid } });
+                  }, LEARNED_RETRY_MS);
+                  this.learnedRetryTimers.add(timer);
+                  break;
+               }
+            }
+            this.learnedRetries.delete(cid);
+            if (lp.success !== true) {
+               /* Fail toward not asking; the user can still forget from the picker. */
+               console.warn("[dawn] conversation_learned: could not count learned memories", cid);
+               break;
+            }
+            /* Only for the conversation on screen, and only while it is still private: the
+               prompt says "this conversation", so an offer for one the user has since left (or
+               made public again) would be ambiguous. The picker's Forget covers those. */
+            if (cid !== this.convId || !this.isPrivate) break;
+            const counts = {
+               memories: Math.max(0, Number(lp.memories ?? 0) || 0),
+               outdated: Math.max(0, Number(lp.outdated ?? 0) || 0),
+               relations: Math.max(0, Number(lp.relations ?? 0) || 0)
+            };
+            if (counts.memories + counts.outdated + counts.relations > 0) {
+               this.sinks.memoryForget.offerForgetLearned(
+                  cid,
+                  counts,
+                  this.assistantName,
+                  () => cid === this.convId && this.isPrivate
+               );
+            }
+            break;
+         }
+
+         case "forget_conversation_memories_response": {
+            /* The forget's outcome replaces the sticky "Forgetting..." card. DAWN's error strings
+               are user-ready (busy, too many continuations, "nothing was changed"). */
+            const fp = p as {
+               conversation_id?: number;
+               success?: boolean;
+               error?: string;
+               memories?: number;
+               outdated?: number;
+               relations?: number;
+            };
+            /* Only the reply to the forget this client is awaiting: a late reply to an older
+               request (or one for a forget another tab sent before a takeover) must not clear the
+               pending card or arm a Retry for something not confirmed here. */
+            const replyId = Number(fp.conversation_id ?? 0);
+            const awaited = this.pendingForgetId || this.timedOutForgetId;
+            if (!awaited || replyId !== awaited) break;
+            this.timedOutForgetId = 0;
+            this.clearForgetPending();
+            if (fp.success === true) {
+               const n = Math.max(0, Number(fp.memories ?? 0) || 0);
+               const rest = (Number(fp.outdated ?? 0) || 0) + (Number(fp.relations ?? 0) || 0);
+               const summary =
+                  n + rest === 0
+                     ? "Nothing left to forget"
+                     : n > 0
+                       ? `Forgot ${n} ${n === 1 ? "memory" : "memories"}`
+                       : "Forgot older versions and connections";
+               this.spikeNotice(FORGET_NOTICE_ID, "memory", summary, { x: 0, y: -0.4, hold: 5 });
+            } else {
+               this.forgetFailed(replyId, String(fp.error ?? "") || "Could not forget memories");
+            }
+            break;
+         }
+
          case "delete_conversation_response": {
             if ((p as { success?: boolean }).success === false) {
                const msg =
@@ -1943,6 +2113,7 @@ export class DawnIngest implements Ingest {
             /* Deleted the open conversation: DAWN cleared the session server-side, so
                reset our surface + id to a fresh chat so the transcript doesn't strand. */
             if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
+               this.settleTurnOnSwitch(); // its live turn (if any) is now foreign; don't strand the visuals
                this.convId = 0;
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.sinks.conversation.clear();
@@ -2011,6 +2182,10 @@ export class DawnIngest implements Ingest {
                preserving the previous conversation instead of appending to it. */
             this.sinks.conversation.clear();
             this.sinks.context.clear();
+            /* The reset arrives MID-turn (the tool returns and the model still replies), and that
+               reply stays tagged with the old conversation. Keep it on screen until the turn
+               ends, rather than gating it as foreign and stranding the reactor mid-reply. */
+            if (this.convId > 0) this.resetTurnConv = this.convId;
             this.convId = 0;
             this.setActiveTitle(""); // fresh chat -> HUD shows "New conversation"
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
@@ -2059,26 +2234,9 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "state": {
-            const st = String(p.state ?? "idle");
-            const detail = typeof p.detail === "string" ? p.detail : undefined;
-            /* Drive the continuous echo-mute off DAWN's speaking state: it stays "speaking"
-               across TTS sentence gaps, so muting on it (not on per-segment TTS playback)
-               keeps the mic from hearing DAWN's own voice between sentences. */
-            this.dawnSpeaking = st === "speaking";
-            this.updateMicMute();
-            this.sinks.reactor.setState(toReactorState(st));
-            this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
-            /* Keep the window upright while DAWN speaks (persists across sentence gaps), so it
-               doesn't recede-then-raise between spoken bursts. Self-clears when state leaves
-               "speaking" (the next frame passes false -> normal idle recede). */
-            this.sinks.conversation.setSpeaking(this.dawnSpeaking);
-            this.sinks.conversation.setStatus(this.activityFor(st, detail, p.tools));
-            /* No client-side persist on idle (or anywhere): DAWN is the sole writer of the turn
-               (server-authoritative persistence); the client only renders + reconciles the fanned
-               message_appended. `state` here just drives the reactor / activity chip. */
+         case "state":
+            this.applyState(String(p.state ?? "idle"), typeof p.detail === "string" ? p.detail : undefined, p.tools);
             break;
-         }
 
          case "error": {
             /* Route on `severity` (§9.1b): info = benign notice (e.g.
@@ -2806,6 +2964,8 @@ export class DawnIngest implements Ingest {
                   tail so a NORMAL spoken turn keeps its voice animation until DAWN's real state:idle
                   arrives (which handles the TTS-tail timing). */
                if (!this.dawnSpeaking && !this.tts.isSpeaking()) {
+                  this.lastState = "idle";
+                  this.resetTurnConv = 0;
                   this.sinks.reactor.setState("idle");
                   this.sinks.conversation.setThinking(false);
                   this.sinks.conversation.setStatus(this.activityFor("idle", undefined, undefined));
@@ -3014,6 +3174,7 @@ export class DawnIngest implements Ingest {
       /* Finalize any in-flight streamed bubble before wiping (both the menu New Chat and the
          picker "+ New" arrive here). */
       this.sinks.conversation.endReply();
+      this.settleTurnOnSwitch();
       this.sinks.conversation.clear();
       this.sinks.context.clear();
       this.sinks.conversationList.setActive(0);
@@ -3102,6 +3263,7 @@ export class DawnIngest implements Ingest {
          a text sent before the response is tagged to the right conversation (M2);
          load_conversation_response confirms it. */
       this.sinks.conversation.endReply();
+      if (id !== this.convId) this.settleTurnOnSwitch();
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
@@ -3130,6 +3292,79 @@ export class DawnIngest implements Ingest {
 
    setPinned(id: number, pinned: boolean): void {
       if (id > 0) this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
+   }
+
+   /* Forget what a conversation (and its continuations) taught memory. DESTRUCTIVE: reached
+      only from a confirm dialog's Forget button (the post-private offer or the picker) or a
+      failure card's Retry, never a frame handler. DAWN needs only ownership, not privacy. A
+      sticky "Forgetting..." card stands in until the reply (up to ~2 min server-side). */
+   forgetConversationMemories(id: number): void {
+      if (id <= 0) return;
+      /* DAWN runs one forget per user at a time and answers a second with "busy", which would
+         be taken as the first one's failure (and drop its real result). Hold it client-side. */
+      if (this.pendingForgetId) {
+         this.spikeNotice("memory-forget-busy", "memory", "A forget is already running; try again when it finishes", {
+            x: 0,
+            y: -0.3,
+            hold: 5
+         });
+         return;
+      }
+      this.timedOutForgetId = 0;
+      this.clearForgetPending();
+      if (!this.isLinkLive()) {
+         this.forgetFailed(id, "Cannot forget memories: not connected");
+         return;
+      }
+      this.pendingForgetId = id;
+      this.sinks.notifications.notify({
+         id: FORGET_NOTICE_ID,
+         kind: "memory",
+         summary: "Forgetting\u2026",
+         sticky: true,
+         x: 0,
+         y: -0.4
+      });
+      this.forgetTimer = window.setTimeout(() => {
+         this.clearForgetPending();
+         this.timedOutForgetId = id;
+         this.spikeNotice(
+            FORGET_NOTICE_ID,
+            "memory",
+            "No reply to the forget request; check the Memory panel before retrying",
+            { x: 0, y: -0.4, tone: "attention", persist: true }
+         );
+      }, FORGET_REPLY_TIMEOUT_MS);
+      this.send({ type: "forget_conversation_memories", payload: { conversation_id: id } });
+   }
+
+   /* Drop the in-flight forget's timer and card. The card is removed (not replaced in place)
+      because a notice's controls + sticky-ness are fixed at mount. */
+   private clearForgetPending(): void {
+      window.clearTimeout(this.forgetTimer);
+      this.forgetTimer = 0;
+      this.pendingForgetId = 0;
+      this.forgetRetryId = 0;
+      this.sinks.notifications.remove(FORGET_NOTICE_ID);
+   }
+
+   /* A forget that didn't happen: show why, with Retry (re-sends for the same conversation). */
+   private forgetFailed(id: number, message: string): void {
+      this.sinks.notifications.remove(FORGET_NOTICE_ID);
+      this.forgetRetryId = id;
+      this.spikeNotice(FORGET_NOTICE_ID, "memory", message, {
+         x: 0,
+         y: -0.4,
+         tone: "attention",
+         persist: true,
+         actions:
+            id > 0
+               ? [
+                    { id: "retry", label: "Retry" },
+                    { id: "dismiss", label: "Dismiss" }
+                 ]
+               : undefined
+      });
    }
 
    /* --- Library (Ingest) -------------------------------------------------- */
@@ -3500,6 +3735,57 @@ export class DawnIngest implements Ingest {
       this.micMuteCooldown = 0;
       this.mic.continuousStop(); // synchronous: releases the mic and emits idle
       this.send({ type: "always_on_disable" });
+   }
+
+   /* Apply one DAWN machine state to the reactor, echo-mute and conversation chip. */
+   private applyState(st: string, detail?: string, tools?: unknown): void {
+      this.lastState = st;
+      if (st === "idle") this.resetTurnConv = 0; // the reset turn (if any) has finished
+      /* Drive the continuous echo-mute off DAWN's speaking state: it stays "speaking"
+         across TTS sentence gaps, so muting on it (not on per-segment TTS playback)
+         keeps the mic from hearing DAWN's own voice between sentences. */
+      this.dawnSpeaking = st === "speaking";
+      this.updateMicMute();
+      this.sinks.reactor.setState(toReactorState(st));
+      this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
+      /* Keep the window upright while DAWN speaks (persists across sentence gaps), so it
+         doesn't recede-then-raise between spoken bursts. Self-clears when state leaves
+         "speaking" (the next frame passes false -> normal idle recede). */
+      this.sinks.conversation.setSpeaking(this.dawnSpeaking);
+      this.sinks.conversation.setStatus(this.activityFor(st, detail, tools));
+      /* No client-side persist on idle (or anywhere): DAWN is the sole writer of the turn
+         (server-authoritative persistence); the client only renders + reconciles the fanned
+         message_appended. `state` here just drives the reactor / activity chip. */
+   }
+
+   /* True when a frame is tagged with a conversation other than the one on screen (mirrors
+      DAWN's own client, isForeignConvFrame). Untagged frames (global / control) never are. A
+      tagged frame while no conversation is bound (a fresh chat) is foreign too: DAWN always
+      delivers new_conversation_response (ours, or the server-initiated voice bind) BEFORE that
+      conversation's turn streams, so a legitimate turn's frames find convId already set. */
+   private isForeignConv(src: Record<string, unknown>): boolean {
+      const c = Number(src.conversation_id ?? 0);
+      return c > 0 && c !== this.convId && c !== this.resetTurnConv;
+   }
+
+   /* Leaving a conversation mid-turn: its remaining frames (including its terminal idle) are
+      now foreign and dropped, so settle the turn visuals here or the reactor/chip would hang in
+      thinking/speaking. Called from every path that switches or unbinds the conversation. */
+   private settleTurnOnSwitch(): void {
+      this.resetTurnConv = 0;
+      /* A typed turn's echo from the conversation just left is now dropped as foreign; don't
+         let its entry absorb a same-text message here. */
+      this.typedEchoes.length = 0;
+      /* "listening" here is the ASR phase of a turn (conversation-tagged); always-on's armed
+         state rides always_on_state, so settling it is safe. */
+      if (
+         this.lastState === "thinking" ||
+         this.lastState === "speaking" ||
+         this.lastState === "summarizing" ||
+         this.lastState === "listening"
+      ) {
+         this.applyState("idle");
+      }
    }
 
    /* Single echo-mute decision for continuous listening. Muted while DAWN is speaking OR its
@@ -3968,6 +4254,14 @@ export class DawnIngest implements Ingest {
       loop and send the matching scheduler_action to DAWN (snooze re-fires it later; dismiss
       ends it). Only fires for a tracked ringing alarm; other notices have no action buttons. */
    noticeAction(id: string, action: string, value?: string): void {
+      /* A failed forget's Retry: a deliberate click on the card, re-sending the SAME forget
+         the user already confirmed. Dismiss just closes the card (the layer removed it). */
+      if (id === FORGET_NOTICE_ID) {
+         const retryId = this.forgetRetryId;
+         this.forgetRetryId = 0;
+         if (action === "retry" && retryId > 0) this.forgetConversationMemories(retryId);
+         return;
+      }
       if (!id.startsWith("scheduler-")) return;
       if (action !== "snooze" && action !== "dismiss") return;
       const eventId = Number(id.slice("scheduler-".length));
@@ -4100,6 +4394,12 @@ export class DawnIngest implements Ingest {
       dies). tts may be undefined if start() never ran. */
    dispose(): void {
       this.disconnect();
+      /* The forget-learned timers: busy re-asks of the count and the forget's no-reply timeout. */
+      for (const t of this.learnedRetryTimers) window.clearTimeout(t);
+      this.learnedRetryTimers.clear();
+      this.learnedRetries.clear();
+      window.clearTimeout(this.forgetTimer);
+      this.forgetTimer = 0;
       /* Settle any in-flight full-text reads so their promises + timers never dangle across HMR. */
       for (const pending of this.pendingDocGets.values()) {
          window.clearTimeout(pending.timer);

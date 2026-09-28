@@ -84,6 +84,7 @@ export class StubIngest implements Ingest {
    dismiss(_id: string): void {}
    noticeAction(_id: string, _action: string, _value?: string): void {}
    deleteMemory(_itemId: string): void {}
+   forgetConversationMemories(_id: number): void {}
 
    /* No music engine behind the stub. */
    musicControl(_action: string, _params?: Record<string, unknown>): void {}

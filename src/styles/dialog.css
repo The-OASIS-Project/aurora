@@ -214,7 +214,11 @@
    border-radius: 2px;
    cursor: pointer;
 }
-.dialog-btn:hover {
+.dialog-btn:disabled {
+   opacity: 0.45;
+   cursor: default;
+}
+.dialog-btn:hover:not(:disabled) {
    color: var(--text);
    border-color: color-mix(in srgb, var(--text) 32%, transparent);
 }
@@ -225,4 +229,21 @@
 }
 .dialog-btn-danger:hover {
    border-color: color-mix(in srgb, var(--alert) 70%, transparent);
+}
+
+/* Fine print under the body (scope + caveats): smaller and fainter than the body prose. */
+.dialog-note {
+   margin: 0;
+   font-size: var(--fs-label);
+   line-height: 1.5;
+   letter-spacing: 0.01em;
+   color: var(--text-faint);
+   max-width: 34rem;
+}
+
+/* A visible keyboard focus on the action buttons: an unprompted destructive dialog starts
+   focused on its safe choice, and that should read at a glance. */
+.dialog-btn:focus-visible {
+   outline: 1px solid var(--accent);
+   outline-offset: 2px;
 }

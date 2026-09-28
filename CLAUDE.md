@@ -66,12 +66,14 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     **session-continuity** writes (`set_active_conversation` / `load_conversation` re-anchors on
     reconnect + the takeover reclaim, see the reconnect gotcha below); and **memory deletes**
     (`delete_memory_fact` / `_preference` / `_summary` / `_entity` - user-scoped, the user's own
-    memory, from the Context panel).
+    memory, from the Context panel), plus **`forget_conversation_memories`** (everything one
+    conversation and its continuations taught memory: offered after `set_private` from DAWN's
+    `conversation_learned` count, or from the picker's per-row Forget).
   - **Destructive writes are gated.** Any write that permanently destroys DAWN-side data -
     `delete_conversation` (cascade-deletes the conversation's images + child background jobs and
-    refuses on a running job), `watch_remove`, `delete_memory_*` - is gated behind a named confirm
-    and reachable ONLY from a deliberate user gesture, **never a frame handler**. Rename/pin/enable
-    flips are benign metadata, no gate.
+    refuses on a running job), `watch_remove`, `delete_memory_*`, `forget_conversation_memories` -
+    is gated behind a named confirm and reachable ONLY from a deliberate user gesture, **never a
+    frame handler**. Rename/pin/enable flips are benign metadata, no gate.
   - A new user-scoped write is fine; **flag it only if it might cross into operator/admin/global
     territory or could depower the daemon.**
 - **Three-space indentation. No em dashes in prose.**
@@ -129,8 +131,8 @@ spawning new tabs.
 
 `ingest -> state -> choreography -> render`, downward dependencies only. `Ingest`
 (`src/ingest/`) is the single DAWN boundary; it feeds the four seam sinks (store, reactor,
-conversation, telemetry) plus the self-owned view sinks (music, calendar, ha,
-notifications, conversation list). `DawnIngest` is the real WebSocket client and
+conversation, telemetry) plus the self-owned view sinks (music, calendar, ha, watches,
+stocks, watchlist, library, context, notifications, conversation list, memory forget). `DawnIngest` is the real WebSocket client and
 `StubIngest` is fake data, swapped in one line in `main.ts`. The `Store` holds importance;
 `spike()` / `tick()` are the spike-then-recede, and the choreographer maps importance to
 depth - but this seam is exercised only by `StubIngest` now (see the notification note
