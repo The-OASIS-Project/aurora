@@ -285,7 +285,11 @@ body.engaged #docks {
    top: 34px;
    right: 40px;
    text-align: right;
-   min-width: 12rem;
+   /* A FIXED width (the widest layout: the CONVERSATION row at full title length), so the
+      readout doesn't shrink and grow as the title / model / numbers change. Values that don't
+      fit ellipsize inside it instead (.tel-val). Capped to the viewport on a narrow screen. */
+   width: 21rem;
+   max-width: calc(100vw - 2rem);
    /* Match the clock: horizontal breathing room so the readout never sits tight against
       the edge / frame corner when docked. */
    padding: 0 0.6rem;
@@ -319,9 +323,15 @@ body.engaged #docks {
 .tel-key {
    color: var(--text-faint);
    white-space: nowrap;
+   flex-shrink: 0;
 }
+/* The value takes the rest of the fixed-width row and ellipsizes past it, so a long title or
+   model name trims instead of stretching the box. */
 .tel-val {
    white-space: nowrap;
+   min-width: 0;
+   overflow: hidden;
+   text-overflow: ellipsis;
 }
 .tel-val {
    color: color-mix(in srgb, var(--accent) 70%, var(--text));
@@ -330,20 +340,13 @@ body.engaged #docks {
    separates it from the live perf metrics below. */
 .tel-model .tel-val {
    color: var(--accent-glow);
-   /* Hard backstop so a long local model name/path can't stretch the box; the ingest already
-      strips a path to its filename and front-cuts the length (keeping the distinctive tail), so
-      this end-ellipsis only trims in the rare case that value is still too wide. */
-   max-width: 15rem;
-   overflow: hidden;
-   text-overflow: ellipsis;
+   /* The ingest already strips a local model path to its filename and front-cuts the length
+      (keeping the distinctive tail); the row's end-ellipsis only trims what is still too wide. */
 }
-/* Conversation title: identity like the model, but can be long - cap it and ellipsize
-   so a wordy auto-title never blows out the readout width. */
+/* Conversation title: identity like the model; a wordy auto-title ellipsizes within the
+   fixed row width. */
 .tel-title .tel-val {
    color: var(--accent-glow);
-   max-width: 12rem;
-   overflow: hidden;
-   text-overflow: ellipsis;
 }
 .tel-sep {
    height: 1px;
