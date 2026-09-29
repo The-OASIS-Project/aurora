@@ -63,6 +63,11 @@ import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import {
    effortOptionsForModel,
+   nearestEffort,
+   parseReasoningCaps,
+   reasoningNote,
+   toReasoning,
+   type ReasoningCaps,
    type LlmMode,
    type LlmProvider,
    type LlmState,
@@ -987,6 +992,17 @@ export class DawnIngest implements Ingest {
       effort: "medium",
       providers: { openai: false, claude: false, gemini: false, openrouter: false } as Record<LlmProvider, boolean>
    };
+   /* DAWN's per-model reasoning capabilities (P1.1b). cloudCaps is null until a server sends
+      them (an older server never does: the panel then falls back to the name heuristic).
+      frameCaps is the caps a per-conversation frame carried for ITS model, which covers a
+      loaded conversation's model that isn't in the active list. */
+   private cloudCaps: Record<LlmProvider, Record<string, ReasoningCaps>> | null = null;
+   private localCaps: Record<string, ReasoningCaps> = {};
+   private frameCaps: { mode: LlmMode; provider: LlmProvider; model: string; caps: ReasoningCaps } | null = null;
+   /* The stored reasoning pick (thinking_mode_pick / reasoning_effort_pick): what the user chose,
+      which can differ from what runs. Display only - the panel shows the EFFECTIVE value and
+      explains the difference; DAWN keeps and re-resolves the pick itself. */
+   private reasoningPick: { mode: Reasoning | null; effort: string } = { mode: null, effort: "" };
    private readonly cloudModels: Record<LlmProvider, string[]> = {
       openai: [],
       claude: [],
@@ -1637,6 +1653,19 @@ export class DawnIngest implements Ingest {
                this.openrouterDefaultIdx =
                   typeof c.openrouter_default_model_idx === "number" ? c.openrouter_default_model_idx : 0;
             }
+            /* Per-model reasoning capabilities, keyed exactly like the model lists above. */
+            const rc = p.reasoning_capabilities;
+            if (rc && typeof rc === "object") {
+               const caps: Record<LlmProvider, Record<string, ReasoningCaps>> = { openai: {}, claude: {}, gemini: {}, openrouter: {} };
+               for (const [prov, models] of Object.entries(rc as Record<string, unknown>)) {
+                  if (!isLlmProvider(prov) || !models || typeof models !== "object") continue;
+                  for (const [model, raw] of Object.entries(models as Record<string, unknown>)) {
+                     const parsed = parseReasoningCaps(raw);
+                     if (parsed) caps[prov][model] = parsed;
+                  }
+               }
+               this.cloudCaps = caps;
+            }
             /* Vision capability per provider-type (config flags). isVisionCapable() resolves
                these against the active mode, so it follows a later cloud<->local switch. */
             this.cloudVision = cfg.llm?.cloud?.vision_enabled === true;
@@ -1666,10 +1695,13 @@ export class DawnIngest implements Ingest {
                const prov = (rt.provider ?? "").toLowerCase();
                if (isLlmProvider(prov)) this.llm.provider = prov;
                if (rt.model) this.llm.model = rt.model;
-               /* Reasoning/effort: prefer the session's resolved runtime values; fall
-                  back to the global config default only for older servers that omit them
-                  from llm_runtime. Legacy "auto" folds into "enabled". */
-               this.applyReasoning(rt.thinking_mode ?? cfg.llm?.thinking?.mode, rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort);
+               /* Reasoning/effort: the session's EFFECTIVE runtime values (+ the stored pick and
+                  this model's caps); fall back to the global config default only for older
+                  servers that omit them from llm_runtime. */
+               this.applyReasoningFields(p.llm_runtime, {
+                  mode: rt.thinking_mode ?? cfg.llm?.thinking?.mode,
+                  effort: rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort
+               });
             }
             if (rt.openai_available !== undefined) {
                this.llm.providers = {
@@ -1689,8 +1721,13 @@ export class DawnIngest implements Ingest {
          }
 
          case "list_llm_models_response": {
-            const models = (p.models ?? []) as Array<{ name?: string }>;
+            const models = (p.models ?? []) as Array<{ name?: string; reasoning_capabilities?: unknown }>;
             this.localModels = models.map((m) => m.name ?? "").filter(Boolean);
+            this.localCaps = {};
+            for (const m of models) {
+               const parsed = m.name ? parseReasoningCaps(m.reasoning_capabilities) : null;
+               if (m.name && parsed) this.localCaps[m.name] = parsed;
+            }
             /* Reconcile in case we are in local mode with a model that predates this list
                (Mode switched to local before it arrived) - picks a valid local model now. */
             this.reconcileModel();
@@ -1701,12 +1738,11 @@ export class DawnIngest implements Ingest {
             /* Authoritative echo of a set_session_llm change (§9.1d). Reflect the
                value the SERVER resolved, not the one the user picked, across every
                field the response carries (provider / model / *_available /
-               thinking_mode / reasoning_effort): native Claude clamps a
-               mid-conversation thinking-disable back to enabled (§9.2), and a
-               provider switch resolves a new model + availability set the optimistic
-               local state does not know. Following the echo keeps the panel from
-               showing a state the session is not actually in. The paired
-               INFO_THINKING_KEPT_ON notice (an `error` frame) explains the clamp. */
+               thinking_mode / reasoning_effort, which are the EFFECTIVE values): a model
+               may not offer the picked mode/effort (P1.1b), and a provider switch resolves a
+               new model + availability set the optimistic local state does not know.
+               `reasoning_adjusted` = the fields THIS request set were changed to fit the
+               model; DAWN sends no text for it, so Aurora words the notice. */
             if (p.success !== false) {
                if (typeof p.provider === "string") {
                   const prov = p.provider.toLowerCase();
@@ -1723,10 +1759,14 @@ export class DawnIngest implements Ingest {
                      openrouter: p.openrouter_available === true || this.llm.provider === "openrouter"
                   };
                }
-               this.applyReasoning(
-                  typeof p.thinking_mode === "string" ? p.thinking_mode : undefined,
-                  typeof p.reasoning_effort === "string" ? p.reasoning_effort : undefined
-               );
+               this.applyReasoningFields(p);
+               if (p.reasoning_adjusted === true) {
+                  this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
+                     hold: 6,
+                     x: 0,
+                     y: -0.55
+                  });
+               }
                this.notifyLlm();
             } else {
                /* The session LLM change was rejected (e.g. a provider/model DAWN could not
@@ -2239,11 +2279,11 @@ export class DawnIngest implements Ingest {
             break;
 
          case "error": {
-            /* Route on `severity` (§9.1b): info = benign notice (e.g.
-               INFO_THINKING_KEPT_ON), warning/error = a real problem. Fall back to the
+            /* Route on `severity` (§9.1b): info = benign notice, warning/error = a real
+               problem. Fall back to the
                `INFO_` code prefix for older servers that don't send severity. Never
                paint the reactor red for an info notice; instead surface it as an
-               ambient spike so the user sees why (e.g. the thinking toggle held on). */
+               ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
             /* The session was revoked/expired server-side (DAWN re-validates the token
                against the DB on every authed verb, including our heartbeat ping, and
@@ -3974,7 +4014,16 @@ export class DawnIngest implements Ingest {
          reasoning is disabled, else LOW/MEDIUM/HIGH/…). Do NOT push an empty model
          — llm_state_update can arrive after get_config, and an empty value would
          clobber the cached (persistent) reading. */
-      const effort = this.llm.reasoning === "disabled" ? "OFF" : this.llm.effort.toUpperCase();
+      const caps = this.currentCaps();
+      const entry = caps?.modes.find((m) => m.mode === this.llm.reasoning);
+      const effort =
+         caps && !caps.modes.length
+            ? "N/A" // the model has no reasoning control
+            : this.llm.reasoning === "disabled"
+              ? "OFF"
+              : entry && !entry.efforts.length
+                ? "ON" // a mode with no effort choice (e.g. Ollama think on)
+                : this.llm.effort.toUpperCase();
       const update: Record<string, string> = {
          effort,
          provider: this.llm.mode === "local" ? "Local" : providerLabel(this.llm.provider)
@@ -4014,13 +4063,18 @@ export class DawnIngest implements Ingest {
          const prov = pl.provider.toLowerCase();
          if (isLlmProvider(prov)) this.llm.provider = prov;
       }
-      if (typeof pl.model === "string") this.llm.model = pl.model;
+      if (typeof pl.model === "string" && pl.model) this.llm.model = pl.model;
       this.llm.providers = {
          openai: pl.openai_available === true,
          claude: pl.claude_available === true,
          gemini: pl.gemini_available === true,
          openrouter: pl.openrouter_available === true || this.llm.provider === "openrouter"
       };
+      /* A switch_llm tool call changed the session model, and reasoning now depends on the model
+         (P1.1b), but this frame carries no reasoning fields or caps. Re-read the session's
+         runtime (a full get_config, not a lists-only refresh) for the effective values. */
+      this.modelsRefreshOnly = false;
+      this.send({ type: "get_config" });
       this.notifyLlm();
    }
 
@@ -4058,16 +4112,79 @@ export class DawnIngest implements Ingest {
          this.llm.providers = { ...this.llm.providers, [prov]: true };
       }
       if (s.model) this.llm.model = s.model;
-      this.applyReasoning(s.thinking_mode, s.reasoning_effort);
+      this.applyReasoningFields(settings);
    }
 
-   /* Set the panel's reasoning/effort from a server-provided (thinking_mode,
-      reasoning_effort) pair — get_config's llm_runtime on connect, or a
-      set_session_llm echo after a change. Both args are optional; a missing field
-      leaves the current value untouched. Legacy "auto" folds into binary "enabled". */
-   private applyReasoning(thinkingMode?: string, effort?: string): void {
-      if (thinkingMode) this.llm.reasoning = thinkingMode === "disabled" ? "disabled" : "enabled";
+   /* Read a frame's reasoning fields (llm_runtime / set_session_llm_response /
+      load_conversation llm_settings): the EFFECTIVE thinking_mode + reasoning_effort shown on the
+      panel, the stored pick (for the "not available here" note), and the caps for the frame's
+      model. Call AFTER this.llm.model is updated from the same frame. `fallback` covers an older
+      server whose frame omits the fields. A missing field leaves the current value untouched. */
+   private applyReasoningFields(raw: unknown, fallback: { mode?: string; effort?: string } = {}): void {
+      const f = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+      const mode = toReasoning(f.thinking_mode ?? fallback.mode);
+      if (mode) this.llm.reasoning = mode;
+      const effort = typeof f.reasoning_effort === "string" && f.reasoning_effort ? f.reasoning_effort : fallback.effort;
       if (effort) this.llm.effort = effort;
+      if ("thinking_mode_pick" in f || "reasoning_effort_pick" in f) {
+         this.reasoningPick = {
+            mode: toReasoning(f.thinking_mode_pick),
+            effort: typeof f.reasoning_effort_pick === "string" ? f.reasoning_effort_pick : ""
+         };
+      }
+      /* Bind the caps only to the model this frame itself names (a frame with no/empty model
+         says nothing about which model they describe). */
+      const caps = parseReasoningCaps(f.reasoning_capabilities);
+      if (caps && typeof f.model === "string" && f.model && f.model === this.llm.model) {
+         this.frameCaps = { mode: this.llm.mode, provider: this.llm.provider, model: f.model, caps };
+      }
+   }
+
+   /* The current model's caps: the list tables first, then what a frame carried for this
+      model. null = unknown (an older server): the panel uses the name heuristic. */
+   private currentCaps(): ReasoningCaps | null {
+      const m = this.llm.model;
+      const listed = this.llm.mode === "local" ? this.localCaps[m] : this.cloudCaps?.[this.llm.provider]?.[m];
+      if (listed) return listed;
+      const fc = this.frameCaps;
+      return fc && fc.model === m && fc.mode === this.llm.mode && (fc.mode === "local" || fc.provider === this.llm.provider)
+         ? fc.caps
+         : null;
+   }
+
+   /* After an optimistic model/provider/mode change: keep the shown mode + effort inside what
+      the new model offers until the server's echo (the authority) lands, so the panel never
+      shows a mode the model lacks. Falls back to the effort heuristic without caps. */
+   private fitReasoningToModel(): void {
+      const caps = this.currentCaps();
+      if (!caps) {
+         const opts = effortOptionsForModel(this.llm.model);
+         if (!opts.includes(this.llm.effort)) this.llm.effort = opts.includes("medium") ? "medium" : opts[0];
+         return;
+      }
+      if (!caps.modes.length) return;
+      if (!caps.modes.some((m) => m.mode === this.llm.reasoning)) {
+         this.llm.reasoning = caps.default.mode && caps.modes.some((m) => m.mode === caps.default.mode) ? caps.default.mode : caps.modes[0].mode;
+      }
+      this.fitEffortToMode(caps);
+   }
+
+   /* Keep the effort inside the current mode's list (a disabled mode keeps its kept pick). */
+   private fitEffortToMode(caps: ReasoningCaps): void {
+      const entry = caps.modes.find((m) => m.mode === this.llm.reasoning);
+      if (!entry || !entry.efforts.length || entry.efforts.includes(this.llm.effort)) return;
+      /* Same rule DAWN resolves with: the nearest offered effort to the pick, ties lower. */
+      this.llm.effort = nearestEffort(entry.efforts, this.reasoningPick.effort || this.llm.effort);
+   }
+
+   /* The pick-vs-effective explanation, "" when they match (or no pick is known). */
+   private reasoningNoteText(): string {
+      return reasoningNote(this.reasoningPick, { mode: this.llm.reasoning, effort: this.llm.effort }, this.currentCaps());
+   }
+
+   /* The clamp notice for a reasoning_adjusted set_session_llm_response. */
+   private reasoningAdjustedText(): string {
+      return this.reasoningNoteText() || "Reasoning adjusted to what this model supports.";
    }
 
    private modelsFor(mode: LlmMode, provider: LlmProvider): string[] {
@@ -4087,11 +4204,10 @@ export class DawnIngest implements Ingest {
                ? this.openrouterDefaultIdx
                : 0;
          this.llm.model = models[idx];
-         /* Keep effort valid for the new model so the panel's segmented control always has
-            an active value (the server clamps + echoes too, but this avoids a transient
+         /* Keep reasoning valid for the new model so the panel's segmented controls always have
+            an active value (the server resolves + echoes too, but this avoids a transient
             no-selection state until the echo lands). */
-         const opts = effortOptionsForModel(this.llm.model);
-         if (!opts.includes(this.llm.effort)) this.llm.effort = opts.includes("medium") ? "medium" : opts[0];
+         this.fitReasoningToModel();
          this.send({ type: "set_session_llm", payload: { type: this.llm.mode, model: this.llm.model } }); // type too (see setProvider)
       }
       this.notifyLlm();
@@ -4108,6 +4224,8 @@ export class DawnIngest implements Ingest {
             providers: this.llm.providers,
             models: this.modelsFor(this.llm.mode, this.llm.provider),
             effortOptions: effortOptionsForModel(this.llm.model),
+            reasoningCaps: this.currentCaps(),
+            reasoningNote: this.reasoningNoteText(),
             isPrivate: this.isPrivate
          }),
          onChange: (cb) => this.llmListeners.push(cb),
@@ -4126,16 +4244,26 @@ export class DawnIngest implements Ingest {
          },
          setModel: (model) => {
             this.llm.model = model;
+            this.fitReasoningToModel();
             this.applyLlm({ type: this.llm.mode, model }); // send type too (see setProvider)
          },
          setReasoning: (reasoning) => {
-            /* Optimistic; the set_session_llm_response echo confirms or clamps it. */
+            /* Optimistic; the set_session_llm_response echo confirms or adjusts it. */
             this.llm.reasoning = reasoning;
+            this.reasoningPick = { ...this.reasoningPick, mode: reasoning }; // the new pick (no stale-pick note flash)
+            const caps = this.currentCaps();
+            if (caps) this.fitEffortToMode(caps);
             this.applyLlm({ thinking_mode: reasoning });
          },
          setEffort: (effort) => {
             this.llm.effort = effort;
-            this.applyLlm({ reasoning_effort: effort });
+            this.reasoningPick = { mode: this.currentCaps() ? this.llm.reasoning : this.reasoningPick.mode, effort };
+            /* With caps, send the mode the panel shows alongside: on a model that can't turn
+               reasoning off, a stale stored "disabled" pick must be replaced by what's shown
+               (DAWN's P1.1b contract). */
+            this.applyLlm(
+               this.currentCaps() ? { thinking_mode: this.llm.reasoning, reasoning_effort: effort } : { reasoning_effort: effort }
+            );
          },
          setPrivate: (on) => {
             this.isPrivate = on;

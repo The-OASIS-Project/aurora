@@ -188,9 +188,14 @@ stub-only - kept as the render seam and the extension point for future store-bac
   are capitalized there). Reasoning and effort now come from that same `llm_runtime`
   (`thinking_mode` / `reasoning_effort`, the session's resolved values; signal-map §9.1a),
   so there is no client-side persistence: read them on connect and reflect the
-  `set_session_llm_response` echo after a change (native Claude clamps a mid-conversation
-  thinking-disable back on, §9.2). Fall back to the config default (`llm.thinking`) only
-  for older servers that omit the runtime fields.
+  `set_session_llm_response` echo after a change. Fall back to the config default
+  (`llm.thinking`) only for older servers that omit the runtime fields.
+- **Reasoning options come from DAWN, per model (signal-map §9.13).** Three modes
+  (`disabled` / `adaptive` / `enabled`; a legacy `auto` from older servers folds to `enabled`); which ones a model offers, and its efforts, come from
+  `reasoning_capabilities`. The panel shows the EFFECTIVE `thinking_mode` / `reasoning_effort`
+  (what runs), never the `*_pick` fields (the stored choice, which DAWN re-resolves per
+  model). Some models cannot turn reasoning off (Opus 5.5, Fable 5.x). `effortOptionsForModel`
+  is only the fallback for an older server that sends no capabilities.
 - **DAWN is the sole writer of persisted turns (server-authoritative).** The daemon persists
   BOTH the user turn and the assistant reply itself; the client saves nothing (see
   `dawn-ws.ts` terminal `stream_end`, which only registers the finalized bubble for

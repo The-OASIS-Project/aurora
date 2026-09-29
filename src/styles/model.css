@@ -63,6 +63,28 @@
    cursor: default;
 }
 
+/* A static value in place of a control (e.g. Reasoning "Unsupported"). */
+.model-value {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.08em;
+   color: var(--text-dim);
+}
+
+/* A small dim line under a control: a thinking-budget size, or why the running reasoning
+   differs from the user's pick. */
+.model-hint {
+   padding: 0 0.6rem 0.3rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   line-height: 1.4;
+   color: var(--text-faint);
+   text-align: right;
+   max-width: 24rem;
+   margin-left: auto;
+}
+
 /* Model dropdown. */
 .model-dd {
    position: relative;

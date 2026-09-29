@@ -6,7 +6,17 @@
  * and the anchor decide.
  */
 
-import type { LlmMode, LlmProvider, ModelControl, Reasoning } from "../model/model.ts";
+import {
+   effortLabel,
+   formatBudgetTokens,
+   nearestEffort,
+   reasoningModeLabel,
+   type LlmMode,
+   type LlmProvider,
+   type LlmState,
+   type ModelControl,
+   type Reasoning
+} from "../model/model.ts";
 
 export interface MenuPanel {
    id: string;
@@ -353,24 +363,7 @@ function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void; 
          );
       }
       rows.push(modelSelect(s.models, s.model, (v) => ctrl.setModel(v)));
-      rows.push(
-         segmented(
-            "Reasoning",
-            [["disabled", "Off"], ["enabled", "On"]],
-            s.reasoning,
-            (v) => ctrl.setReasoning(v as Reasoning)
-         )
-      );
-      const effortOff = s.reasoning === "disabled";
-      rows.push(
-         segmented(
-            "Effort",
-            s.effortOptions.map((o) => [o, cap(o)] as [string, string]),
-            s.effort,
-            (v) => ctrl.setEffort(v),
-            { allDisabled: effortOff }
-         )
-      );
+      rows.push(...reasoningRows(s, ctrl));
       const divider = document.createElement("div");
       divider.className = "model-divider";
       rows.push(divider);
@@ -419,6 +412,80 @@ function segmented(
    }
    row.append(lbl, seg);
    return row;
+}
+
+/* The Reasoning + Effort rows. With DAWN's per-model capabilities: the model's own modes in
+   its order, the current mode's efforts ("Budget" + a size hint for a budget mode; no row when
+   the mode has no effort choice), "Unsupported" for a model with no reasoning control, and a
+   note when the stored pick differs from what runs. Without them (an older server): the old
+   Off/On + name-heuristic effort. Shows the EFFECTIVE values (what the model is actually sent). */
+function reasoningRows(s: LlmState, ctrl: ModelControl): HTMLElement[] {
+   const caps = s.reasoningCaps;
+   if (!caps) {
+      return [
+         segmented("Reasoning", [["disabled", "Off"], ["enabled", "On"]], s.reasoning, (v) => ctrl.setReasoning(v as Reasoning)),
+         segmented(
+            "Effort",
+            s.effortOptions.map((o) => [o, effortLabel(o)] as [string, string]),
+            s.effort,
+            (v) => ctrl.setEffort(v),
+            { allDisabled: s.reasoning === "disabled" }
+         )
+      ];
+   }
+   if (!caps.modes.length) return [modelNote("Reasoning", "Unsupported")];
+   const rows: HTMLElement[] = [
+      segmented(
+         "Reasoning",
+         caps.modes.map((m) => [m.mode, reasoningModeLabel(m.mode, m.budget)] as [string, string]),
+         s.reasoning,
+         (v) => ctrl.setReasoning(v as Reasoning)
+      )
+   ];
+   /* Off has no efforts of its own: show the first mode that does, dimmed, so the kept pick
+      stays visible and the row doesn't jump when reasoning is turned back on. */
+   const current = caps.modes.find((m) => m.mode === s.reasoning);
+   const off = s.reasoning === "disabled";
+   const effortMode = off ? caps.modes.find((m) => m.efforts.length) : current;
+   if (effortMode && effortMode.efforts.length) {
+      rows.push(
+         segmented(
+            effortMode.budget ? "Budget" : "Effort",
+            effortMode.efforts.map((e) => [e, effortLabel(e)] as [string, string]),
+            /* While Off the value is the kept pick, which this mode may not offer: light the one
+               DAWN would resolve it to (display only, nothing is sent). */
+            off ? nearestEffort(effortMode.efforts, s.effort) : s.effort,
+            (v) => ctrl.setEffort(v),
+            { allDisabled: off }
+         )
+      );
+      const tokens = effortMode.budget && !off ? effortMode.budgetTokens[s.effort] : undefined;
+      if (tokens) rows.push(modelHint(`Thinking budget: ${formatBudgetTokens(tokens)} tokens`));
+   }
+   if (s.reasoningNote) rows.push(modelHint(s.reasoningNote));
+   return rows;
+}
+
+/* A label + static value row (e.g. "Reasoning  Unsupported"). */
+function modelNote(label: string, value: string): HTMLElement {
+   const row = document.createElement("div");
+   row.className = "model-row";
+   const lbl = document.createElement("span");
+   lbl.className = "model-label";
+   lbl.textContent = label;
+   const val = document.createElement("span");
+   val.className = "model-value";
+   val.textContent = value;
+   row.append(lbl, val);
+   return row;
+}
+
+/* A small dim line under a control (a budget size, or the pick-vs-effective note). */
+function modelHint(text: string): HTMLElement {
+   const hint = document.createElement("div");
+   hint.className = "model-hint";
+   hint.textContent = text;
+   return hint;
 }
 
 /* The model dropdown (long lists). A custom on-theme control (a native <select> renders an
@@ -560,10 +627,6 @@ function privacyToggle(checked: boolean, onChange: (on: boolean) => void): HTMLE
    span.textContent = "Private conversation";
    row.append(cb, span);
    return row;
-}
-
-function cap(s: string): string {
-   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /* A menu group: a button + its dropdown container. */

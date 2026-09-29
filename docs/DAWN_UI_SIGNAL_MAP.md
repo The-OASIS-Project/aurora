@@ -362,6 +362,8 @@ subsections for reference.)
 
 All additive and back-compat (older servers just omit the fields; keep your fallbacks).
 
+> **Superseded by §9.13 (P1.1b, 2026-09-28):** modes are now `disabled | adaptive | enabled` per model capabilities, and the `INFO_THINKING_*` notices are gone.
+
 **a. `get_config_response.payload.llm_runtime` now carries the session's *effective*
 reasoning state.** Two new fields alongside the existing `type`/`provider`/`model`/
 `*_available`/`context_max`:
@@ -372,6 +374,8 @@ reasoning state.** Two new fields alongside the existing `type`/`provider`/`mode
 high | xhigh`. These are the resolved session values, not the config default — a fresh
 connection can now show the real Reasoning/Effort state. (Previously unavailable except
 after a `switch_llm` tool call.)
+
+> **Superseded by §9.13 (P1.1b, 2026-09-28):** modes are now `disabled | adaptive | enabled` per model capabilities, and the `INFO_THINKING_*` notices are gone.
 
 **b. The `error` frame now has a real `severity`.** Route on it; stop sniffing the
 `INFO_` prefix (kept only as a fallback for older servers):
@@ -439,6 +443,8 @@ case behaves. An empty queue still just echoes state. **You can drop the
   the intended contract.
 
 ### 9.2 Behaviour your reasoning controls must handle
+
+> **Superseded by §9.13 (P1.1b, 2026-09-28):** modes are now `disabled | adaptive | enabled` per model capabilities, and the `INFO_THINKING_*` notices are gone. The ratchet below no longer applies.
 
 DAWN now allows changing Reasoning **mode** and **effort** mid-conversation (only *tool
 mode* stays frozen after the first message). Two server-authoritative behaviours follow —
@@ -995,6 +1001,37 @@ DAWN's memory-correctness work (branch `adaptive_dwell`, uncommitted at the time
   being spoken (`webui_send_state_for_conversation`, found in this review, 2026-09-27).
 - Not consumed: the two new `memory.focus_injection.*_min_relevance` settings (`set_config`,
   operator territory).
+
+### 9.13 Per-model reasoning capabilities (P1.1b) - consumed 2026-09-28
+
+DAWN's prompt-cache program replaced the client-side effort guess with server-reported
+capabilities (DAWN `0472230`, groundwork `c6543f2`; plan in DAWN's
+`docs/PROMPT_CACHE_COVERAGE_DESIGN.md` §6). Why: some Claude models are adaptive-only (Opus 5.5,
+Fable 5.x reject `thinking.type=disabled`), so the old binary Off/On could show Off while the model
+thought at medium effort.
+
+- **caps object:** `{source, modes:[{mode: disabled|adaptive|enabled, efforts[] (lowest first; [] =
+  no choice), budget, budget_tokens?}], default:{mode, effort}}`. `modes:[]` = explicitly no
+  reasoning control. `efforts` never holds `none` (OpenAI 5.1+ `disabled` IS none).
+- **Where:** `get_config_response.payload.reasoning_capabilities` = `{provider:{model:caps}}`, keyed
+  exactly like `llm.cloud.*_models` (OpenRouter slugs verbatim); each
+  `list_llm_models_response.payload.models[i].reasoning_capabilities` for local models; and
+  `reasoning_capabilities` on `llm_runtime`, `set_session_llm_response`, and
+  `load_conversation_response.llm_settings` for that frame's model.
+- **Effective vs pick:** those three frames' `thinking_mode` / `reasoning_effort` are the
+  EFFECTIVE values (while disabled, the effort carries the kept pick); new
+  `thinking_mode_pick` / `reasoning_effort_pick` are the stored choice. Aurora shows the effective
+  values and a one-line note when the pick differs; it never restores from the pick (DAWN does).
+- **Clamp:** `reasoning_adjusted:true` on a successful `set_session_llm_response` = the fields
+  this request set were adjusted for the model. DAWN sends no text; Aurora words a notice.
+- **Input:** `thinking_mode` disabled|adaptive|enabled|auto, `reasoning_effort`
+  none|minimal|low|medium|high|xhigh|max. On an effort change Aurora also sends the shown mode (so a
+  stale stored `disabled` on a model that can't disable is replaced).
+- **Removed:** `INFO_THINKING_DISABLED` / `INFO_THINKING_KEPT_ON`.
+- **Panel:** the model's modes in order (Off / Adaptive / On / Budget), the current mode's efforts
+  (None / Minimal / Low / Medium / High / Extra high / Max; "Budget" row + "Thinking budget: 8K
+  tokens" hint for a budget mode; no row when a mode has no effort choice), "Unsupported" for
+  `modes:[]`. HUD effort reads OFF / ON (no effort choice) / N/A (unsupported) / the effort.
 
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
