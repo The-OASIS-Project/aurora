@@ -704,6 +704,14 @@ actually cited. Match on **`turn_id` alone** (`last_user_msg_id`, globally uniqu
 can derive `conversation_id` from different fields and disagree in a ~47ms fresh-chat window.
 DAWN also added: `item_id` on each `context_injection` row, and a `<cited>` streaming leak-fix.
 
+**Item dates (2026-09-29).** Each `context_injection` item may carry `item_timestamp` (unix
+seconds, OMITTED when the item has none, like `provenance`). Its meaning depends on the source:
+memory_fact = learned, document_chunk = saved, memory_summary = summarized, memory_relation = began
+(often absent), memory_entity = last mentioned, calendar_event = when it happens. The model sees
+`[M7 memory_fact 2026-09-29]` (dated in the daemon's timezone); Aurora shows YYYY-MM-DD beside the
+source tag in the DAWN user's timezone (the same on a single-user install; a finite positive number
+only), with the meaning as its tooltip.
+
 **b. Conversation attachments (upload + display).** No structured attachment field and NO `image_url`
 frame - attachments ride the message text as inline markers.
 - **Documents:** `POST /api/documents` (multipart field `document`) -> `{filename, content

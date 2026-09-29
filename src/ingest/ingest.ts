@@ -593,6 +593,11 @@ export interface ContextItem {
    breakdown: { semantic: number; recency: number; importance: number; source: number };
    appliedSourceWeight: number;
    provenance?: { conversationId: number; msgIdStart: number; msgIdEnd: number };
+   /* When the item dates from, unix seconds (absent = no date). Its meaning depends on the
+      source: a fact = when learned, a document = when saved, a summary = when summarized, a
+      relation = when it began, an entity = when last mentioned, a calendar event = when it
+      happens. */
+   itemTimestamp?: number;
 }
 
 /* One turn's injected context: what DAWN retrieved (and what it filtered out) to answer.

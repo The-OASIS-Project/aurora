@@ -249,6 +249,14 @@
    padding: 0.08rem 0.32rem;
    white-space: nowrap;
 }
+/* When the item dates from: a quiet mono stamp beside the source tag (no box). */
+.context-date {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.06em;
+   color: var(--text-faint);
+   white-space: nowrap;
+}
 .context-src.family-internal {
    color: var(--accent);
    border-color: color-mix(in srgb, var(--accent) 45%, transparent);

@@ -701,6 +701,7 @@ ingest.start({
          standby.setTimezone(tz); // the standby clock renders in the DAWN user's tz too
          stocksPanel.setTimezone(tz); // the portfolio "as of" stamp too
          watchlistPanel.setTimezone(tz); // and the watchlist "as of" stamp
+         contextPanel.setTimezone(tz); // and the Context panel's item dates
       }
    },
    music: musicPlayer,

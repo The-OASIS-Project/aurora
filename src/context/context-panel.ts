@@ -19,8 +19,11 @@ import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
 import { makeVisibility } from "../render/visibility.ts";
 import { onActivate } from "../render/activate.ts";
+import { isoDate } from "../util/time.ts";
 
 export interface ContextPanelController extends ContextSink {
+   /* The DAWN user's timezone, for the item dates (browser-local until known). */
+   setTimezone(tz: string): void;
    isVisible(): boolean;
    setVisible(on: boolean): void;
    destroy(): void;
@@ -45,6 +48,16 @@ function tier(sourceType: string): { label: string; family: string } {
          return { label: (sourceType || "source").toUpperCase(), family: "other" };
    }
 }
+
+/* What an item's date means, by its source (source_id), for the date tag's tooltip. */
+const DATE_MEANING: Record<string, string> = {
+   memory_fact: "Learned",
+   document_chunk: "Saved",
+   memory_summary: "Summarized",
+   memory_relation: "Began",
+   memory_entity: "Last mentioned",
+   calendar_event: "Happens"
+};
 
 /* The four score contributions, in display order. Labels are 3-letter mono captions. */
 const BREAKDOWN: Array<{ key: keyof ContextItem["breakdown"]; cap: string; name: string }> = [
@@ -206,6 +219,7 @@ export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions =
 
    /* --- state ------------------------------------------------------------- */
    let current: ContextTrace | null = null;
+   let tz: string | undefined; // the DAWN user's zone for item dates (browser-local until set)
    /* item_ids the model cited this turn (from the late context_citations frame). Empty until
       that frame lands at turn end; a fresh trace resets it. Matched rows gold. */
    let citedIds = new Set<string>();
@@ -252,6 +266,16 @@ export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions =
       tag.className = `context-src family-${t.family}`;
       tag.textContent = t.label; // DAWN enum -> textContent
       tags.append(tag);
+      /* When the item dates from, in the user's timezone (the model sees it in the daemon's zone;
+         the same on a single-user install). */
+      const dateText = item.itemTimestamp ? isoDate(item.itemTimestamp, tz) : "";
+      if (dateText) {
+         const date = document.createElement("span");
+         date.className = "context-date";
+         date.textContent = dateText;
+         date.title = DATE_MEANING[item.sourceId] ?? "Dated";
+         tags.append(date);
+      }
       /* Cited: the model referenced this row in its answer. Gold the row + a filled "CITED"
          badge (deliberately distinct from the outlined EXTERNAL tag's gold). Only memory rows
          carry a citeable item_id, so this never lands on external/user rows. */
@@ -418,6 +442,11 @@ export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions =
          if (!current || !turnId || current.turnId !== turnId) return;
          citedIds = new Set(ids);
          render(); // rows rebuild with .cited -> the gold "lights up" (a CSS flash, see context.css)
+      },
+      setTimezone: (zone) => {
+         if (zone === tz) return;
+         tz = zone;
+         if (current?.items.some((i) => i.itemTimestamp)) render(); // re-date the shown rows
       },
       isVisible: vis.isVisible,
       setVisible: vis.setVisible,

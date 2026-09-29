@@ -66,3 +66,19 @@ export function dayBucket(epochSec: number, tz?: string | null): string {
    if (days < 7) return "This Week";
    return then.toLocaleDateString([], { month: "long", year: "numeric", timeZone: zone });
 }
+
+/* "YYYY-MM-DD" for an epoch-seconds instant, in the given zone (browser-local when unset or
+   invalid); "" for an out-of-range instant. Built from parts, so it never depends on a
+   locale's date pattern. */
+export function isoDate(epochSec: number, tz?: string | null): string {
+   const d = new Date(epochSec * 1000);
+   if (Number.isNaN(d.getTime())) return "";
+   const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: safeTimeZone(tz),
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+   }).formatToParts(d);
+   const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+   return `${get("year")}-${get("month")}-${get("day")}`;
+}

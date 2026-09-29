@@ -395,6 +395,9 @@ function toContextItem(d: Record<string, unknown>): ContextItem {
          msgIdEnd: Number(prov.msg_id_end ?? 0)
       };
    }
+   /* Optional, omitted when the item has none: accept only a finite positive number. */
+   const ts = d.item_timestamp;
+   if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) item.itemTimestamp = ts;
    return item;
 }
 
