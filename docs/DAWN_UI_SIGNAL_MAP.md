@@ -1033,6 +1033,22 @@ thought at medium effort.
   tokens" hint for a budget mode; no row when a mode has no effort choice), "Unsupported" for
   `modes:[]`. HUD effort reads OFF / ON (no effort choice) / N/A (unsupported) / the effort.
 
+### 9.14 Old voice tool turns saved as text notes (P1.1d migrations) - consumed 2026-09-29
+
+DAWN's v92/v93 migrations rewrote old voice conversations (`origin='voice'`, not jobs). No wire
+protocol change; the new `messages.llm_blocks` column is server-only and never reaches a client.
+What a `load_conversation` can now hold for those conversations:
+- Turns that paired one call with one result: ordinary structured rows (`tool_calls` + `role:"tool"`
+  rows); rendered like any tool turn.
+- Turns whose calls were never saved: an assistant row ending in `[Tool Call: <name>]` notes
+  (blank-line separated, optional lead-in prose; `[Tool Call: its name and arguments weren't saved]`
+  when unsaved), then assistant rows of `[Tool Result: <text>]` notes (several per row joined as
+  `]\n\n[Tool Result: `; v93 writes an empty result as `(no text)`, v92 omits it, so call and result
+  counts can mismatch). No `tool_calls`, no `tool_call_id`.
+  Aurora folds them back into the reload pill group (`src/ingest/tool-notes.ts`, mirroring DAWN's
+  `www/js/ui/tool-notes.js`): prose bubble + pills paired in order, the result rows consumed.
+- A voice turn with nothing to show: `[No text]` (rendered as-is).
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and

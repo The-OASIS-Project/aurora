@@ -49,6 +49,7 @@ import type {
    StockStatus,
    StockWatchlist,
    StockWatchSymbol,
+   ConversationItem,
    ToolCall,
    UploadedDoc,
    UploadedImage,
@@ -61,6 +62,7 @@ import { MusicAudio } from "../audio/music.ts";
 import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
 import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
+import { collectToolNotes } from "./tool-notes.ts";
 import {
    effortOptionsForModel,
    nearestEffort,
@@ -1910,29 +1912,43 @@ export class DawnIngest implements Ingest {
                   toolResults.set(m.tool_call_id, { result: m.content ?? "", error: m.is_error === true });
                }
             }
-            this.sinks.conversation.loadHistory(
-               msgs
-                  .filter((m) => m.role === "user" || m.role === "assistant")
-                  .flatMap((m) => {
-                     const info = interpretMessage(m.content);
-                     /* The REAL tool source is the separate `tool_calls` column (ordered,
-                        id'd, with args + correlated results); interpretMessage's content-block
-                        tools are a legacy fallback. Prefer tool_calls when present. */
-                     const structured = parseToolCalls(m.tool_calls, toolResults);
-                     const tools = structured.length ? structured : info?.tools;
-                     if (!info && !tools) return [];
-                     /* Stamp the DB id so a late message_appended for a reloaded row can't
-                        re-double it (Phase-0 dedup prereq). */
-                     return [
-                        {
-                           role: m.role as "user" | "assistant",
-                           text: info?.text,
-                           tools,
-                           id: Number(m.id ?? 0) || undefined
-                        }
-                     ];
-                  })
-            );
+            const rows = msgs.filter((m) => m.role === "user" || m.role === "assistant");
+            const items: ConversationItem[] = [];
+            const consumedIds: number[] = [];
+            for (let i = 0; i < rows.length; i++) {
+               const m = rows[i];
+               const id = Number(m.id ?? 0) || undefined;
+               /* An old voice turn whose tool calls were saved as text notes (DAWN v92/v93): the
+                  same pills as a structured turn, from what the notes say, consuming the result
+                  notes that follow. Their DB ids are noted (after loadHistory, which resets the
+                  set) so a late message_appended can't re-render them. */
+               const notes = collectToolNotes(rows, i, String(id ?? `row${i}`));
+               if (notes) {
+                  items.push({
+                     role: "assistant",
+                     text: notes.prose.trim() ? notes.prose : undefined,
+                     tools: notes.tools,
+                     id
+                  });
+                  for (let k = 1; k <= notes.consumed; k++) consumedIds.push(Number(rows[i + k].id ?? 0));
+                  /* A prose-less item isn't stamped by loadHistory (it stamps only text items). */
+                  if (!notes.prose.trim() && id) consumedIds.push(id);
+                  i += notes.consumed;
+                  continue;
+               }
+               const info = interpretMessage(m.content);
+               /* The REAL tool source is the separate `tool_calls` column (ordered,
+                  id'd, with args + correlated results); interpretMessage's content-block
+                  tools are a legacy fallback. Prefer tool_calls when present. */
+               const structured = parseToolCalls(m.tool_calls, toolResults);
+               const tools = structured.length ? structured : info?.tools;
+               if (!info && !tools) continue;
+               /* Stamp the DB id so a late message_appended for a reloaded row can't
+                  re-double it (Phase-0 dedup prereq). */
+               items.push({ role: m.role as "user" | "assistant", text: info?.text, tools, id });
+            }
+            this.sinks.conversation.loadHistory(items);
+            for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
             this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
             this.resumingStored = false; // a successful load ends any in-flight resume
             localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
