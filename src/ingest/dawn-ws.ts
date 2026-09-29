@@ -1746,11 +1746,17 @@ export class DawnIngest implements Ingest {
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
             if (p.success !== false) {
+               /* type (local|cloud): a "reset" from New can move the session across it. */
+               if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
                if (typeof p.provider === "string") {
                   const prov = p.provider.toLowerCase();
                   if (isLlmProvider(prov)) this.llm.provider = prov;
                }
+               /* A local session with no named model ("server decides", e.g. after New's reset to a
+                  local default) echoes model "". Show "local", as get_config's llm_runtime names it,
+                  rather than keeping the previous (cloud) model's name. */
                if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+               else if (this.llm.mode === "local" && p.model === "") this.llm.model = "local";
                /* Availability only when the echo actually carries it (both builders
                   do as of Phase 1); absent -> leave the current record untouched. */
                if (p.openai_available !== undefined) {
@@ -3225,6 +3231,11 @@ export class DawnIngest implements Ingest {
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
    newChat(): void {
       this.send({ type: "clear_session" });
+      /* A new chat starts on DAWN's configured default model (dawn.toml), not whatever the last
+         conversation ran on: DAWN's "reset" restores the session LLM config to its defaults, and
+         the set_session_llm_response echo carries the resulting type/provider/model/reasoning
+         for the panel. Sent after clear_session, so no conversation is active to stamp it on. */
+      this.send({ type: "set_session_llm", payload: { type: "reset" } });
       this.convId = 0;
       localStorage.removeItem(CONV_KEY); // fresh chat: nothing to resume until a message opens one
       /* Finalize any in-flight streamed bubble before wiping (both the menu New Chat and the
