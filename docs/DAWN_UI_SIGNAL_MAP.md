@@ -1057,6 +1057,36 @@ What a `load_conversation` can now hold for those conversations:
   `www/js/ui/tool-notes.js`): prose bubble + pills paired in order, the result rows consumed.
 - A voice turn with nothing to show: `[No text]` (rendered as-is).
 
+### 9.15 Contract versioning: protocol + feature flags - consumed 2026-09-30
+
+Agreed with DAWN (bundled with the logout/session fix). Shape changes stay presence-detected;
+BEHAVIOUR changes are now advertised.
+- **Fields**, on the `config` frame payload AND `/api/auth/status` (authenticated or not):
+  `protocol: 1` and `features: [string]` (short, stable, descriptive snake_case names; DAWN keeps one
+  table as the source and a "Feature flags" table in `WEBSOCKET_PROTOCOL.md`). No
+  `min_client_protocol` (a bump means the old contract no longer works).
+- **Rules:** a missing `features` = an older DAWN (legacy behaviour); anything new or changed in
+  behaviour gets a flag; flags start with this branch (no back-fill: an old DAWN can't be told apart
+  from "feature absent"); `protocol` bumps only on a removal/incompatible change, after a deprecation
+  window. A client that doesn't speak the server's `protocol` says "This DAWN is newer/older than
+  this Aurora" instead of half-working.
+- **Client self-description:** Aurora sends `client: {name:"aurora", version, protocol}` in the
+  init/reconnect payload; DAWN logs it once per connection (no enforcement yet).
+- **Flags:** `logout_closes_sockets` - POST /api/auth/logout with the socket open is safe (DAWN
+  sends force_logout, closes the main WS with 4002 and the music socket itself, replies 200 at once
+  with the cookie cleared + no-store). Aurora logs out socket-open when advertised, else closes the
+  socket first (an older DAWN stalls ~30 s and leaks the session otherwise).
+- `app_logins` - per-app logins, so Aurora and DAWN's WebUI in one browser don't share (and end) one
+  `dawn_session` cookie (cookies ignore the port; prod serves Aurora same-origin under /aurora).
+  When advertised: login POSTs `"app":"aurora"` (DAWN sets `dawn_session_aurora`, same attributes),
+  and EVERY DAWN URL carries `?app=aurora` - the main WS and music WS upgrade URLs and every
+  `/api/*` fetch (a query param, not a header: DAWN reads custom headers only on some lws builds).
+  Logout with `?app=aurora` ends only Aurora's login. An invalid app = not logged in. Aurora learns
+  the flag from `/api/auth/status` (an untagged probe for the flags, then a tagged ask for its own
+  login state) on load and again at login, never mid-connection. Against an older DAWN nothing is
+  tagged (the shared cookie).
+- `server_features` (`{home_assistant}`: compiled-in subsystems) is a separate frame, unchanged.
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and

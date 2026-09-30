@@ -181,14 +181,29 @@ async function inlineVendor(content: string): Promise<string> {
    for (const tag of tags) {
       const src = tag.match(/src=(["'])([^"']+)\1/)?.[2];
       if (!src) continue;
-      let code = vendorCache.get(src);
+      /* The src is model-generated (reachable by prompt injection): resolve it and require it to
+         stay under /js/vendor/ after normalization, so "/js/vendor/../../api/images/<id>" can't
+         pull the user's data into the visual's sandbox. Fetched WITHOUT cookies - the vendor
+         scripts are public static files. */
+      let path = "";
+      try {
+         path = new URL(src, window.location.origin).pathname;
+      } catch {
+         path = "";
+      }
+      if (!path.startsWith("/js/vendor/") || src.includes("\\")) {
+         out = out.replace(tag, "");
+         continue;
+      }
+      let code = vendorCache.get(path);
       if (code === undefined) {
          try {
-            code = (await (await fetch(src)).text()).replace(/<\/script/gi, "<\\/script");
+            const res = await fetch(path, { credentials: "omit" });
+            code = res.ok ? (await res.text()).replace(/<\/script/gi, "<\\/script") : "";
          } catch {
             code = ""; // vendor unavailable: drop the tag, the visual degrades rather than hangs
          }
-         vendorCache.set(src, code);
+         vendorCache.set(path, code);
       }
       out = out.replace(tag, "<scr" + "ipt>" + code + "</scr" + "ipt>");
    }

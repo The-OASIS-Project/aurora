@@ -37,14 +37,12 @@ const DAWN_TARGET = "https://localhost:3000";
 const dawnUrl = new URL(DAWN_TARGET);
 const DAWN_MUSIC_TARGET = `https://${dawnUrl.hostname}:${Number(dawnUrl.port || "443") + 1}`;
 
-// Dev-only: the browser page is http://localhost:5273, but DAWN marks its cookie
-// `Secure` (only sent over https). Strip that flag off the proxied Set-Cookie so
-// the dev origin will store it; likewise relax SameSite to Lax. Never ships: this
-// is the dev server config, not the production bundle.
+// Dev-only: relax SameSite=Strict to Lax on the proxied Set-Cookie. `Secure` is KEPT: the dev
+// server is https (basicSsl), and DAWN's login cookies are `__Host-` prefixed, which a browser
+// silently rejects without `Secure` (or with a `Domain` attribute - so no cookieDomainRewrite
+// either). Never ships: this is the dev server config, not the production bundle.
 function stripCookieSecurity(setCookie: string[]): string[] {
-   return setCookie.map((c) =>
-      c.replace(/;\s*Secure/gi, "").replace(/;\s*SameSite=Strict/gi, "; SameSite=Lax")
-   );
+   return setCookie.map((c) => c.replace(/;\s*SameSite=Strict/gi, "; SameSite=Lax"));
 }
 
 export default defineConfig({
@@ -78,8 +76,10 @@ export default defineConfig({
             ws: true
          },
          // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
-         // same-origin like /ws so it works for remote browsers too (it authenticates
-         // with the session token, not the cookie). NOTE: the path must NOT start with
+         // same-origin like /ws so it works for remote browsers too. It authenticates with
+         // the session token AND the login cookie (__Host-dawn_session, or __Host-dawn_session_aurora
+         // with DAWN's per-app logins; DAWN checks the cookie's user owns the session), which the
+         // browser sends here and the proxy forwards on the upgrade. NOTE: the path must NOT start with
          // "/ws", or the broader "/ws" rule above captures it and routes it to the
          // main server (which does not speak dawn-music). Hence "/music-ws".
          "/music-ws": {

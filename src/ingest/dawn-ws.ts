@@ -63,6 +63,15 @@ import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.
 import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
+import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
+import {
+   LAST_USER_STORAGE_KEY,
+   clearUserState,
+   isDifferentUser,
+   rememberUser,
+   stashEndReason,
+   takeEndReason
+} from "../util/user-state.ts";
 import {
    effortOptionsForModel,
    nearestEffort,
@@ -783,6 +792,40 @@ function parseToolCalls(raw: unknown, results: Map<string, ReloadedToolResult>):
    return out;
 }
 
+/* The wire-contract version this client speaks (DAWN's `protocol`, on `config` and
+   /api/auth/status). DAWN bumps it only when something is removed or changes incompatibly;
+   anything new or changed rides a named flag in `features` instead. */
+const CLIENT_PROTOCOL = 1;
+
+
+/* The message for a DAWN whose `protocol` this client doesn't speak. */
+function protocolMismatchText(serverProtocol: number, dawnVersion: string): string {
+   const which = dawnVersion ? `DAWN v${dawnVersion}` : "This DAWN";
+   return serverProtocol > CLIENT_PROTOCOL
+      ? `${which} is newer than this Aurora. Update Aurora to connect.`
+      : `${which} is older than this Aurora. Update DAWN to connect.`;
+}
+
+/* Reload-loop guard for revokeSession: a revoke reloads the page at most once per 15 s. */
+const REVOKE_RELOAD_KEY = "dawn.hero.revokeReloadAt";
+function reloadedForRevokeRecently(): boolean {
+   try {
+      return Date.now() - Number(sessionStorage.getItem(REVOKE_RELOAD_KEY) ?? 0) < 15000;
+   } catch {
+      return false;
+   }
+}
+/* false when sessionStorage is unavailable: then the guard can't hold, so the caller must not
+   reload at all (it just shows the login card in place). */
+function markRevokeReload(): boolean {
+   try {
+      sessionStorage.setItem(REVOKE_RELOAD_KEY, String(Date.now()));
+      return true;
+   } catch {
+      return false;
+   }
+}
+
 export class DawnIngest implements Ingest {
    private sinks!: IngestSinks;
    private ws: WebSocket | null = null;
@@ -1045,6 +1088,26 @@ export class DawnIngest implements Ingest {
       what happened, so it is accepted while nothing newer is pending. */
    private timedOutForgetId = 0;
    private forgetRetryId = 0;
+   /* Who this page is signed in as ("" until known), and whether a deliberate logout is under way. */
+   private signedInAs = "";
+   /* DAWN's advertised behaviour flags (config.features); null = an older DAWN that sends none,
+      which means legacy behaviour everywhere a flag would matter. */
+   private serverFeatures: Set<string> | null = null;
+   /* DAWN supports per-app logins (`app_logins`, learned from /api/auth/status - on load and again
+      at login - never mid-connection, so a socket and its later requests always agree on the
+      cookie): then every DAWN URL carries ?app=aurora and login sends "app". Sticky for the page;
+      false against an older DAWN (shared cookie). */
+   private appLogins = false;
+   private loggingOut = false;
+   private logoutEnded = false; // DAWN ended the session (force_logout / 4002) during logout()
+   /* Another tab signed in as someone else (or logged out): this tab still shows the previous
+      user's panels and would reconnect with the new user's token, so reload it clean. */
+   private readonly onStorage = (e: StorageEvent): void => {
+      if (e.key !== LAST_USER_STORAGE_KEY || !this.signedInAs) return;
+      if ((e.newValue ?? "").trim() === this.signedInAs) return;
+      this.disconnect();
+      window.location.reload();
+   };
    private readonly llmListeners: Array<() => void> = [];
    private readonly seenUnhandled = new Set<string>();
 
@@ -1052,6 +1115,7 @@ export class DawnIngest implements Ingest {
       panel via connect(), so credentials never live in the composition root. */
    start(sinks: IngestSinks): void {
       this.sinks = sinks;
+      window.addEventListener("storage", this.onStorage);
       /* Surface a fatal music-audio problem (e.g. no secure context) in the player. */
       this.music.setErrorHandler((msg) => this.sinks.music.setError(msg));
       /* Closed-loop flow control: report our buffered depth up the music socket so the
@@ -1071,16 +1135,31 @@ export class DawnIngest implements Ingest {
    async connect(username: string, password: string): Promise<void> {
       this.wantConnected = true;
       this.emit("authenticating");
+      /* Learn DAWN's flags (per-app logins) before logging in, in case the page-load probe failed:
+         the login and every URL after it must agree on which cookie they use. */
+      /* Unknown flags would mean logging in on the shared cookie, which on a newer DAWN overwrites
+         the WebUI's login with this user: stop instead (an older DAWN still answers status). */
+      let status: Awaited<ReturnType<DawnIngest["authStatus"]>> = null;
+      try {
+         status = await this.authStatus();
+      } catch {
+         status = null;
+      }
+      if (!status) {
+         this.emit("error", "Couldn't reach DAWN");
+         throw new Error("Couldn't reach DAWN");
+      }
 
-      const csrfRes = await fetch("/api/auth/csrf", { credentials: "same-origin" });
+      const csrfRes = await fetch(this.dawnUrl("/api/auth/csrf"), { credentials: "same-origin" });
       if (!csrfRes.ok) throw new Error(`CSRF request failed (${csrfRes.status})`);
       const { csrf_token } = (await csrfRes.json()) as { csrf_token: string };
 
-      const loginRes = await fetch("/api/auth/login", {
+      const loginRes = await fetch(this.dawnUrl("/api/auth/login"), {
          method: "POST",
          credentials: "same-origin",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ csrf_token, username, password })
+         /* With per-app logins, "app" makes DAWN set this app's own cookie (not the WebUI's). */
+         body: JSON.stringify(this.appLogins ? { csrf_token, username, password, app: APP_NAME } : { csrf_token, username, password })
       });
       const login = (await loginRes.json().catch(() => ({}))) as {
          success?: boolean;
@@ -1091,7 +1170,91 @@ export class DawnIngest implements Ingest {
          throw new Error(login.error ?? "Login failed");
       }
 
+      /* Signing in as someone other than the last user on this browser: nothing of the previous
+         user's may carry over (their resume token, last conversation, HUD cache, keepalive
+         consent - or anything still on screen). Clear the stored state and reload: the page comes
+         back up on the new login's cookie via tryResume, with every panel empty. */
+      /* Also compare against who THIS tab is showing: another tab may have updated the shared
+         last-user record while this one still holds the previous user's panels. */
+      if (isDifferentUser(username) || (this.signedInAs !== "" && this.signedInAs !== username.trim())) {
+         clearUserState();
+         rememberUser(username);
+         window.location.reload();
+         return;
+      }
+      this.signedInAs = username.trim();
       this.openSocket();
+   }
+
+   /* Log out (the Connection dialog / the linked chip). Ends the login server-side, clears the
+      user's stored state, and reloads to the login card, so nothing of theirs stays on screen or
+      resumes for the next person.
+      - With `logout_closes_sockets` advertised, POSTed with the socket OPEN: DAWN deletes the
+        login, frees every session it owns (connected or not), sends this socket force_logout,
+        closes it with 4002, and closes the music socket itself; the reply is 200
+        {"success":true} with the cookie cleared. Without it (an older DAWN), the socket is
+        closed first (see below).
+      - POST, not a bodyless GET: a GET carries no Origin, and through the dev proxy (Host
+        rewritten to DAWN's) a Referer check could reject it; a POST sends Origin.
+      - Success is the 200 OR DAWN ending the session (force_logout / 4002) while we wait.
+      - If neither happens, nothing is cleared (a reload would just resume the still-valid
+        cookie): stay connected and say so. */
+   async logout(): Promise<void> {
+      if (this.loggingOut) return; // already under way (a double activation)
+      this.loggingOut = true; // revokeSession / a 4002 close during this just record the end
+      this.logoutEnded = false;
+      const resumeContinuous = this.resumeContinuous; // a drop in the window would clear it
+      this.wantConnected = false; // DAWN closes the socket on success: don't auto-reconnect
+      window.clearTimeout(this.wsReconnectTimer);
+      /* An older DAWN (no `logout_closes_sockets`) stalls ~30 s freeing a session a live
+         connection still references, then leaks it: close the socket first and wait for it. */
+      if (!this.hasFeature("logout_closes_sockets")) {
+         const ws = this.ws;
+         this.disconnect(true); // silent: no login-card flash while the logout finishes
+         if (ws && ws.readyState !== WebSocket.CLOSED) {
+            await new Promise<void>((resolve) => {
+               const t = window.setTimeout(resolve, 2000);
+               ws.addEventListener(
+                  "close",
+                  () => {
+                     window.clearTimeout(t);
+                     resolve();
+                  },
+                  { once: true }
+               );
+            });
+         }
+      }
+      let ok = false;
+      try {
+         const res = await fetch(this.dawnUrl("/api/auth/logout"), {
+            method: "POST",
+            credentials: "same-origin",
+            /* A half-open link must not hang the logout forever (feature-detected: older browsers). */
+            signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(15000) : undefined
+         });
+         ok = res.ok;
+      } catch {
+         ok = false;
+      }
+      /* No confirmation: ask whether the login is actually gone (an older DAWN deletes it at once
+         but answers only after a long stall), before calling it a failure. */
+      if (!ok && !this.logoutEnded) ok = await this.loginIsGone();
+      if (!ok && !this.logoutEnded) {
+         this.loggingOut = false;
+         /* Still logged in: resume on the same session token, unless another tab took the session
+            over meanwhile (then stay backed off - re-stealing it restarts the takeover fight). */
+         if (!this.superseded) {
+            this.wantConnected = true;
+            this.resumeContinuous = resumeContinuous;
+            if (!this.ws) this.openSocket();
+         }
+         this.notifyUser("Couldn't log out: DAWN didn't confirm. Try again.");
+         return;
+      }
+      this.disconnect(true);
+      clearUserState({ forgetUser: true });
+      window.location.reload();
    }
 
    /* On page load, if the auth cookie is still valid, skip the login card and open
@@ -1099,10 +1262,30 @@ export class DawnIngest implements Ingest {
       in across an F5 instead of asking for credentials every reload. */
    async tryResume(): Promise<void> {
       try {
-         const res = await fetch("/api/auth/status", { credentials: "same-origin" });
-         if (res.ok) {
-            const s = (await res.json()) as { authenticated?: boolean };
+         const s = await this.authStatus();
+         if (s) {
+            /* A DAWN whose contract this client doesn't speak: say so before opening anything. */
+            if (typeof s.protocol === "number" && s.protocol !== CLIENT_PROTOCOL) {
+               this.emit("error", protocolMismatchText(s.protocol, this.dawnVersion));
+               return;
+            }
             if (s.authenticated) {
+               takeEndReason(); // a stale reason from an earlier ended session - not this one
+               /* The cookie belongs to someone other than the last user here (e.g. they signed in
+                  in another tab): drop the previous user's stored state before resuming. This is
+                  a fresh page load, so nothing of theirs is in memory. */
+               if (typeof s.username === "string" && s.username && isDifferentUser(s.username)) {
+                  clearUserState();
+                  rememberUser(s.username);
+                  /* The previous user's values were already read into memory at startup (the HUD
+                     cache, keepalive consent, token-rate stats), so reload to start clean. Only
+                     when the new user was actually recorded, or this would reload forever. */
+                  if (!isDifferentUser(s.username)) {
+                     window.location.reload();
+                     return;
+                  }
+               }
+               if (typeof s.username === "string") this.signedInAs = s.username.trim();
                this.wantConnected = true;
                this.openSocket();
                return;
@@ -1111,17 +1294,20 @@ export class DawnIngest implements Ingest {
       } catch {
          /* fall through to show the login card */
       }
-      /* No valid session — reveal the login card. */
-      this.emit("idle");
+      /* No valid session — reveal the login card, with why the last one ended if it was revoked. */
+      const reason = takeEndReason();
+      if (reason) this.emit("error", reason);
+      else this.emit("idle");
    }
 
    private openSocket(): void {
+      this.serverFeatures = null; // re-learned from this connection's config (a different build may answer)
       this.emit("connecting");
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       /* Same-origin /ws — Vite proxies it to the DAWN daemon. The dawn-1.0
          subprotocol is MANDATORY: omit it and libwebsockets routes us to its
          HTTP handler, the socket "opens", and every frame is silently dropped. */
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws`, "dawn-1.0");
+      const ws = new WebSocket(`${proto}://${window.location.host}${this.dawnUrl("/ws")}`, "dawn-1.0");
       ws.binaryType = "arraybuffer"; // TTS PCM arrives as binary frames
       this.ws = ws;
 
@@ -1147,7 +1333,9 @@ export class DawnIngest implements Ingest {
             /* "Always on" keepalive intent, re-advertised each (re)connect. Diagnostics-only on
                the daemon (it does NOT authorize renewal - the DB flag does, set by the
                session_keepalive_enable we re-send after auth). Ignored by an older daemon. */
-            session_keepalive: this.keepaliveOn
+            session_keepalive: this.keepaliveOn,
+            /* Who is connecting (DAWN logs it once per connection; not enforced). */
+            client: { name: "aurora", version: __APP_VERSION__, protocol: CLIENT_PROTOCOL }
          };
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) this.send({ type: "reconnect", payload: { token, ...caps } });
@@ -1300,6 +1488,14 @@ export class DawnIngest implements Ingest {
             an already-set `superseded` flag from the `session_superseded` data frame the server
             sends just before the close (frames DO survive the proxy). So the frame is the
             reliable signal; the close code is the same-origin/prod belt-and-suspenders. */
+         /* 4002: DAWN ended this login (a logout, a password change, a deleted user, an admin
+            revoke). Same as force_logout, which normally arrives just before and is the reliable
+            signal (the Vite dev proxy delivers the close as 1006; the code survives same-origin
+            only). During our own logout it just confirms the end; logout() finishes. */
+         if (ev.code === 4002) {
+            this.revokeSession(ev.reason || "Your session ended.");
+            return;
+         }
          if (ev.code === 4001 || this.superseded) {
             this.wantConnected = false;
             this.superseded = true;
@@ -1314,7 +1510,10 @@ export class DawnIngest implements Ingest {
                dedicated music socket). A deliberate disconnect()/force_logout clears
                wantConnected first, so those never land here. */
             this.scheduleMainReconnect();
-         } else {
+         } else if (!this.loggingOut && this.lastStatus !== "error") {
+            /* (During a logout the socket closing is expected; logout() reloads to the login card,
+               so don't flash it here first. And a deliberate close that already reported an error -
+               a protocol mismatch, a revoke shown in place - must keep that message.) */
             this.emit("disconnected", ev.reason || undefined);
          }
       };
@@ -1451,16 +1650,70 @@ export class DawnIngest implements Ingest {
       this.spikeNotice("link-notice", "notice", message, { tone: "attention", hold: 6, x: 0, y: -0.55 });
    }
 
-   /* Session revoked/expired server-side (force_logout, or an UNAUTHORIZED reply to any authed
-      verb incl. the heartbeat). Drop the dead token, stop wanting to be connected so the
-      auto-reconnect does NOT silently mint a fresh session behind the revocation, cancel any
-      pending retry and the heartbeat, and surface the login card with the reason. */
+   /* Session revoked/expired server-side (force_logout, a 4002 close, or an UNAUTHORIZED reply to
+      any authed verb incl. the heartbeat). Tears the link down (no auto-reconnect behind the
+      revocation), clears the user's stored state and reloads to the login card with the reason
+      (at most once per 15 s; otherwise the card shows in place). During our own logout() it only
+      records that DAWN ended the session. */
+   /* A DAWN URL, tagged with this app when DAWN keeps per-app logins (query param, not a header:
+      DAWN's HTTP stack only reads custom headers on some builds). Untouched for an older DAWN. */
+   private dawnUrl(path: string): string {
+      return tagDawnUrl(path);
+   }
+
+   /* /api/auth/status for THIS app. The first ask is untagged, to learn DAWN's flags (an older DAWN
+      mustn't get the param); if DAWN keeps per-app logins, ask again tagged, since the untagged
+      answer describes the WebUI's login. null on failure. */
+   private async authStatus(): Promise<{ authenticated?: boolean; username?: string; protocol?: unknown } | null> {
+      const get = async (url: string): Promise<Record<string, unknown> | null> => {
+         const res = await fetch(url, { credentials: "same-origin" });
+         return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
+      };
+      let s = await get(this.dawnUrl("/api/auth/status"));
+      if (s && !this.appLogins && Array.isArray(s.features) && s.features.includes("app_logins")) {
+         this.appLogins = true;
+         setAppLogins(true); // shared with the markdown renderer (same-origin /api links in replies)
+         s = await get(this.dawnUrl("/api/auth/status"));
+      }
+      return s as { authenticated?: boolean; username?: string; protocol?: unknown } | null;
+   }
+
+   /* Whether DAWN advertised a behaviour flag (false on an older DAWN that sends none). */
+   private hasFeature(name: string): boolean {
+      return this.serverFeatures?.has(name) === true;
+   }
+
+   /* true when /api/auth/status says this browser is no longer logged in. */
+   private async loginIsGone(): Promise<boolean> {
+      try {
+         const s = await this.authStatus();
+         return s?.authenticated === false;
+      } catch {
+         return false;
+      }
+   }
+
    private revokeSession(reason?: string): void {
-      localStorage.removeItem(TOKEN_KEY);
-      this.wantConnected = false;
-      window.clearTimeout(this.wsReconnectTimer);
-      this.stopHeartbeat();
-      this.emit("error", reason);
+      if (this.loggingOut) {
+         this.logoutEnded = true; // our own logout ended the session; logout() wipes + reloads
+         return;
+      }
+      /* Tear down first (socket, metrics, music), so no late frame re-writes a key cleared below
+         before the reload commits; the guarded path below then isn't left running either. Silent:
+         the reason is emitted (or the page reloads) below. */
+      this.disconnect(true);
+      /* The session is gone: clear the user's stored state and reload to the login card (the
+         reason rides across in sessionStorage), so the revoked user's data doesn't stay on screen
+         for whoever signs in next. Skip the clear if another tab has since signed in as someone
+         else (the shared storage is theirs now). Guarded against a reload loop: once per 15 s. */
+      if (!this.signedInAs || !isDifferentUser(this.signedInAs)) clearUserState();
+      else localStorage.removeItem(TOKEN_KEY);
+      if (reloadedForRevokeRecently() || !markRevokeReload()) {
+         this.emit("error", reason);
+         return;
+      }
+      stashEndReason(reason ?? "Your session ended.");
+      window.location.reload();
    }
 
    private onFrame(raw: string): void {
@@ -1495,6 +1748,21 @@ export class DawnIngest implements Ingest {
 
       switch (type) {
          case "session":
+            /* Backstop against the wrong identity: DAWN authenticated this socket from whichever
+               cookie the request named. If that isn't who this page is signed in as (e.g. DAWN was
+               upgraded or rolled back under an open page, so the tagging no longer matches its
+               cookies), treat it as a user switch: wipe and reload onto whoever the cookie says. */
+            if (
+               p.authenticated === true &&
+               typeof p.username === "string" &&
+               this.signedInAs !== "" &&
+               p.username.trim() !== this.signedInAs
+            ) {
+               this.disconnect(true);
+               clearUserState();
+               window.location.reload();
+               break;
+            }
             /* Store the token so a reload resumes this same session (see TOKEN_KEY).
                The token also authenticates the dedicated music stream socket, but we
                wait for `config` (which follows session on connect) to open it, since
@@ -1566,6 +1834,18 @@ export class DawnIngest implements Ingest {
             break;
 
          case "config": {
+            /* The contract: DAWN's behaviour flags + its protocol version. A missing `features`
+               array is an older DAWN (legacy behaviour). A protocol this client doesn't speak
+               stops here with a plain message rather than half-working. */
+            if (typeof p.version === "string") this.dawnVersion = p.version; // before a mismatch bail, for the Connection dialog
+            this.serverFeatures = Array.isArray(p.features)
+               ? new Set((p.features as unknown[]).filter((f): f is string => typeof f === "string"))
+               : null;
+            if (typeof p.protocol === "number" && p.protocol !== CLIENT_PROTOCOL) {
+               this.disconnect(true);
+               this.emit("error", protocolMismatchText(p.protocol, this.dawnVersion));
+               break;
+            }
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -1585,7 +1865,6 @@ export class DawnIngest implements Ingest {
             ) {
                this.musicPort = p.music_port;
             }
-            if (typeof p.version === "string") this.dawnVersion = p.version;
             /* Mic capture chunks at the server's configured cadence (falls back to a
                default until this arrives). Matches the TTS-out audio_chunk_ms. */
             if (typeof p.audio_chunk_ms === "number") this.mic.setChunkMs(p.audio_chunk_ms);
@@ -3454,7 +3733,7 @@ export class DawnIngest implements Ingest {
       it). A GET read; the view decodes text or object-URLs binaries for download. The
       attachment/nosniff headers on the endpoint don't affect a fetch(). */
    async fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }> {
-      const res = await fetch(`/api/documents/original/${encodeURIComponent(blobId)}`, {
+      const res = await fetch(this.dawnUrl(`/api/documents/original/${encodeURIComponent(blobId)}`), {
          credentials: "same-origin"
       });
       if (!res.ok) throw new Error(`document fetch failed: ${res.status}`);
@@ -3468,7 +3747,7 @@ export class DawnIngest implements Ingest {
    async uploadDocument(file: File): Promise<UploadedDoc> {
       const fd = new FormData();
       fd.append("document", file);
-      const res = await fetch("/api/documents", { method: "POST", credentials: "same-origin", body: fd });
+      const res = await fetch(this.dawnUrl("/api/documents"), { method: "POST", credentials: "same-origin", body: fd });
       if (!res.ok) throw new Error(`document upload failed: ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       if (j.success === false) throw new Error(String(j.error ?? "upload failed"));
@@ -3489,7 +3768,7 @@ export class DawnIngest implements Ingest {
    async uploadImage(image: Blob): Promise<UploadedImage> {
       const fd = new FormData();
       fd.append("image", image, "image.jpg");
-      const res = await fetch("/api/images", { method: "POST", credentials: "same-origin", body: fd });
+      const res = await fetch(this.dawnUrl("/api/images"), { method: "POST", credentials: "same-origin", body: fd });
       if (!res.ok) throw new Error(`image upload failed: ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
       const id = typeof j.id === "string" ? j.id : "";
@@ -3506,7 +3785,7 @@ export class DawnIngest implements Ingest {
    /* Fetch an attached image's bytes over the same-origin /api proxy (the cookie rides it).
       A GET read; the conversation view object-URLs the blob into an <img> thumbnail. */
    async fetchImage(id: string): Promise<{ blob: Blob; contentType: string }> {
-      const res = await fetch(`/api/images/${encodeURIComponent(id)}`, {
+      const res = await fetch(this.dawnUrl(`/api/images/${encodeURIComponent(id)}`), {
          credentials: "same-origin"
       });
       if (!res.ok) throw new Error(`image fetch failed: ${res.status}`);
@@ -3943,10 +4222,10 @@ export class DawnIngest implements Ingest {
          cookie). Fall back to main+1 when the server omits music_port (older daemons). */
       let musicUrl: string;
       if (import.meta.env.DEV) {
-         musicUrl = `${proto}://${window.location.host}/music-ws`;
+         musicUrl = `${proto}://${window.location.host}${this.dawnUrl("/music-ws")}`;
       } else {
          const port = this.musicPort || Number(window.location.port || "443") + 1;
-         musicUrl = `${proto}://${window.location.hostname}:${port}`;
+         musicUrl = `${proto}://${window.location.hostname}:${port}${this.dawnUrl("/")}`;
       }
       let ws: WebSocket;
       try {
@@ -4499,7 +4778,8 @@ export class DawnIngest implements Ingest {
       `state` frames, so we tell the server nothing here. */
    setEngaged(_engaged: boolean): void {}
 
-   disconnect(): void {
+   /* `silent`: don't report "disconnected" (the caller emits its own status, or reloads). */
+   disconnect(silent = false): void {
       this.wantConnected = false;
       window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
       this.wsFails = 0;
@@ -4521,7 +4801,7 @@ export class DawnIngest implements Ingest {
       this.pendingListRefresh = false;
       this.ws?.close();
       this.ws = null;
-      this.emit("disconnected");
+      if (!silent) this.emit("disconnected");
    }
 
    /* Reclaim the session for THIS tab after being superseded by another one. A deliberate
@@ -4551,6 +4831,7 @@ export class DawnIngest implements Ingest {
       not stack AudioContexts past Chrome's ~6-context cap (after which new audio silently
       dies). tts may be undefined if start() never ran. */
    dispose(): void {
+      window.removeEventListener("storage", this.onStorage);
       this.disconnect();
       /* The forget-learned timers: busy re-asks of the count and the forget's no-reply timeout. */
       for (const t of this.learnedRetryTimers) window.clearTimeout(t);

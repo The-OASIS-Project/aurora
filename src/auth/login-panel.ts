@@ -12,7 +12,8 @@ import type { LinkStatus } from "../ingest/dawn-ws.ts";
 
 export interface LoginOptions {
    onConnect: (username: string, password: string) => Promise<void>;
-   onDisconnect: () => void;
+   /* The linked chip was clicked (the host opens the Connection dialog, which holds Log out). */
+   onLogout: () => void;
    /* User gesture to reclaim the session after another tab took it over (the "superseded"
       takeover card's button). Omit -> the card shows without a reclaim control. */
    onReclaim?: () => void;
@@ -77,11 +78,12 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
    reclaimBtn.addEventListener("click", onReclaimClick);
    if (!opts.onReclaim) reclaimBtn.hidden = true;
 
-   /* The corner chip shown once linked. Click to disconnect. */
+   /* The corner chip shown once linked. Click for the connection details + Log out. */
    const chip = document.createElement("button");
    chip.id = "link-chip";
    chip.type = "button";
    chip.hidden = true;
+   chip.title = "Connection / Log out";
    chip.innerHTML = `<span class="link-dot"></span><span class="link-text"></span>`;
 
    root.append(overlay, chip);
@@ -112,7 +114,7 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
    };
    card.addEventListener("submit", onSubmit);
 
-   const onChipClick = (): void => opts.onDisconnect();
+   const onChipClick = (): void => opts.onLogout();
    chip.addEventListener("click", onChipClick);
 
    const setStatus = (status: LinkStatus, detail?: string): void => {

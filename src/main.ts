@@ -319,7 +319,8 @@ const openAbout = (): void => {
 };
 
 /* System > Connection: live link state, the server the browser talks to, and a
-   Disconnect action (drops back to the login overlay via the status stream). */
+   Log out action (ends the login server-side, clears the user's stored state, reloads to the
+   login card). */
 const openConnection = (): void => {
    const info = dawn.getConnectionInfo();
    const linked = info.status === "connected";
@@ -337,7 +338,7 @@ const openConnection = (): void => {
          { label: "Server", value: info.server },
          ...(info.detail ? [{ label: "Detail", value: info.detail }] : [])
       ],
-      actions: linked ? [{ label: "Disconnect", onClick: () => dawn.disconnect(), danger: true }] : []
+      actions: linked ? [{ label: "Log out", onClick: () => void dawn.logout(), danger: true }] : []
    });
 };
 
@@ -639,7 +640,9 @@ paintMic();
    talks to DAWN until the operator logs in. */
 const login = mountLogin(stage, {
    onConnect: (username, password) => dawn.connect(username, password),
-   onDisconnect: () => dawn.disconnect(),
+   /* The linked chip opens System > Connection, whose Log out is the deliberate second click
+      (one click on the chip used to be a harmless socket close; now it would end the login). */
+   onLogout: () => openConnection(),
    /* Reclaim the session for this tab after another tab superseded it (Tier-1 takeover). */
    onReclaim: () => dawn.reclaim()
 });

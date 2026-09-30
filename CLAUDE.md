@@ -168,6 +168,32 @@ stub-only - kept as the render seam and the extension point for future store-bac
   a stale old socket's late close must not act (guard `if (this.ws && this.ws !== ws)`), and a
   reclaim does a **full re-rendering `load_conversation`** (not the lightweight re-anchor) so
   the transcript catches up to turns another tab added while this one was backed off.
+- **Logout must end the login AND wipe the user's browser state (reload).** `DawnIngest.logout()`
+  POSTs `/api/auth/logout` with the socket OPEN (DAWN's contract: it frees every session the login
+  owns, sends `force_logout`, closes the WS with `4002`, closes music itself; replies 200 with the
+  cookie cleared). POST, not a bodyless GET, so Origin rides along through the dev proxy. A `4002`
+  close is handled like `force_logout` (the dev proxy delivers 1006, so the frame is the reliable
+  signal). Only on success (the 200, or DAWN ending the session meanwhile) it clears the per-user
+  localStorage (`src/util/user-state.ts` `USER_KEYS` + the `aurora.notice.*` keys, which embed
+  alert text) and reloads, so no panel keeps the previous user's data. A login or resume as a
+  different user than the last one (`dawn.hero.lastUser`, exact case-sensitive match), a revoked
+  session, and another tab signing in as someone else (a `storage` listener) all wipe + reload.
+  `disconnect()` is only a socket close (HMR teardown) - never wire a "log out" to it. DAWN rejects
+  a reconnect token owned by another user, so the old leak was purely client-side. Add any new
+  per-user localStorage key to `USER_KEYS`.
+- **Contract versioning: behaviour changes ride named flags (signal-map §9.15).** DAWN sends
+  `protocol` (int) + `features` (string[]) on the `config` frame and `/api/auth/status`; a missing
+  `features` = an older DAWN = legacy behaviour. Check a flag (`hasFeature`) only where behaviour
+  differs; a new optional FIELD needs no flag (presence detection still works). A `protocol` other
+  than `CLIENT_PROTOCOL` stops with a "DAWN is newer/older than this Aurora" message. Aurora sends
+  `client: {name, version, protocol}` in init/reconnect. `server_features` (compiled-in subsystems,
+  e.g. home_assistant) is a different frame and question - don't mix them.
+- **Per-app logins (`app_logins`): every DAWN URL goes through `dawnUrl()`.** With the flag, Aurora
+  has its own cookie (`dawn_session_aurora`) and must tag the WS/music URLs and every `/api/*` fetch
+  with `?app=aurora` (never a header). An untagged request silently uses the WebUI's login. Any new
+  DAWN request must be built with `dawnUrl()` (`src/util/dawn-app.ts` `tagDawnUrl`); rendered
+  markdown tags same-origin `/api/` src/href via `tagIfDawnApi` (DAWN's in-frame URLs carry no app).
+  The session frame's `username` is cross-checked against the signed-in user as a backstop.
 - **A fresh session loses the LLM context; the `session` frame's `reconnected` flag tells you.**
   Sessions are in-memory, so a daemon restart / idle-expiry / eviction lands the client on a
   FRESH session with an EMPTY LLM history - the lightweight `set_active_conversation` re-anchor

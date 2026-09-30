@@ -8,6 +8,7 @@
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { emojify } from "../util/emoji.ts";
+import { tagIfDawnApi } from "../util/dawn-app.ts";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -30,6 +31,17 @@ marked.use({
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
    if (node instanceof Element && node.hasAttribute("target")) {
       node.setAttribute("rel", "noopener noreferrer");
+   }
+   /* A reply's image/link to this origin's DAWN API must carry this app's login tag (DAWN's
+      per-app logins), or it loads as the WebUI's login. No-op for any other URL. */
+   if (node instanceof Element) {
+      for (const attr of ["src", "href"]) {
+         const v = node.getAttribute(attr);
+         if (v) {
+            const tagged = tagIfDawnApi(v);
+            if (tagged !== v) node.setAttribute(attr, tagged);
+         }
+      }
    }
 });
 
