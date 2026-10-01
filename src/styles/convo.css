@@ -989,3 +989,11 @@
    color: var(--accent);
    background: color-mix(in srgb, var(--ground) 80%, transparent);
 }
+
+/* Offline (no live link to DAWN): the send control dims; Enter keeps the draft (see canSubmit). */
+.composer-offline .composer-hint,
+.composer-offline .composer-hint:hover {
+   opacity: 0.35;
+   cursor: default;
+   color: var(--text-faint); /* no hover highlight on the disabled control */
+}

@@ -1777,6 +1777,9 @@ export class DawnIngest implements Ingest {
             this.capsSynced = true;
             /* Connection confirmed live: (re)start the liveness heartbeat. */
             this.startHeartbeat();
+            /* Re-announce "connected" now that a send can actually go out (isLinkLive): listeners
+               that gate on it (the composer's send control) re-sync past the open->session gap. */
+            if (this.lastStatus === "connected") this.emit("connected");
             /* Converge the server's "Always on" keepalive flag with the user's intent. A FRESH
                session (restart / idle-expiry / eviction; reconnected:false) starts with the DB
                flag CLEARED, so an enable must be re-sent (the handshake hint alone does not

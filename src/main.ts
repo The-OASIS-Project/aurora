@@ -646,16 +646,13 @@ const login = mountLogin(stage, {
    /* Reclaim the session for this tab after another tab superseded it (Tier-1 takeover). */
    onReclaim: () => dawn.reclaim()
 });
-dawn.onStatus((status, detail) => login.setStatus(status, detail));
-
-/* If the auth cookie is still valid (e.g. after an F5), reconnect without asking
-   for credentials again; otherwise the login card stays up. */
-void dawn.tryResume();
-
 /* The conversation view emits user intent to ingest; ingest pushes replies back
    to it. Focus also recedes the ambient field + dims the chrome (S3.3). */
 const conversation = mountConversation(stage, {
    onSubmit: (text, attachments) => ingest.submit(text, attachments),
+   /* An offline Enter keeps the draft and says why, instead of clearing it into the void. */
+   canSubmit: () => dawn.isLinkLive(),
+   onSubmitBlocked: () => dawn.notifyUser("Not connected to DAWN - message not sent."),
    /* Inline attachment display: images + doc originals are fetched through the ingest
       boundary (never a direct DAWN call from the view). */
    fetchImage: (id) => ingest.fetchImage(id),
@@ -672,6 +669,19 @@ const conversation = mountConversation(stage, {
       ingest.setEngaged(engaged);
    }
 });
+
+/* Link status drives the login card AND the composer's offline state. Registered after the
+   conversation view exists (onStatus is single-slot, and tryResume can emit right away). */
+dawn.onStatus((status, detail) => {
+   login.setStatus(status, detail);
+   /* Online only when a send would actually go out (the open->session handshake gap reads
+      offline; the session frame re-announces "connected" once it's live). */
+   conversation.setLinked(status === "connected" && dawn.isLinkLive());
+});
+
+/* If the auth cookie is still valid (e.g. after an F5), reconnect without asking
+   for credentials again; otherwise the login card stays up. */
+void dawn.tryResume();
 
 /* Decorate the reactor sink so standby learns DAWN's activity (busy guard - a non-idle
    reactor never sleeps; NOT a wake, so an ambient FYI can't light the display). */

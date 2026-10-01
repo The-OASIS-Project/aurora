@@ -34,6 +34,8 @@ import {
 } from "./attachments.ts";
 
 export interface ConversationController {
+   /* Reflect the link: offline dims the send control and says so in the placeholder. */
+   setLinked(linked: boolean): void;
    setThinking(thinking: boolean): void;
    setSpeaking(speaking: boolean): void;
    startReply(): void;
@@ -65,6 +67,12 @@ export interface ConversationOptions {
    /* `attachments.images` (base64) + order-matched `imageIds` ride the turn for images; the
       view inlines documents into `text` itself, so those need nothing here. */
    onSubmit?: (text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }) => void;
+   /* Whether a send can go out right now (the link to DAWN is live). Checked BEFORE the composer
+      clears or draws anything, so an offline Enter keeps the draft instead of losing it.
+      Absent -> always allowed. */
+   canSubmit?: () => boolean;
+   /* A send was refused by canSubmit (the host says why). */
+   onSubmitBlocked?: () => void;
    onEngage?: (engaged: boolean) => void;
    /* Upload a client-compressed image (ingest -> POST /api/images); returns the server id. */
    uploadImage?: (image: Blob) => Promise<{ id: string; mimeType: string; size: number }>;
@@ -682,6 +690,16 @@ export function mountConversation(
 
    /* --- ingest-facing (passive view) --------------------------------------- */
 
+   /* Offline: dim the send control and say so in the placeholder (the send itself is refused by
+      canSubmit, which keeps the draft). */
+   const sendHint = form.querySelector<HTMLButtonElement>(".composer-hint");
+   const onlinePlaceholder = input.placeholder;
+   const setLinked = (linked: boolean): void => {
+      form.classList.toggle("composer-offline", !linked);
+      if (sendHint) sendHint.disabled = !linked;
+      input.placeholder = linked ? onlinePlaceholder : "Not connected to DAWN";
+   };
+
    const setThinking = (t: boolean): void => {
       thinking = t;
       win.classList.toggle("thinking", t);
@@ -1132,6 +1150,11 @@ export function mountConversation(
          text DAWN receives both carry the real glyph. */
       const typed = emojify(input.value.trim());
       if (!typed && pendingDocs.length === 0 && pendingImages.length === 0) return;
+      /* Not connected: keep the draft (and its attachments) untouched; nothing is drawn. */
+      if (opts.canSubmit && !opts.canSubmit()) {
+         opts.onSubmitBlocked?.();
+         return;
+      }
       /* Documents inline into the turn TEXT as [ATTACHED DOCUMENT] markers (daemon persists
          the text verbatim). Images ride SEPARATELY as base64 + order-matched ids; the daemon
          appends the [IMAGE:id] markers server-side. The local bubble adds those image markers
@@ -1275,6 +1298,7 @@ export function mountConversation(
    });
 
    return {
+      setLinked,
       setThinking,
       setSpeaking,
       startReply,
