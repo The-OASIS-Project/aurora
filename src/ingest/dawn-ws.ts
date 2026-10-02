@@ -38,6 +38,7 @@ import type {
    MusicState,
    MusicTrack,
    NoticeAction,
+   NoticeOpen,
    OutImage,
    StockAccount,
    StockAssetType,
@@ -63,6 +64,8 @@ import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.
 import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
+import type { EmailSource } from "./email.ts";
+import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
 import {
    LAST_USER_STORAGE_KEY,
@@ -884,6 +887,8 @@ export class DawnIngest implements Ingest {
       carries a timestamp so a stale entry (echo that never arrived) can't later swallow an
       identical spoken turn. */
    private readonly typedEchoes: Array<{ text: string; at: number }> = [];
+   /* When a TURN_QUEUE_FULL arrived (its trailing PROCESSING_ERROR is swallowed). */
+   private queueFullAt = 0;
    private readonly jobs = new Map<number, { title: string; running: boolean }>();
    /* Event ids of currently-ringing ALARMS (not reminders/timers, which DAWN auto-dismisses).
       Drives the scheduler_action{dismiss} on user close and the shared ringing-tone loop
@@ -1072,6 +1077,9 @@ export class DawnIngest implements Ingest {
    private localModels: string[] = [];
    private pendingNewConvTitle = ""; // title derived from the first message, applied on new_conversation_response
    private isPrivate = false;
+   /* A private-first new conversation waiting for DAWN to confirm it (newConversation). */
+   private privateCreate: { resolve: (ok: boolean) => void; timer: number; promise: Promise<boolean> } | null = null;
+   private discardNextCreate = false;
    /* The conversation a tool reset just left, whose in-flight reply still renders here until
       that turn goes idle (see conversation_reset); 0 = none. */
    private resetTurnConv = 0;
@@ -1093,6 +1101,9 @@ export class DawnIngest implements Ingest {
    /* DAWN's advertised behaviour flags (config.features); null = an older DAWN that sends none,
       which means legacy behaviour everywhere a flag would matter. */
    private serverFeatures: Set<string> | null = null;
+   private configSeen = false; // this connection's config (protocol + features) has arrived
+   /* The email boundary (EmailSource): availability follows `email_client`; see email-wire.ts. */
+   private readonly email = new DawnEmail();
    /* DAWN supports per-app logins (`app_logins`, learned from /api/auth/status - on load and again
       at login - never mid-connection, so a socket and its later requests always agree on the
       cookie): then every DAWN URL carries ?app=aurora and login sends "app". Sticky for the page;
@@ -1302,6 +1313,7 @@ export class DawnIngest implements Ingest {
 
    private openSocket(): void {
       this.serverFeatures = null; // re-learned from this connection's config (a different build may answer)
+      this.configSeen = false;
       this.emit("connecting");
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       /* Same-origin /ws — Vite proxies it to the DAWN daemon. The dawn-1.0
@@ -1647,7 +1659,7 @@ export class DawnIngest implements Ingest {
 
    /* Surface a transient user-facing notice through the notification layer. */
    notifyUser(message: string): void {
-      this.spikeNotice("link-notice", "notice", message, { tone: "attention", hold: 6, x: 0, y: -0.55 });
+      this.spikeNotice("link-notice", "notice", message, { tone: "attention", hold: 6 });
    }
 
    /* Session revoked/expired server-side (force_logout, a 4002 close, or an UNAUTHORIZED reply to
@@ -1841,9 +1853,11 @@ export class DawnIngest implements Ingest {
                array is an older DAWN (legacy behaviour). A protocol this client doesn't speak
                stops here with a plain message rather than half-working. */
             if (typeof p.version === "string") this.dawnVersion = p.version; // before a mismatch bail, for the Connection dialog
+            this.configSeen = true;
             this.serverFeatures = Array.isArray(p.features)
                ? new Set((p.features as unknown[]).filter((f): f is string => typeof f === "string"))
                : null;
+            this.email.setServerSupport(this.hasFeature("email_client"));
             if (typeof p.protocol === "number" && p.protocol !== CLIENT_PROTOCOL) {
                this.disconnect(true);
                this.emit("error", protocolMismatchText(p.protocol, this.dawnVersion));
@@ -2055,9 +2069,7 @@ export class DawnIngest implements Ingest {
                this.applyReasoningFields(p);
                if (p.reasoning_adjusted === true) {
                   this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
-                     hold: 6,
-                     x: 0,
-                     y: -0.55
+                     hold: 6
                   });
                }
                this.notifyLlm();
@@ -2069,9 +2081,7 @@ export class DawnIngest implements Ingest {
                console.warn("[dawn] set_session_llm rejected:", err);
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
                   tone: "attention",
-                  hold: 9,
-                  x: 0,
-                  y: -0.55
+                  hold: 9
                });
             }
             break;
@@ -2159,8 +2169,6 @@ export class DawnIngest implements Ingest {
                   break;
                }
                this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-                  x: 0,
-                  y: -0.4,
                   hold: 4
                });
                break;
@@ -2319,8 +2327,6 @@ export class DawnIngest implements Ingest {
                const err = String((p as { error?: string }).error ?? "");
                if (!/not found/i.test(err)) {
                   this.spikeNotice("memory-delete", "attention", err || "Couldn't delete that memory", {
-                     x: 0,
-                     y: -0.4,
                      hold: 5,
                      tone: "attention"
                   });
@@ -2334,16 +2340,20 @@ export class DawnIngest implements Ingest {
                continuations (`also_private`). Refetch the picker so every affected row's badge is
                right, rather than patching ids one by one. A failure is surfaced; the toggle keeps
                the user's intent (a later load reflects the server's real value). */
-            if ((p as { success?: boolean }).success === false) {
+            /* A pending private-first create (newConversation) settles only on the reply for ITS
+               conversation (DAWN echoes conversation_id + is_private), never on a stray one. */
+            const pp = p as { success?: boolean; conversation_id?: number; is_private?: boolean };
+            const forPending = !!this.privateCreate && this.convId > 0 && Number(pp.conversation_id ?? 0) === this.convId;
+            if (pp.success === false) {
+               if (forPending) this.settlePrivateCreate(false);
                const err = String((p as { error?: string }).error ?? "");
                this.spikeNotice("privacy", "attention", err || "Couldn't change privacy", {
-                  x: 0,
-                  y: -0.4,
                   hold: 5,
                   tone: "attention"
                });
                break;
             }
+            if (forPending && pp.is_private === true) this.settlePrivateCreate(true);
             this.scheduleListRefresh();
             break;
          }
@@ -2434,7 +2444,7 @@ export class DawnIngest implements Ingest {
                      : n > 0
                        ? `Forgot ${n} ${n === 1 ? "memory" : "memories"}`
                        : "Forgot older versions and connections";
-               this.spikeNotice(FORGET_NOTICE_ID, "memory", summary, { x: 0, y: -0.4, hold: 5 });
+               this.spikeNotice(FORGET_NOTICE_ID, "memory", summary, { hold: 5 });
             } else {
                this.forgetFailed(replyId, String(fp.error ?? "") || "Could not forget memories");
             }
@@ -2448,8 +2458,6 @@ export class DawnIngest implements Ingest {
                      ? (p as { error?: string }).error
                      : "Could not delete conversation";
                this.spikeNotice("conv-delete", "conversation", String(msg), {
-                  x: 0,
-                  y: -0.4,
                   hold: 5,
                   tone: "attention"
                });
@@ -2550,6 +2558,14 @@ export class DawnIngest implements Ingest {
                privacy intent. Feature-detected: older servers omit the flag -> client path. */
             const np = p as { conversation_id?: number; title?: string; server_initiated?: boolean };
             const serverInitiated = np.server_initiated === true;
+            /* A private-first create the user abandoned (they opened another conversation while it
+               was in flight): the empty conversation exists server-side, but it must not take over
+               the view. */
+            if (this.discardNextCreate && !serverInitiated) {
+               this.discardNextCreate = false;
+               this.scheduleListRefresh();
+               break;
+            }
             this.sinks.context.clear(); // fresh conversation: no injected context yet
             /* Reflect the real title: a server-initiated (voice) create pushes it; a client
                create derives it from the first message (DAWN doesn't echo it, so we remembered
@@ -2558,6 +2574,7 @@ export class DawnIngest implements Ingest {
             this.setActiveTitle(serverInitiated ? String(np.title ?? "") : this.pendingNewConvTitle);
             this.pendingNewConvTitle = "";
             this.convId = Number(np.conversation_id ?? 0);
+            if (this.convId <= 0 && !serverInitiated) this.settlePrivateCreate(false);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
                this.sinks.conversationList.setActive(this.convId);
@@ -2600,6 +2617,39 @@ export class DawnIngest implements Ingest {
                this.revokeSession(typeof p.message === "string" ? p.message : undefined);
                break;
             }
+            /* turn_refs: an error naming one of OUR turns that hasn't echoed yet means that turn never
+               ran (refused on receipt, or before it started), whatever the code: give its draft back.
+               A ref'd error for a turn that already echoed (LLM_ERROR mid-reply, PERSIST_ERROR after
+               it) finds nothing held and falls through to the normal handling below. Info/warning
+               frames are never refusals. */
+            const errRef = typeof p.client_ref === "string" ? p.client_ref : "";
+            const errSeverity = typeof p.severity === "string" ? p.severity : "error";
+            const refusalCode =
+               code === "IMAGE_UNAVAILABLE" || code === "IMAGE_LIMIT" || code === "IMAGE_ERROR" || code === "EMPTY_MESSAGE" || code === "TURN_QUEUE_FULL";
+            const refusalText = (): string =>
+               typeof p.message === "string" && p.message ? p.message : code === "TURN_QUEUE_FULL" ? "DAWN is busy. Try again in a moment." : "it couldn't be sent.";
+            if (errRef && errSeverity === "error") {
+               const refused = this.sinks.conversation.rejectTurn({ ref: errRef }, code === "IMAGE_UNAVAILABLE");
+               if (refused !== null) {
+                  this.dropTypedEcho(refused);
+                  if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
+                  this.sinks.conversation.noteRefusal(`Message not sent: ${refusalText()}`);
+                  break;
+               }
+            }
+            /* With turn_refs, never GUESS which turn a refusal means: one that names no held turn (its
+               hold was dropped by a link loss or a switch, or it's a voice turn's) only gets a notice. */
+            if (this.hasFeature("turn_refs") && refusalCode) {
+               if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
+               this.sinks.conversation.noteRefusal(`A message wasn't sent: ${refusalText()}`);
+               break;
+            }
+            if (code === "INVALID_CLIENT_REF") {
+               console.warn("[dawn] DAWN refused this client's turn reference:", p.message);
+               this.dropTypedEcho(this.sinks.conversation.rejectTurn("newest", false));
+               this.sinks.conversation.noteRefusal("Message not sent - please try again.");
+               break;
+            }
             /* Always-on enable failures arrive as ordinary error frames (there is no
                always_on_error). Clear the latch and don't flash the reactor red - a second
                tab (ALREADY_ACTIVE), a mid-PTT enable (PTT_ACTIVE), or an init failure just
@@ -2618,6 +2668,45 @@ export class DawnIngest implements Ingest {
                }
                break;
             }
+            /* A turn refused for its images (DAWN image_turns_by_id): it never ran and nothing was
+               saved. Give the draft back (text + attachments) and say why; not a reactor error. */
+            if (code === "IMAGE_UNAVAILABLE" || code === "IMAGE_LIMIT" || code === "IMAGE_ERROR") {
+               const message = typeof p.message === "string" && p.message ? p.message : "The attached images couldn't be sent.";
+               /* Only one image turn is ever held, so this names exactly that one. Re-upload its
+                  images on IMAGE_UNAVAILABLE (an expired upload), so a retry gets fresh ids. */
+               this.dropTypedEcho(this.sinks.conversation.rejectTurn("image", code === "IMAGE_UNAVAILABLE"));
+               if (this.lastState === "idle") this.sinks.conversation.setThinking(false); // another turn may still be running
+               this.sinks.conversation.noteRefusal(`Message not sent: ${message}`);
+               break;
+            }
+            /* DAWN's turn queue was full and a turn was refused. Which one (a typed turn, push-to-talk,
+               or always-on) the frame doesn't say, so no draft is taken back on a guess; say so plainly.
+               DAWN follows a refused text turn with a generic PROCESSING_ERROR: swallow that one. */
+            if (code === "TURN_QUEUE_FULL") {
+               this.queueFullAt = performance.now();
+               /* Without turn refs, which turn was refused is unknown and it never echoes: stop holding
+                  them all (a held image turn would otherwise block every later image send). With
+                  turn_refs a ref-less TURN_QUEUE_FULL is a voice turn's, so typed holds stay. */
+               if (!this.hasFeature("turn_refs")) this.sinks.conversation.releaseTurns();
+               if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
+               this.sinks.conversation.noteRefusal("DAWN is busy - a message wasn't sent. Try again in a moment.");
+               break;
+            }
+            /* (An older DAWN follows a refused text turn's TURN_QUEUE_FULL with this generic error;
+               d226e575+ doesn't, so this is a no-op there.) */
+            if (code === "PROCESSING_ERROR" && performance.now() - this.queueFullAt < 2000) {
+               this.queueFullAt = 0;
+               break;
+            }
+            /* A turn with neither text nor images (`image_only_turns`). Aurora never sends one; if it
+               ever does, say so plainly rather than flashing the reactor. */
+            if (code === "EMPTY_MESSAGE") {
+               /* Refused on receipt, so it names the newest typed turn: give it back. */
+               this.dropTypedEcho(this.sinks.conversation.rejectTurn("newest", false));
+               if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
+               this.sinks.conversation.noteRefusal("Message not sent: it was empty.");
+               break;
+            }
             /* A push-to-talk hold that exceeds DAWN's ~10s recording cap: the server keeps
                what it buffered and processes it on release, so this is a soft limit, not a
                failure - log it, don't flash the reactor red. */
@@ -2633,9 +2722,7 @@ export class DawnIngest implements Ingest {
                if (message) {
                   this.spikeNotice("llm-notice", "notice", message, {
                      tone: "nominal",
-                     hold: 7,
-                     x: 0,
-                     y: -0.55
+                     hold: 7
                   });
                }
             } else if (severity === "warning") {
@@ -2645,9 +2732,7 @@ export class DawnIngest implements Ingest {
                console.warn("[dawn] warning frame:", code, message);
                this.spikeNotice("dawn-warning", "attention", message || "Warning", {
                   tone: "attention",
-                  hold: 9,
-                  x: 0,
-                  y: -0.55
+                  hold: 9
                });
             } else {
                /* A real error (e.g. LLM_ERROR "Failed to get response from AI" when an API
@@ -2861,9 +2946,7 @@ export class DawnIngest implements Ingest {
                this.refreshHA();
                this.spikeNotice("ha-notice", "home", err, {
                   tone: "attention",
-                  hold: 7,
-                  x: 0,
-                  y: -0.55
+                  hold: 7
                });
             }
             break;
@@ -2930,9 +3013,7 @@ export class DawnIngest implements Ingest {
                console.warn("[dawn] watch_set_enabled failed:", err);
                this.spikeNotice("watch-toggle", "attention", err || "Couldn't update the watch", {
                   tone: "attention",
-                  hold: 6,
-                  x: 0,
-                  y: -0.55
+                  hold: 6
                });
             }
             this.send({ type: "watch_list" });
@@ -2994,9 +3075,7 @@ export class DawnIngest implements Ingest {
                console.warn("[dawn] watch mutation failed:", type, r.error);
                this.spikeNotice("watch-mutate", "attention", r.error || "Couldn't update the watch", {
                   tone: "attention",
-                  hold: 6,
-                  x: 0,
-                  y: -0.55
+                  hold: 6
                });
             }
             this.send({ type: "watch_list" });
@@ -3021,8 +3100,6 @@ export class DawnIngest implements Ingest {
             const nowActive = job.conversation_id != null && this.jobs.has(job.conversation_id);
             if (!wasActive && nowActive) {
                this.spikeNotice("job-notice", "jobs", `Started: ${job.title || "background job"}`, {
-                  x: 0.6,
-                  y: -0.4
                });
             }
             this.renderJobs();
@@ -3036,8 +3113,6 @@ export class DawnIngest implements Ingest {
          case "job_notification":
             /* A job finished: spike a transient notice that recedes on its own. */
             this.spikeNotice("job-notice", "jobs", String(p.text ?? "Background job complete"), {
-               x: 0.6,
-               y: -0.4
             });
             break;
 
@@ -3058,8 +3133,6 @@ export class DawnIngest implements Ingest {
                urgent: alert, // a needs-you alert peeks the standby screensaver; an ambient FYI does not
                /* Spawn centered, in the reactor's full-height dead strip: docked panels are kept
                   in the left/right columns flanking it, so a centered notice avoids them. */
-               x: 0,
-               y: -0.42
             });
             break;
          }
@@ -3073,8 +3146,6 @@ export class DawnIngest implements Ingest {
             this.spikeNotice(`observation:${category}:${note}`, category, note, {
                hold: 5,
                /* Centered in the dead strip too (see attention_alert), just lower. */
-               x: 0,
-               y: 0.42
             });
             break;
 
@@ -3164,12 +3235,10 @@ export class DawnIngest implements Ingest {
                           { id: "dismiss", label: "Dismiss" }
                        ]
                      : undefined,
-                  conversationId: convId > 0 ? convId : undefined,
+                  open: convId > 0 ? { kind: "conversation", id: convId } : undefined,
                   /* A live (non-missed) fire wakes the standby screensaver (peek): alarms,
                      timers, reminders, and briefings. A `missed` reconnect replay does not. */
-                  urgent: !missed,
-                  x: 0.62,
-                  y: 0.42
+                  urgent: !missed
                });
                /* A live ringing alarm's sound IS the looping tone (started below) - no separate
                   one-shot, which would double over the loop's first beat. A non-alarm live
@@ -3378,6 +3447,12 @@ export class DawnIngest implements Ingest {
                appended the typed bubble locally (recorded in typedEchoes), so dedupe that
                and display only what has no local counterpart - i.e. spoken input. */
             if (p.role === "user" && typeof p.text === "string") {
+               /* Confirm our held turn: by its ref when DAWN echoes one (turn_refs), else the oldest held
+                  turn with this text. */
+               if (p.replay !== true) {
+                  const ref = typeof (p as { client_ref?: unknown }).client_ref === "string" ? (p as { client_ref: string }).client_ref : undefined;
+                  if (ref !== undefined || !this.hasFeature("turn_refs")) this.sinks.conversation.confirmTurn(p.text, ref);
+               }
                this.handleIncomingUser(
                   p.text.trim(),
                   Number((p as { message_id?: number }).message_id ?? 0),
@@ -3616,15 +3691,45 @@ export class DawnIngest implements Ingest {
          load_conversation_response confirms it. */
       this.sinks.conversation.endReply();
       if (id !== this.convId) this.settleTurnOnSwitch();
+      if (this.privateCreate) {
+         this.settlePrivateCreate(false);
+         this.discardNextCreate = true; // its new_conversation_response must not steal the view
+      }
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
    }
 
-   newConversation(): void {
+   newConversation(opts: { private?: boolean } = {}): Promise<boolean> {
+      /* A second "Discuss privately" while one is in flight joins it (no second conversation). */
+      if (opts.private && this.privateCreate) return this.privateCreate.promise;
       /* Lazy creation (Aurora's model): clear the surface + id now; the first message
          opens the conversation via the convId===0 path in submit(). */
       this.newChat();
+      if (!opts.private) return Promise.resolve(true);
+      /* Private-first (the Mail panel's "Discuss privately"): create the conversation NOW and
+         resolve only after DAWN confirms set_private, so the first turn (the one carrying the
+         email) can never be saved public. The lazy path would send that turn before the
+         replayed set_private lands. */
+      this.settlePrivateCreate(false);
+      if (!this.isLinkLive()) return Promise.resolve(false);
+      this.isPrivate = true;
+      this.notifyLlm();
+      let resolve!: (ok: boolean) => void;
+      const promise = new Promise<boolean>((r) => (resolve = r));
+      const timer = window.setTimeout(() => this.settlePrivateCreate(false), 10_000);
+      this.privateCreate = { resolve, timer, promise };
+      this.discardNextCreate = false;
+      this.send({ type: "new_conversation", payload: { save_current: true, title: "" } });
+      return promise;
+   }
+
+   private settlePrivateCreate(ok: boolean): void {
+      const p = this.privateCreate;
+      if (!p) return;
+      this.privateCreate = null;
+      window.clearTimeout(p.timer);
+      p.resolve(ok);
    }
 
    renameConversation(id: number, title: string): void {
@@ -3656,8 +3761,6 @@ export class DawnIngest implements Ingest {
          be taken as the first one's failure (and drop its real result). Hold it client-side. */
       if (this.pendingForgetId) {
          this.spikeNotice("memory-forget-busy", "memory", "A forget is already running; try again when it finishes", {
-            x: 0,
-            y: -0.3,
             hold: 5
          });
          return;
@@ -3673,9 +3776,7 @@ export class DawnIngest implements Ingest {
          id: FORGET_NOTICE_ID,
          kind: "memory",
          summary: "Forgetting\u2026",
-         sticky: true,
-         x: 0,
-         y: -0.4
+         sticky: true
       });
       this.forgetTimer = window.setTimeout(() => {
          this.clearForgetPending();
@@ -3684,7 +3785,7 @@ export class DawnIngest implements Ingest {
             FORGET_NOTICE_ID,
             "memory",
             "No reply to the forget request; check the Memory panel before retrying",
-            { x: 0, y: -0.4, tone: "attention", persist: true }
+            { tone: "attention", persist: true }
          );
       }, FORGET_REPLY_TIMEOUT_MS);
       this.send({ type: "forget_conversation_memories", payload: { conversation_id: id } });
@@ -3705,8 +3806,6 @@ export class DawnIngest implements Ingest {
       this.sinks.notifications.remove(FORGET_NOTICE_ID);
       this.forgetRetryId = id;
       this.spikeNotice(FORGET_NOTICE_ID, "memory", message, {
-         x: 0,
-         y: -0.4,
          tone: "attention",
          persist: true,
          actions:
@@ -4128,6 +4227,7 @@ export class DawnIngest implements Ingest {
       /* A typed turn's echo from the conversation just left is now dropped as foreign; don't
          let its entry absorb a same-text message here. */
       this.typedEchoes.length = 0;
+      this.sinks.conversation.releaseTurns();
       /* "listening" here is the ASR phase of a turn (conversation-tagged); always-on's armed
          state rides always_on_state, so settling it is safe. */
       if (
@@ -4625,7 +4725,7 @@ export class DawnIngest implements Ingest {
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
-   submit(text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }): void {
+   submit(text: string, attachments?: { turnRef?: string; images?: OutImage[]; imageIds?: string[] }): void {
       /* Don't let a message vanish into a dead/half-open link: tell the user instead of
          silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
       if (!this.isLinkLive()) {
@@ -4657,15 +4757,18 @@ export class DawnIngest implements Ingest {
          conversation_id?: number;
          images?: OutImage[];
          image_ids?: string[];
+         client_ref?: string;
       } = { text };
+      /* turn_refs: tag the turn so its echo and any refusal name it exactly. */
+      if (attachments?.turnRef && this.hasFeature("turn_refs")) payload.client_ref = attachments.turnRef;
       if (this.convId > 0) payload.conversation_id = this.convId;
-      /* Image attachments: base64 for the live LLM call, plus the MANDATORY image_ids (the
-         /api/images upload ids, order-matched) the daemon persists as [IMAGE:<id>] markers so
-         they rehydrate on reload. Hard cut-over: an image turn without ids persists text-only,
-         so the composer always sends both together (built from the same pending list). */
-      if (attachments?.images?.length) {
-         payload.images = attachments.images;
-         payload.image_ids = attachments.imageIds ?? [];
+      /* Image attachments: the MANDATORY image_ids (the /api/images upload ids, order-matched),
+         which the daemon reads, sends to the model, and persists as [IMAGE:<id>] markers. A DAWN
+         advertising `image_turns_by_id` takes images ONLY that way (it ignores base64); an older
+         one still needs the base64 images[] for the live model call, so it gets both. */
+      if (attachments?.imageIds?.length) {
+         payload.image_ids = attachments.imageIds;
+         if (!this.hasFeature("image_turns_by_id") && attachments.images?.length) payload.images = attachments.images;
       }
       this.send({ type: "text", payload });
       /* DAWN will echo this as a user `transcript` (it drives its own WebUI's typed
@@ -4675,6 +4778,14 @@ export class DawnIngest implements Ingest {
       this.typedEchoes.push({ text: text.trim(), at: performance.now() });
       if (this.typedEchoes.length > 8) this.typedEchoes.shift();
       this.sinks.conversation.setThinking(true);
+   }
+
+   /* A refused turn will never echo: drop ITS dedup entry (by text, not the newest), so it can't
+      swallow a later same-text message. */
+   private dropTypedEcho(text: string | null): void {
+      if (text === null) return;
+      const i = this.typedEchoes.findIndex((e) => e.text === text.trim());
+      if (i >= 0) this.typedEchoes.splice(i, 1);
    }
 
    /* A dismissed notice. For a ringing ALARM (`scheduler-<id>`), stop the local ringing loop
@@ -4862,6 +4973,36 @@ export class DawnIngest implements Ingest {
       this.alarmChime.dispose();
    }
 
+   /* Whether a typed turn can go out now: the link is live AND this connection's config has arrived,
+      so the feature flags that shape the turn (turn_refs, image flags) are known. */
+   canSendTurn(): boolean {
+      return this.isLinkLive() && this.configSeen;
+   }
+
+   /* Whether DAWN echoes a turn reference on the echo and on refusals: the `turn_refs` flag. */
+   supportsTurnRefs(): boolean {
+      return this.hasFeature("turn_refs");
+   }
+
+   /* Whether DAWN runs an image-only turn (empty text + image_ids): the `image_only_turns` flag. */
+   supportsImageOnlyTurns(): boolean {
+      return this.hasFeature("image_only_turns");
+   }
+
+   /* The Mail panel's source (the email verbs live behind the `email_client` flag). */
+   emailSource(): EmailSource {
+      return this.email;
+   }
+
+   /* Whether a chat turn can carry an email reference (DAWN's `email_refs` flag; the turn field
+      lands with DAWN P1.4, so this stays false until this client sends it). Prerequisites before
+      it may return true (docs/EMAIL_PANEL_DESIGN.md 4): the turn sends `email_refs`, private-first
+      creation (newConversation({private:true}), done), and off-origin images in assistant replies
+      no longer auto-load (4.7, not built yet). */
+   supportsEmailRefs(): boolean {
+      return false;
+   }
+
    /* The login panel subscribes to reflect connection state. */
    onStatus(handler: StatusHandler): void {
       this.status = handler;
@@ -4870,6 +5011,11 @@ export class DawnIngest implements Ingest {
    private emit(status: LinkStatus, detail?: string): void {
       this.lastStatus = status;
       this.lastDetail = detail ?? "";
+      this.email.setLinked(status === "connected");
+      /* Link down: an unechoed turn's fate can't be learned now; stop holding drafts for them. Not on
+         "stale" (one missed heartbeat): the socket is still open and refusals still arrive. */
+      if (status !== "connected" && status !== "stale" && this.sinks) this.sinks.conversation.releaseTurns();
+      if (status !== "connected") this.settlePrivateCreate(false); // a pending private create can't complete now
       this.status(status, detail);
    }
 
@@ -4936,8 +5082,6 @@ export class DawnIngest implements Ingest {
       kind: string,
       summary: string,
       opts: {
-         x: number;
-         y: number;
          tone?: "nominal" | "attention";
          hold?: number;
          detail?: string;
@@ -4945,7 +5089,7 @@ export class DawnIngest implements Ingest {
          critical?: boolean;
          urgent?: boolean;
          actions?: NoticeAction[];
-         conversationId?: number;
+         open?: NoticeOpen;
       }
    ): void {
       this.sinks.notifications.notify({
@@ -4959,9 +5103,7 @@ export class DawnIngest implements Ingest {
          urgent: opts.urgent,
          actions: opts.actions,
          hold: opts.hold,
-         conversationId: opts.conversationId,
-         x: opts.x,
-         y: opts.y
+         open: opts.open
       });
    }
 
@@ -4992,8 +5134,7 @@ export class DawnIngest implements Ingest {
          summary: `${count} active job${count > 1 ? "s" : ""}`,
          items,
          sticky: true,
-         x: 0.62, // defaults to the right region (its old rail side); persists once moved
-         y: -0.2
+         // defaults to the right region (its old rail side); persists once moved
       });
    }
 
@@ -5013,8 +5154,17 @@ export class DawnIngest implements Ingest {
       message_id > 0 on BOTH the text and voice paths (verified), so a save-failure/id-0 turn
       emits only the echo (single frame - the splice handles it), never a doubling second frame. */
    private handleIncomingUser(text: string, messageId: number, replay: boolean): void {
-      if (!text) return;
       if (this.sinks.conversation.hasMessage(messageId)) return;
+      /* An image-only turn's own echo has empty text (image_only_turns): it can only be ours (the
+         local bubble already shows the attached images), so adopt its id and draw nothing. */
+      if (!text) {
+         const i = this.typedEchoes.findIndex((e) => e.text === "");
+         if (i >= 0) {
+            this.typedEchoes.splice(i, 1);
+            this.sinks.conversation.noteMessageId(messageId);
+         }
+         return;
+      }
       const now = performance.now();
       const echoIdx = this.typedEchoes.findIndex((e) => e.text === text && now - e.at < TYPED_ECHO_TTL_MS);
       if (echoIdx >= 0) {

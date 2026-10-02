@@ -60,9 +60,11 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     `rename_conversation` / `set_pinned` / confirm-gated **`delete_conversation`**; the Watches
     panel's `watch_set_enabled` + `watch_add` / `watch_update` / confirm-gated **`watch_remove`**;
     **conversation attachments** (a document via `POST /api/documents`, inlined as an
-    `[ATTACHED DOCUMENT]` marker; a client-compressed image via `POST /api/images`, sent as
-    `payload.images[]` base64 plus the MANDATORY order-matched `payload.image_ids[]` so the daemon
-    persists `[IMAGE:id]` markers - image attach is gated on a vision-capable model); the
+    `[ATTACHED DOCUMENT]` marker; a client-compressed image via `POST /api/images`, sent as the MANDATORY order-matched
+    `payload.image_ids[]` (the daemon reads them, persists `[IMAGE:id]` markers, and with
+    `image_turns_by_id` refuses a bad id with `IMAGE_*` and runs nothing; only an older DAWN
+    without that flag also gets the base64 `payload.images[]`). A refused turn returns its text +
+    attachments to the composer. Image attach is gated on a vision-capable model); the
     **session-continuity** writes (`set_active_conversation` / `load_conversation` re-anchors on
     reconnect + the takeover reclaim, see the reconnect gotcha below); and **memory deletes**
     (`delete_memory_fact` / `_preference` / `_summary` / `_entity` - user-scoped, the user's own

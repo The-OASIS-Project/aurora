@@ -59,6 +59,13 @@ export interface Palette {
    text: string;
    textDim: string;
    textFaint: string;
+
+   /* Mail account identity (the Mail panel's per-account bar + monogram tile). All cool or
+      neutral and held clear of every hue that already MEANS something (alert, warn/energy,
+      gain, loss, the accent that marks unread, cool). Hue alone separates about five accounts,
+      so the tile's letter always carries identity too (never color alone). Ordered so the two
+      closest to reserved hues (stone, sage) come last. */
+   account: readonly string[];
 }
 
 export const PALETTE: Palette = {
@@ -95,7 +102,9 @@ export const PALETTE: Palette = {
    /* Lifted from a failing ~2.3:1 to ~4.2:1 on black: it is load-bearing (input
       placeholder, telemetry labels), so it must clear the legibility floor while
       staying the dimmest tier. */
-   textFaint: "#647875"
+   textFaint: "#647875",
+
+   account: ["#7FA2FF", "#A88BFF", "#D58FE6", "#8FB8D9", "#B9A6E0", "#93A3C4", "#C9C2A8", "#A6C98A"]
 };
 
 /*
@@ -128,6 +137,9 @@ export const TYPE: TypeScale = {
    source of truth, mirrored to --font-mono like the palette/type, so a font swap is a
    one-line change instead of a grep across every stylesheet. */
 export const FONT_MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
+
+/* The prose family (the body text, the conversation, a mail body). Mirrored to --font-sans. */
+export const FONT_SANS = '"IBM Plex Sans", "Inter", system-ui, -apple-system, sans-serif';
 
 /* The clock face - the HUD clock and the standby screensaver clock. A distinct, cooler
    display family than the readout mono; swap this one line (+ the @fontsource import in
@@ -183,6 +195,7 @@ export function applyPalette(p: Palette = PALETTE): void {
    root.setProperty("--text", p.text);
    root.setProperty("--text-dim", p.textDim);
    root.setProperty("--text-faint", p.textFaint);
+   p.account.forEach((c, i) => root.setProperty(`--account-${i + 1}`, c));
    applyType();
 }
 
@@ -197,5 +210,6 @@ export function applyType(t: TypeScale = TYPE): void {
    root.setProperty("--fs-lead", t.lead);
    root.setProperty("--fs-display", t.display);
    root.setProperty("--font-mono", FONT_MONO);
+   root.setProperty("--font-sans", FONT_SANS);
    root.setProperty("--font-clock", FONT_CLOCK);
 }

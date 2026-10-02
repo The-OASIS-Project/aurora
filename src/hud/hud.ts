@@ -92,8 +92,10 @@ export function mountHud(root: HTMLElement): HudController {
    const noop = (): void => {};
    const clockEl = root.querySelector<HTMLElement>("#hud-clock");
    const statusEl = root.querySelector<HTMLElement>("#hud-status");
-   const disposeClockMove = clockEl ? makeMovable(clockEl, { storageKey: CLOCK_POS_KEY }) : noop;
-   const disposeStatusMove = statusEl ? makeMovable(statusEl, { storageKey: STATUS_POS_KEY }) : noop;
+   /* raise:false - they live inside #hud's own stacking context, so click-to-front couldn't lift
+      them over a panel anyway. */
+   const disposeClockMove = clockEl ? makeMovable(clockEl, { storageKey: CLOCK_POS_KEY, raise: false }) : noop;
+   const disposeStatusMove = statusEl ? makeMovable(statusEl, { storageKey: STATUS_POS_KEY, raise: false }) : noop;
    const clockVis = clockEl
       ? makeVisibility(clockEl, { storageKey: CLOCK_SHOWN_KEY, offClass: "hud-clock-off" })
       : null;

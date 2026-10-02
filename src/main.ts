@@ -31,6 +31,7 @@ import "./styles/calendar.css";
 import "./styles/homeassistant.css";
 import "./styles/watches.css";
 import "./styles/stocks.css";
+import "./styles/email.css";
 import "./styles/watchlist.css";
 import "./styles/library.css";
 import "./styles/docview.css";
@@ -74,6 +75,9 @@ import { mountCalendarPanel } from "./calendar/calendar-panel.ts";
 import { mountHAPanel } from "./homeassistant/ha-panel.ts";
 import { mountWatchesPanel } from "./watches/watches-panel.ts";
 import { mountStocksPanel } from "./stocks/stocks-panel.ts";
+import { mountEmailPanel } from "./email/email-panel.ts";
+import { registerRaisable } from "./render/movable.ts";
+import type { EmailSource } from "./ingest/email.ts";
 import { mountWatchlistPanel } from "./watchlist/watchlist-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
@@ -174,8 +178,12 @@ const notifications = new Notifications(
    stage,
    (id) => ingest.dismiss(id),
    (id, action, value) => ingest.noticeAction(id, action, value),
-   /* Tap a briefing card to open its conversation (same load path the picker uses). */
-   (conversationId) => ingest.loadConversation(conversationId)
+   /* Tap a briefing card to open its conversation (same load path the picker uses), or a
+      new-mail card to open its message in the Mail panel. */
+   (target) => {
+      if (target.kind === "conversation") ingest.loadConversation(target.id);
+      else emailPanel.openMessage(target.accountId, target.messageId);
+   }
 );
 
 /* Ambient standby (screensaver): after the configured inactivity it fades the chrome and
@@ -188,6 +196,7 @@ const standby = mountStandby({
          Schwab while the screensaver is up (resume gets a fresh snapshot instantly on wake). */
       stocksPanel.setSuspended(on);
       watchlistPanel.setSuspended(on);
+      emailPanel.setSuspended(on); // the panel half only; opt-in new-mail notices keep listening
    },
    isAlarmRinging: () => dawn.isAlarmRinging()
 });
@@ -262,6 +271,37 @@ const watchlistPanel = mountWatchlistPanel(stage, {
    notify: (m) => dawn.notifyUser(m)
 });
 
+/* The Mail panel: the user's own inboxes (list, read, triage, hand a message to the assistant).
+   It depends only on the EmailSource boundary: DawnIngest's, whose availability follows DAWN's
+   `email_client` flag, or - in dev only, with ?email=sim - a simulated mailbox. The sim is a
+   dynamic import behind import.meta.env.DEV, so a production build never contains it. */
+let emailSource: EmailSource = dawn.emailSource();
+if (import.meta.env.DEV) {
+   const params = new URLSearchParams(window.location.search);
+   if (params.get("email") === "sim") {
+      const { EmailSim } = await import("./ingest/email-sim.ts");
+      emailSource = new EmailSim({ revoked: params.has("revoked") });
+   }
+}
+const emailPanel = mountEmailPanel(stage, {
+   source: emailSource,
+   /* "Discuss": the email goes into the composer as a chip (a reference; DAWN fetches and wraps
+      the content itself). "Privately" starts a new chat marked private first. */
+   onDiscuss: (ref, { newChat }) => {
+      if (!newChat) {
+         conversation.addEmailRef(ref);
+         return;
+      }
+      /* The chip is armed only once DAWN has confirmed the new conversation private. */
+      void ingest.newConversation({ private: true }).then((ok) => {
+         if (ok) conversation.addEmailRef(ref);
+         else dawn.notifyUser("Couldn't start a private chat - the email wasn't added.");
+      });
+   },
+   notify: (notice) => notifications.notify(notice),
+   removeNotice: (id) => notifications.remove(id)
+});
+
 /* The Library panel: a standalone movable view listing DAWN's notes + documents, opening
    any item in a large centered reading overlay. Read-only; the ingest polls doc_library_list
    and the panel fetches a document's original through the ingest (never DAWN directly). */
@@ -288,7 +328,7 @@ const contextPanel = mountContextPanel(stage, {
    DAWN only through the ingest; the ingest feeds it the list + active id + live pushes. */
 const conversationPicker = mountConversationPicker(stage, {
    onLoad: (id) => ingest.loadConversation(id),
-   onNew: () => ingest.newConversation(),
+   onNew: () => void ingest.newConversation(),
    onSearch: (query, content) => ingest.searchConversations(query, content),
    onRename: (id, title) => ingest.renameConversation(id, title),
    onDelete: (id) => ingest.deleteConversation(id),
@@ -426,6 +466,7 @@ const menu = mountMenu(stage, {
       { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
       { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
       { id: "stocks", label: "Stocks", enabled: stocksPanel.isVisible() },
+      { id: "mail", label: "Mail", enabled: emailPanel.isVisible() },
       { id: "watchlist", label: "Watchlist", enabled: watchlistPanel.isVisible() },
       { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
       { id: "context", label: "Context", enabled: contextPanel.isVisible() },
@@ -439,6 +480,7 @@ const menu = mountMenu(stage, {
       else if (id === "homeassistant") haPanel.setVisible(!haPanel.isVisible());
       else if (id === "watches") watchesPanel.setVisible(!watchesPanel.isVisible());
       else if (id === "stocks") stocksPanel.setVisible(!stocksPanel.isVisible());
+      else if (id === "mail") emailPanel.setVisible(!emailPanel.isVisible());
       else if (id === "watchlist") watchlistPanel.setVisible(!watchlistPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
@@ -651,8 +693,17 @@ const login = mountLogin(stage, {
 const conversation = mountConversation(stage, {
    onSubmit: (text, attachments) => ingest.submit(text, attachments),
    /* An offline Enter keeps the draft and says why, instead of clearing it into the void. */
-   canSubmit: () => dawn.isLinkLive(),
+   canSubmit: () => dawn.canSendTurn(),
    onSubmitBlocked: () => dawn.notifyUser("Not connected to DAWN - message not sent."),
+   /* An email chip rides the turn only once DAWN can take the reference (`email_refs`). */
+   emailRefsSupported: () => dawn.supportsEmailRefs(),
+   onEmailRefBlocked: () => dawn.notifyUser("This DAWN can't take an email in chat yet - message not sent."),
+   /* One image message in flight at a time (so a refusal can only mean that one): hold the next. */
+   onImageTurnBusy: () => dawn.notifyUser("Your last image message is still sending - try again in a moment."),
+   onImageNeedsText: () => dawn.notifyUser("Add a message to send with the image."),
+   imageOnlyTurns: () => dawn.supportsImageOnlyTurns(),
+   turnRefs: () => dawn.supportsTurnRefs(),
+   notify: (m) => dawn.notifyUser(m),
    /* Inline attachment display: images + doc originals are fetched through the ingest
       boundary (never a direct DAWN call from the view). */
    fetchImage: (id) => ingest.fetchImage(id),
@@ -669,6 +720,11 @@ const conversation = mountConversation(stage, {
       ingest.setEngaged(engaged);
    }
 });
+
+/* The conversation window joins click-to-front: a press on it brings it in front of any panel
+   covering it (it isn't movable, so it registers directly). */
+const consoleEl = document.getElementById("console");
+const disposeConsoleRaise = consoleEl ? registerRaisable(consoleEl) : (): void => {};
 
 /* Link status drives the login card AND the composer's offline state. Registered after the
    conversation view exists (onStatus is single-slot, and tryResume can emit right away). */
@@ -715,6 +771,7 @@ ingest.start({
          stocksPanel.setTimezone(tz); // the portfolio "as of" stamp too
          watchlistPanel.setTimezone(tz); // and the watchlist "as of" stamp
          contextPanel.setTimezone(tz); // and the Context panel's item dates
+         emailPanel.setTimezone(tz); // and the Mail panel's dates
       }
    },
    music: musicPlayer,
@@ -813,12 +870,14 @@ function dispose(): void {
    window.clearTimeout(bootCleanupTimer);
    closeDialog(); // an open (or queued) dialog would outlive the reload, wired to the old ingest
    ingest.dispose(); // full teardown: also closes the audio graphs so HMR doesn't stack AudioContexts
+   disposeConsoleRaise();
    conversation.destroy();
    musicPlayer.destroy();
    calendarPanel.destroy();
    haPanel.destroy();
    watchesPanel.destroy();
    stocksPanel.destroy();
+   emailPanel.destroy();
    watchlistPanel.destroy();
    libraryPanel.destroy();
    contextPanel.destroy();

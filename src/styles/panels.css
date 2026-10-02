@@ -171,7 +171,7 @@
       drag indicator (19) and ghost (40). #docks is pointer-events:none, so only the
       cards themselves (which opt back in) sit on top - empty rail space passes through
       to whatever instrument is behind it. */
-   z-index: 6;
+   z-index: 21; /* above the click-to-front panel band (5..20) */
    pointer-events: none;
 }
 .dock-rail {
@@ -281,7 +281,7 @@
 .dock-drop-indicator {
    position: fixed;
    height: 2px;
-   z-index: 19;
+   z-index: 22;
    pointer-events: none;
    background: var(--accent);
    box-shadow: 0 0 10px var(--accent-glow);

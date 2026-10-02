@@ -52,6 +52,9 @@ export interface MovableOptions {
       sibling edge, either axis) vs. a free band. Lets a caller behave differently when
       snapped - e.g. a notification stays persistent when snapped, transient when not. */
    onSnap?: (snapped: boolean) => void;
+   /* Join the click-to-front stacking band (default true). Notification cards opt out: they
+      sit in their own layer above every panel. */
+   raise?: boolean;
 }
 
 /* A preview for one snapped axis: a short glowing bar, either at a viewport edge
@@ -109,6 +112,54 @@ const MIN_ONSCREEN = 130; // px of a card that must stay on screen (roughly a he
 /* Every live movable view, so a drag can snap to the others' edges. */
 const movables = new Set<HTMLElement>();
 
+/* Click-to-front: the views that take part, back to front. Each gets an inline z-index in the
+   panel band (RAISE_BASE.. RAISE_BASE + RAISE_SPAN), so the one last touched draws on top. Mount
+   order seeds it, so nothing changes until a click. The band sits below the menubar, the dock
+   layer, and notification cards (their CSS z-index starts above RAISE_BASE + RAISE_SPAN). */
+const RAISE_BASE = 5;
+const RAISE_SPAN = 15;
+const raiseOrder: HTMLElement[] = [];
+const restack = (): void => {
+   raiseOrder.forEach((v, i) => (v.style.zIndex = String(RAISE_BASE + Math.min(i, RAISE_SPAN))));
+};
+
+/* A non-movable surface that still takes part in click-to-front (the conversation window): a
+   press on it brings it in front of the panels. Returns its dispose. */
+export function registerRaisable(el: HTMLElement): () => void {
+   raiseOrder.push(el);
+   restack();
+   const onRaise = (): void => raiseMovable(el);
+   el.addEventListener("pointerdown", onRaise, { capture: true });
+   return (): void => {
+      el.removeEventListener("pointerdown", onRaise, { capture: true });
+      const i = raiseOrder.indexOf(el);
+      if (i >= 0) raiseOrder.splice(i, 1);
+      restack();
+   };
+}
+
+/* Bring a view to the front of the panel band (a click on it, or a view opening itself). */
+export function raiseMovable(el: HTMLElement): void {
+   const i = raiseOrder.indexOf(el);
+   if (i < 0 || i === raiseOrder.length - 1) return;
+   raiseOrder.splice(i, 1);
+   raiseOrder.push(el);
+   restack();
+}
+
+/* On-screen rects of every visible movable view (optionally minus one), for callers that need
+   to place something clear of them (src/render/placement.ts). */
+export function visibleMovableRects(exclude?: HTMLElement): DOMRect[] {
+   /* LAYOUT boxes, not the on-screen ones: a receded notice is drawn scaled down by its 3D
+      transform and grows back when it comes forward, so its full-size box is what must stay clear. */
+   return [...movables]
+      .filter((o) => o !== exclude && o.offsetParent !== null)
+      .map((o) => {
+         const p = (o.offsetParent as HTMLElement).getBoundingClientRect();
+         return new DOMRect(p.left + o.offsetLeft, p.top + o.offsetTop, o.offsetWidth, o.offsetHeight);
+      });
+}
+
 /* The gutter a docked view keeps from the viewport edge. Read from the
    --movable-edge CSS custom property so the snap inset and the cards' default CSS
    position (which use the same property) can never drift apart. */
@@ -117,7 +168,31 @@ export function cssMovableEdge(): number {
    return Number.isFinite(v) ? v : 24;
 }
 
+/* Which edges a resize moved (makeResizable reports this on release). */
+export interface ResizeEdges {
+   left?: boolean;
+   right?: boolean;
+   top?: boolean;
+   bottom?: boolean;
+}
+
+/* The full movable API, for a view that is also resizable: the anchor rules stay here. */
+export interface MovableHandle {
+   dispose(): void;
+   /* After a user resize: re-derive each axis anchor from which edges moved (a right-docked
+      view grown from its left edge stays right-docked; grown from its right edge it goes
+      free; a centered axis goes free) and persist. */
+   commitResize(edges: ResizeEdges): void;
+   /* The widest this view may grow from where it sits without a docked edge entering the
+      reactor's dead zone (or leaving the viewport). */
+   maxWidth(): number;
+}
+
 export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
+   return makeMovableHandle(el, opts).dispose;
+}
+
+export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): MovableHandle {
    const edge = opts.edge ?? cssMovableEdge();
    const zone = opts.snapZone ?? 0.16;
    let glideTimer = 0;
@@ -512,20 +587,78 @@ export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
 
    restore();
    movables.add(el); // visible to other movable views as a snap target
+   const raises = opts.raise !== false;
+   const onRaise = (): void => raiseMovable(el);
+   if (raises) {
+      raiseOrder.push(el);
+      restack();
+      el.addEventListener("pointerdown", onRaise, { capture: true }); // any press, even on a control
+   }
    el.addEventListener("pointerdown", onDown);
    el.addEventListener("pointerleave", onSelfResize); // settle a hi/center dock the hover gate deferred
    window.addEventListener("resize", onResize);
    ro.observe(el); // re-dock on element self-scaling (fires once immediately - a no-op if unplaced)
 
-   return (): void => {
-      movables.delete(el);
-      window.clearTimeout(glideTimer);
-      hidePreview();
-      ro.disconnect();
-      el.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("pointerleave", onSelfResize);
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+   const commitResize = (edges: ResizeEdges): void => {
+      const r = el.getBoundingClientRect();
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const free = (px: number, V: number): Anchor => ({ a: "free", f: Math.min(1, Math.max(0, px / Math.max(1, V))) });
+      /* A view never placed by the user sits at its CSS default: read the dock that default
+         expresses (flush to an edge gutter = docked there), so the first resize of a CSS
+         right-docked card keeps it right-docked. */
+      const fromCss = (lo: number, hi: number, V: number): Anchor =>
+         Math.abs(hi - (V - edge)) <= 2 ? { a: "hi" } : Math.abs(lo - edge) <= 2 ? { a: "lo" } : free(lo, V);
+      const cur: StoredPos = stored ?? { x: fromCss(r.left, r.right, W), y: fromCss(r.top, r.bottom, H) };
+      const axis = (anc: Anchor, lo: boolean | undefined, hi: boolean | undefined, px: number, V: number): Anchor => {
+         if (!lo && !hi) return anc;
+         if (anc.a === "hi" && lo && !hi) return anc; // grown away from its dock: still docked
+         if (anc.a === "lo" && hi && !lo) return anc;
+         return free(px, V);
+      };
+      stored = {
+         x: axis(cur.x, edges.left, edges.right, r.left, W),
+         y: axis(cur.y, edges.top, edges.bottom, r.top, H)
+      };
+      try {
+         localStorage.setItem(opts.storageKey, JSON.stringify(stored));
+      } catch {
+         /* storage blocked: the placement still applies this session */
+      }
+      applyStored("all");
+      appliedRealSize = true;
+   };
+
+   const maxWidth = (): number => {
+      const W = window.innerWidth;
+      const r = el.getBoundingClientRect();
+      const [dLo, dHi] = deadZoneX();
+      const dockedLo = stored ? stored.x.a === "lo" : Math.abs(r.left - edge) <= 2;
+      const dockedHi = stored ? stored.x.a === "hi" : Math.abs(r.right - (W - edge)) <= 2;
+      if (dockedLo) return Math.max(0, dLo - edge);
+      if (dockedHi) return Math.max(0, W - dHi - edge);
+      return Math.max(0, W - 2 * edge);
+   };
+
+   return {
+      commitResize,
+      maxWidth,
+      dispose: (): void => {
+         movables.delete(el);
+         if (raises) {
+            el.removeEventListener("pointerdown", onRaise, { capture: true });
+            const i = raiseOrder.indexOf(el);
+            if (i >= 0) raiseOrder.splice(i, 1);
+            restack();
+         }
+         window.clearTimeout(glideTimer);
+         hidePreview();
+         ro.disconnect();
+         el.removeEventListener("pointerdown", onDown);
+         el.removeEventListener("pointerleave", onSelfResize);
+         window.removeEventListener("resize", onResize);
+         window.removeEventListener("pointermove", onMove);
+         window.removeEventListener("pointerup", onUp);
+      }
    };
 }

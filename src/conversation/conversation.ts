@@ -16,6 +16,7 @@
  */
 
 import type { ActivityStatus, ConversationItem, OutImage, ToolCall, UploadedDoc } from "../ingest/ingest.ts";
+import type { EmailRef } from "../ingest/email.ts";
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
 import { renderMarkdown } from "./format.ts";
@@ -60,19 +61,49 @@ export interface ConversationController {
    linkStream(convId: number, streamId: number): void;
    adoptId(convId: number, streamId: number, messageId: number): boolean;
    renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number }): void;
+   confirmTurn(text: string, ref?: string): void;
+   noteRefusal(text: string): void;
+   rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
+   releaseTurns(): void;
+   /* Put an email the user chose ("Discuss") into the composer as a removable chip, and focus the
+      input for their question. One at a time: a new one replaces the old. */
+   addEmailRef(ref: EmailRef): void;
    destroy(): void;
 }
 
 export interface ConversationOptions {
    /* `attachments.images` (base64) + order-matched `imageIds` ride the turn for images; the
       view inlines documents into `text` itself, so those need nothing here. */
-   onSubmit?: (text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }) => void;
+   onSubmit?: (
+      text: string,
+      attachments?: {
+         turnRef?: string;
+         images?: OutImage[];
+         imageIds?: string[];
+         emailRefs?: Array<{ accountId: number; messageId: string }>;
+      }
+   ) => void;
    /* Whether a send can go out right now (the link to DAWN is live). Checked BEFORE the composer
       clears or draws anything, so an offline Enter keeps the draft instead of losing it.
       Absent -> always allowed. */
    canSubmit?: () => boolean;
    /* A send was refused by canSubmit (the host says why). */
    onSubmitBlocked?: () => void;
+   /* Whether a turn can carry an email reference (DAWN advertises it). Absent/false -> a send
+      with an email chip is held (draft kept) and onEmailRefBlocked says why. */
+   emailRefsSupported?: () => boolean;
+   onEmailRefBlocked?: () => void;
+   /* A second image message while the first is still unconfirmed: the draft is kept (only one
+      image turn is held at a time, so a refusal always names exactly one). */
+   onImageTurnBusy?: () => void;
+   /* An image with no message, on a DAWN that can't take one (no `image_only_turns`): held. */
+   onImageNeedsText?: () => void;
+   /* Whether DAWN runs an image-only turn (empty text + image_ids). */
+   imageOnlyTurns?: () => boolean;
+   /* Whether DAWN echoes a turn reference on the echo and on refusals (turn_refs). */
+   turnRefs?: () => boolean;
+   /* A short user-facing notice (e.g. an image that couldn't be re-attached). */
+   notify?: (msg: string) => void;
    onEngage?: (engaged: boolean) => void;
    /* Upload a client-compressed image (ingest -> POST /api/images); returns the server id. */
    uploadImage?: (image: Blob) => Promise<{ id: string; mimeType: string; size: number }>;
@@ -881,11 +912,17 @@ export function mountConversation(
       win.classList.remove("thinking", "receded");
       win.classList.add("empty");
       chip.classList.remove("on");
+      dropEmailRef(); // an email chip belongs to the conversation it was added for
+      releaseAllTurns();
+      clearRefusal();
    };
 
    /* Replace the transcript with a loaded conversation, then show it briefly so
       there is somewhere to start; it recedes on its own after the idle interval. */
    const loadHistory = (items: ConversationItem[]): void => {
+      dropEmailRef(); // switching conversations: never carry an email chip into another one
+      releaseAllTurns();
+      clearRefusal();
       if (raf) {
          cancelAnimationFrame(raf);
          raf = 0;
@@ -941,19 +978,103 @@ export function mountConversation(
       base64: string;
       mimeType: string;
       previewUrl: string;
+      blob: Blob; // the compressed upload, kept so a refused turn can re-upload it for a fresh id
    }
    let pendingDocs: UploadedDoc[] = [];
    let pendingImages: PendingImage[] = [];
+   let pendingEmail: EmailRef | null = null;
+   function dropEmailRef(): void {
+      if (!pendingEmail) return;
+      pendingEmail = null;
+      renderPending();
+   }
    let fileInput: HTMLInputElement | null = null;
    let pendingRow: HTMLElement | null = null;
    const revokePreviews = (): void => {
       for (const im of pendingImages) URL.revokeObjectURL(im.previewUrl);
    };
+   /* Sent turns held until DAWN accepts each one (its echo) or refuses it (an IMAGE_* or
+      TURN_QUEUE_FULL error): a refusal puts the text and attachments back instead of losing them.
+      In send order; DAWN runs a session's turns in order, and its echo carries the sent text, so an
+      echo confirms the OLDEST held turn with that text. Only one image turn may be held at a time
+      (onSubmit enforces it), so an image refusal always names exactly one turn. */
+   interface SentTurn {
+      ref: string; // this client's turn reference (sent as client_ref when DAWN takes turn_refs)
+      sentText: string;
+      typed: string;
+      docs: UploadedDoc[];
+      images: PendingImage[];
+      email: EmailRef | null;
+      msg: Msg;
+   }
+   let held: SentTurn[] = [];
+
+   /* "Message not sent: <why>" above the composer, until the user edits, sends, or dismisses it. */
+   let refusalNote: HTMLElement | null = null;
+   const clearRefusal = (): void => {
+      refusalNote?.remove();
+      refusalNote = null;
+   };
+   const noteRefusal = (text: string): void => {
+      clearRefusal();
+      const note = document.createElement("div");
+      note.className = "composer-note";
+      note.setAttribute("role", "alert");
+      const msg = document.createElement("span");
+      msg.className = "composer-note-text";
+      msg.textContent = text; // DAWN's refusal text -> textContent
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "composer-note-close";
+      x.setAttribute("aria-label", "Dismiss");
+      x.textContent = "×";
+      x.addEventListener("click", clearRefusal);
+      note.append(msg, x);
+      composerRow.parentElement?.insertBefore(note, pendingRow ?? composerRow);
+      refusalNote = note;
+      summon();
+   };
+   /* Turn refs are unique per page load: a reload resumes the same DAWN session, whose queued turns
+      from the previous page may still echo or fail with THEIR refs. */
+   const pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)).replace(/-/g, "").slice(0, 8);
+   let turnSeq = 0;
+   const releaseTurn = (t: SentTurn): void => {
+      for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
+      held = held.filter((x) => x !== t);
+   };
+   const releaseAllTurns = (): void => {
+      for (const t of held) for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
+      held = [];
+   };
 
    const renderPending = (): void => {
       if (!pendingRow) return;
       pendingRow.replaceChildren();
-      pendingRow.classList.toggle("shown", pendingDocs.length + pendingImages.length > 0);
+      pendingRow.classList.toggle("shown", pendingDocs.length + pendingImages.length > 0 || !!pendingEmail);
+      if (pendingEmail) {
+         const ref = pendingEmail;
+         const c = document.createElement("span");
+         c.className = "composer-pending-chip composer-pending-email";
+         const badge = document.createElement("span");
+         badge.className = "convo-doc-type";
+         badge.textContent = "MAIL";
+         const name = document.createElement("span");
+         name.className = "composer-pending-name";
+         name.textContent = `${ref.sender}: ${ref.subject || "(no subject)"}`; // email strings -> textContent
+         name.title = name.textContent;
+         const rm = document.createElement("button");
+         rm.type = "button";
+         rm.className = "composer-pending-remove";
+         rm.setAttribute("aria-label", "Remove email");
+         rm.textContent = "×";
+         rm.addEventListener("click", () => {
+            pendingEmail = null;
+            clearRefusal();
+            renderPending();
+         });
+         c.append(badge, name, rm);
+         pendingRow.appendChild(c);
+      }
       pendingImages.forEach((im, i) => {
          const c = document.createElement("span");
          c.className = "composer-pending-image";
@@ -969,6 +1090,7 @@ export function mountConversation(
          rm.addEventListener("click", () => {
             URL.revokeObjectURL(im.previewUrl);
             pendingImages.splice(i, 1);
+            clearRefusal(); // changing the attachments is editing the draft
             renderPending();
          });
          c.append(thumb, rm);
@@ -990,6 +1112,7 @@ export function mountConversation(
          rm.textContent = "×"; // ×
          rm.addEventListener("click", () => {
             pendingDocs.splice(i, 1);
+            clearRefusal();
             renderPending();
          });
          c.append(badge, name, rm);
@@ -1025,7 +1148,7 @@ export function mountConversation(
          files.map(async (f) => {
             const c = await compressImage(f);
             const { id } = await up(c.blob);
-            return { id, base64: c.base64, mimeType: c.mimeType, previewUrl: URL.createObjectURL(c.blob) };
+            return { id, base64: c.base64, mimeType: c.mimeType, previewUrl: URL.createObjectURL(c.blob), blob: c.blob };
          })
       ).then((results) => {
          for (const r of results) if (r.status === "fulfilled") pendingImages.push(r.value);
@@ -1038,6 +1161,7 @@ export function mountConversation(
       attachBtn?.classList.add("busy");
       Promise.all([uploadImages(imgs), uploadDocs(docs)])
          .then(() => {
+            clearRefusal(); // new attachments: the draft is being edited
             renderPending();
             summon();
          })
@@ -1149,10 +1273,27 @@ export function mountConversation(
       /* Expand any typed-but-not-picked `:shortcode:` so the user's bubble and the
          text DAWN receives both carry the real glyph. */
       const typed = emojify(input.value.trim());
-      if (!typed && pendingDocs.length === 0 && pendingImages.length === 0) return;
+      if (!typed && pendingDocs.length === 0 && pendingImages.length === 0 && !pendingEmail) return;
+      /* An email chip needs a DAWN that can take the reference: hold the whole draft until then. */
+      if (pendingEmail && !(opts.emailRefsSupported?.() ?? false)) {
+         opts.onEmailRefBlocked?.();
+         return;
+      }
       /* Not connected: keep the draft (and its attachments) untouched; nothing is drawn. */
       if (opts.canSubmit && !opts.canSubmit()) {
          opts.onSubmitBlocked?.();
+         return;
+      }
+      /* An image with no message runs only on a DAWN that takes image-only turns
+         (`image_only_turns`); an older one silently drops a turn with no text. */
+      if (!typed && pendingDocs.length === 0 && pendingImages.length > 0 && !(opts.imageOnlyTurns?.() ?? false)) {
+         opts.onImageNeedsText?.();
+         return;
+      }
+      /* Without turn references, an image refusal can't say which turn it means, so only one image
+         turn may be in flight at a time (keep this draft). With them (turn_refs) there's no limit. */
+      if (pendingImages.length && !(opts.turnRefs?.() ?? false) && held.some((t) => t.images.length > 0)) {
+         opts.onImageTurnBusy?.();
          return;
       }
       /* Documents inline into the turn TEXT as [ATTACHED DOCUMENT] markers (daemon persists
@@ -1166,18 +1307,27 @@ export function mountConversation(
       const displayedText = sentText + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
       const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
       const imageIds = pendingImages.map((im) => im.id);
+      const emailRefs = pendingEmail ? [{ accountId: pendingEmail.accountId, messageId: pendingEmail.messageId }] : [];
+      const ref = `${pageTag}-${++turnSeq}`;
+      const snapshot = { ref, sentText, typed: input.value, docs: pendingDocs, images: pendingImages, email: pendingEmail };
       input.value = "";
       recallIndex = null; // the sent turn re-enters messages[]; next ArrowUp re-snapshots fresh
       autoGrow(); // collapse back to one line
-      revokePreviews();
       pendingDocs = [];
       pendingImages = [];
+      pendingEmail = null;
       renderPending();
-      appendMsg("user", displayedText);
+      held.push({ ...snapshot, msg: appendMsg("user", displayedText) });
+      clearRefusal();
       summon();
-      opts.onSubmit?.(sentText, images.length ? { images, imageIds } : undefined);
+      opts.onSubmit?.(sentText, {
+         turnRef: ref,
+         ...(images.length ? { images, imageIds } : {}),
+         ...(emailRefs.length ? { emailRefs } : {})
+      });
    };
    const onInput = (): void => {
+      clearRefusal(); // editing the restored draft: the note has done its job
       recallIndex = null; // a real edit exits recall; further arrows do caret nav, not recall
       autoGrow(); // fit the typed text (grows the bar up to the CSS cap)
       summon(); // typing counts as activity
@@ -1316,6 +1466,66 @@ export function mountConversation(
       linkStream,
       adoptId,
       renderAppended,
+      confirmTurn: (text: string, ref?: string) => {
+         const t = ref !== undefined ? held.find((x) => x.ref === ref) : held.find((x) => x.sentText.trim() === text.trim());
+         if (t) releaseTurn(t);
+      },
+      releaseTurns: releaseAllTurns,
+      noteRefusal,
+      rejectTurn: (which: "image" | "newest" | { ref: string }, reupload: boolean): string | null => {
+         const t =
+            which === "image"
+               ? held.find((x) => x.images.length > 0)
+               : which === "newest"
+                 ? held[held.length - 1]
+                 : held.find((x) => x.ref === which.ref);
+         if (!t) return null;
+         held = held.filter((x) => x !== t);
+         /* Take the refused turn's bubble back out (it was never saved). */
+         t.msg.el.remove();
+         const i = messages.indexOf(t.msg);
+         if (i >= 0) messages.splice(i, 1);
+         if (messages.length === 0) win.classList.add("empty");
+         /* Put the turn back in the composer, ahead of anything typed since (merged, never
+            dropped), with its attachments. Restored together, so the text can't go out alone. */
+         const restore = (imgs: PendingImage[]): void => {
+            const draft = input.value.trim();
+            input.value = draft && t.typed.trim() ? `${t.typed.trim()}\n\n${draft}` : t.typed.trim() || draft;
+            pendingDocs = [...t.docs, ...pendingDocs];
+            if (t.email && !pendingEmail) pendingEmail = t.email;
+            pendingImages = [...imgs, ...pendingImages];
+            renderPending();
+            autoGrow();
+         };
+         if (reupload && t.images.length && opts.uploadImage) {
+            /* The ids were refused as unavailable (an upload can expire before it's used): upload
+               the same images again for fresh ids, so a retry doesn't fail the same way. */
+            const up = opts.uploadImage;
+            attachBtn?.classList.add("busy");
+            void Promise.allSettled(t.images.map((im) => up(im.blob).then(({ id }) => ({ ...im, id })))).then((results) => {
+               attachBtn?.classList.remove("busy");
+               const ok: PendingImage[] = [];
+               results.forEach((r, k) => {
+                  if (r.status === "fulfilled") ok.push(r.value);
+                  else URL.revokeObjectURL(t.images[k].previewUrl);
+               });
+               restore(ok);
+               if (ok.length < t.images.length) opts.notify?.("An image couldn't be re-attached. Attach it again.");
+            });
+         } else {
+            restore(t.images);
+         }
+         summon();
+         input.focus();
+         return t.sentText;
+      },
+      addEmailRef: (ref: EmailRef) => {
+         clearRefusal();
+         pendingEmail = ref;
+         renderPending();
+         summon();
+         input.focus();
+      },
       noteMessageId,
       hasMessage,
       destroy: () => {
@@ -1339,6 +1549,8 @@ export function mountConversation(
          pendingRow?.remove();
          dropHint?.remove();
          revokePreviews();
+         releaseAllTurns();
+         clearRefusal();
          closeOverlay();
          revokeObjectUrls();
          emojiPicker.destroy();

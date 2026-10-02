@@ -72,6 +72,21 @@ export interface ConversationItem {
    (non-streamed or replayed history) arrives as showReply. */
 export interface ConversationSink {
    setThinking(thinking: boolean): void;
+   /* A sent turn was accepted (DAWN echoed it): release what the composer held for it. Matched by
+      the turn reference when DAWN echoes one (turn_refs), else by the echoed text. */
+   confirmTurn(text: string, ref?: string): void;
+   /* A sent turn was refused before it ran: "image" = the (single) held image turn (an IMAGE_*
+      refusal, no turn refs), "newest" = the latest held turn (a refusal on receipt), `{ ref }` = the
+      turn DAWN named (turn_refs). Its bubble
+      comes back out and its text + attachments return to the composer (`reupload`: re-upload the
+      images for fresh ids first). Returns the refused turn's sent text, or null if none was held. */
+   rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
+   /* Stop holding every sent turn (the link dropped or the conversation changed: their fate can't
+      be learned now). */
+   releaseTurns(): void;
+   /* A message wasn't sent: say why right above the composer, where the user is looking (a floating
+      card would be dimmed by the very focus a restored draft puts on the input). */
+   noteRefusal(text: string): void;
    /* DAWN is speaking (TTS). Holds the window upright across the gaps between spoken
       sentences so it does not recede-then-raise (bounce) while waiting on the next text. */
    setSpeaking(speaking: boolean): void;
@@ -505,6 +520,12 @@ export interface NoticeAction {
    defaultValue?: string; // pre-selected option value (e.g. "10" minutes)
 }
 
+/* What tapping a click-to-open notice opens. The notify layer only reports it; main.ts routes
+   each kind to its view. */
+export type NoticeOpen =
+   | { kind: "conversation"; id: number }
+   | { kind: "email"; accountId: number; messageId: string };
+
 export interface Notice {
    id: string;
    kind: string;
@@ -534,11 +555,10 @@ export interface Notice {
       instruments. `persist`/`hold`/`tone` transient fields are ignored when sticky. */
    sticky?: boolean;
    /* If set, the card is click-to-open: a tap on its body (not a control, not a drag) opens
-      this conversation. Set for a morning-briefing card (scheduler_notification carries the
-      briefing's conversation_id); absent for notices with no backing conversation. */
-   conversationId?: number;
-   x: number;
-   y: number;
+      this target. A morning-briefing card opens its conversation (scheduler_notification
+      carries the briefing's conversation_id); a new-mail card opens the message in the Mail
+      panel. Absent for notices with nothing behind them. */
+   open?: NoticeOpen;
 }
 
 /* What ingest can push to the notification layer. Notices are self-owned movable cards
@@ -706,7 +726,7 @@ export interface Ingest {
       whenever images are present - the daemon persists it as [IMAGE:id] markers so images
       survive a reload (hard cut-over, no fallback). Documents are inlined into `text` by the
       caller, so they need nothing here. */
-   submit(text: string, attachments?: { images?: OutImage[]; imageIds?: string[] }): void;
+   submit(text: string, attachments?: { turnRef?: string; images?: OutImage[]; imageIds?: string[] }): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */
@@ -785,7 +805,10 @@ export interface Ingest {
    listConversations(opts: { limit: number; offset: number }): void;
    searchConversations(query: string, content: boolean, opts?: { limit?: number; offset?: number }): void;
    loadConversation(id: number): void;
-   newConversation(): void;
+   /* Start a fresh conversation. Plain: lazy (the first message creates it). `private: true`:
+      created now and resolved only once DAWN has confirmed it private (false on failure or a
+      dead link), so a caller arming something sensitive (an email chip) never lands public. */
+   newConversation(opts?: { private?: boolean }): Promise<boolean>;
    renameConversation(id: number, title: string): void;
    deleteConversation(id: number): void;
    setPinned(id: number, pinned: boolean): void;

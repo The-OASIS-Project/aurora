@@ -28,8 +28,9 @@
  */
 
 import { addCorners } from "../render/corners.ts";
-import { cssMovableEdge, makeMovable } from "../render/movable.ts";
-import type { Notice, NotificationsSink } from "../ingest/ingest.ts";
+import { makeMovable } from "../render/movable.ts";
+import { findOpenSpot } from "../render/placement.ts";
+import type { Notice, NoticeOpen, NotificationsSink } from "../ingest/ingest.ts";
 
 const DEFAULT_HOLD = 6; // seconds a notice holds at peak before it begins to recede
 const TAP_MAX_PX = 4; // click within this of the pointerdown = a tap (open), beyond = a drag (matches makeMovable's THRESHOLD)
@@ -86,6 +87,7 @@ interface Card {
    depth: number; // eased 0..1
    presence: number; // eased 0..1 (opacity before engagement dim)
    emphasis: number; // eased 0..1 (front-holder glow)
+   engage: number; // eased 0..1, this card's engagement dim (eased per card, so it never pops)
 }
 
 function clamp01(v: number): number {
@@ -111,9 +113,9 @@ export class Notifications implements NotificationsSink {
    private readonly container: HTMLElement;
    private readonly onDismiss: (id: string) => void;
    private readonly onAction: (id: string, action: string, value?: string) => void;
-   private readonly onOpen: (conversationId: number) => void;
+   private readonly onOpen: (target: NoticeOpen) => void;
    private engaged = false;
-   private engageAmt = 0; // eased 0..1
+
    private frontHolder: string | null = null;
    private frontHeld = 0;
    private rev = 0;
@@ -127,7 +129,7 @@ export class Notifications implements NotificationsSink {
       container: HTMLElement,
       onDismiss: (id: string) => void,
       onAction: (id: string, action: string, value?: string) => void = () => {},
-      onOpen: (conversationId: number) => void = () => {}
+      onOpen: (target: NoticeOpen) => void = () => {}
    ) {
       this.container = container;
       this.onDismiss = onDismiss;
@@ -178,7 +180,6 @@ export class Notifications implements NotificationsSink {
    /* ---- per-frame model (called from the main frame loop) ---- */
 
    tick(dt: number): void {
-      this.engageAmt = ease(this.engageAmt, this.engaged ? 1 : 0, 3, dt);
       this.arbitrateFront(dt);
       for (const card of [...this.cards.values()]) {
          if (this.exempt(card)) {
@@ -186,6 +187,7 @@ export class Notifications implements NotificationsSink {
             card.depth = ease(card.depth, DEPTH_FRONT, DEPTH_EASE, dt);
             card.presence = ease(card.presence, 1, FADE_EASE, dt);
             card.emphasis = 0;
+            card.engage = 0; // so un-snapping doesn't pop
             this.applyVisual(card, 0);
             continue;
          }
@@ -212,9 +214,13 @@ export class Notifications implements NotificationsSink {
          card.depth = ease(card.depth, depthTarget, DEPTH_EASE, dt);
          card.presence = ease(card.presence, presTarget, FADE_EASE, dt);
          card.emphasis = ease(card.emphasis, empTarget, FADE_EASE, dt);
-         /* Hovering a notice to read/grab it lifts the engagement dim so it's legible even
-            while the chat input is focused. */
-         this.applyVisual(card, card.hovered ? 0 : this.engageAmt);
+         /* The engagement dim (input focused) only applies once a notice has had its moment:
+            while it's still holding at peak it shows at full strength, so a card that arrives
+            while the user is typing is actually seen. Hovering also lifts the dim. Eased per card,
+            so the dim settles in as the recede begins instead of snapping on. */
+         const engageTarget = card.hovered || card.holdLeft > 0 || !this.engaged ? 0 : 1;
+         card.engage = ease(card.engage, engageTarget, 3, dt);
+         this.applyVisual(card, card.engage);
 
          /* A toast lingers - receded but visible and grabbable - for TOAST_LIFE seconds,
             then leaves; hovering restarts that timer so it is never lost while unwatched.
@@ -391,7 +397,8 @@ export class Notifications implements NotificationsSink {
             (snapped/sticky) start at the front. */
          depth: this.exempt({ snapped, notice } as Card) ? DEPTH_FRONT : DEPTH_BACK,
          presence: this.exempt({ snapped, notice } as Card) ? 1 : 0.05,
-         emphasis: 0
+         emphasis: 0,
+         engage: 0
       };
       if (snapped) root.classList.add("notice-snapped");
       this.cards.set(notice.id, card);
@@ -403,6 +410,7 @@ export class Notifications implements NotificationsSink {
       card.disposeMovable = makeMovable(root, {
          storageKey: this.posKey(notice.id),
          ignore: ".notice-close, .notice-action, .notice-action-select",
+         raise: false, // cards keep their own layer above every panel
          onSnap: (s) => this.onSnap(card, s)
       });
 
@@ -422,16 +430,18 @@ export class Notifications implements NotificationsSink {
       root.addEventListener("pointerenter", () => (card.hovered = true));
       root.addEventListener("pointerleave", () => (card.hovered = false));
 
-      /* Click-to-open: a briefing card (conversationId set) opens its conversation on a TAP of
+      /* Click-to-open: a card with an `open` target (a briefing's conversation, a new-mail
+         card's message) opens it on a TAP of
          its body. Distinguish a tap from a drag the way makeMovable does - by PEAK movement, not
          net displacement: once the pointer moves past the threshold during the press it latches a
          drag (so a "drag out and back" that releases near the grab point still counts as a drag,
          not a tap). Skip clicks on the controls (they stopPropagation anyway, and are in
          makeMovable's `ignore` set so they never start a drag). The handler latches at mount on the
-         initial conversationId, which is sound for briefings: a briefing always carries its id at
-         its first (ringing/fired) mount, and its non-ringing path calls remove(), never an update()
-         that would add/drop the id. */
-      if (notice.conversationId) {
+         initial target's PRESENCE (and reads the current target at click time, so an updated
+         new-mail card opens its latest message), which is sound: a briefing always carries its id
+         at its first (ringing/fired) mount, and its non-ringing path calls remove(), never an
+         update() that would add/drop it; a new-mail card always carries one. */
+      if (notice.open) {
          root.classList.add("notice-openable");
          let downX = 0;
          let downY = 0;
@@ -445,11 +455,11 @@ export class Notifications implements NotificationsSink {
             if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_MAX_PX) moved = true;
          });
          root.addEventListener("click", (e) => {
-            const cid = card.notice.conversationId;
-            if (!cid || moved) return; // no backing conversation, or this press latched a drag
+            const target = card.notice.open;
+            if (!target || moved) return; // nothing behind it, or this press latched a drag
             const t = e.target as HTMLElement;
             if (t.closest(".notice-close, .notice-actions, .notice-action, .notice-action-select")) return;
-            this.onOpen(cid);
+            this.onOpen(target);
          });
       }
    }
@@ -532,34 +542,16 @@ export class Notifications implements NotificationsSink {
       }
    }
 
-   /* Initial spot from the notice's abstract x/y (-1..1), used ONLY when the card has no
-      persisted position yet. Once the user moves/snaps it, makeMovable's storage wins. */
+   /* Initial spot, used ONLY when the card has no persisted position yet (once the user moves or
+      snaps it, makeMovable's storage wins): the free area nearest top center, clear of panels,
+      other cards, the menubar, the conversation, and the reactor (placement.ts); top center if
+      the display is full. */
    private placeDefault(card: Card): void {
       if (localStorage.getItem(this.posKey(card.notice.id))) return; // makeMovable restores it
-      const W = window.innerWidth;
-      const H = window.innerHeight;
       const r = card.root.getBoundingClientRect();
-      const cw = r.width || 260;
-      const ch = r.height || 96;
-      const nx = (card.notice.x + 1) / 2;
-      const ny = (card.notice.y + 1) / 2;
-      const edge = cssMovableEdge(); // same inset makeMovable docks to (the --movable-edge token)
-      /* Cascade: cards born at the SAME spawn origin (a burst of alerts) fan down-and-right by a
-         step each, so they don't render exactly on top of one another. Bounded by a wrap so a
-         long burst can't march off-screen; count only current, un-placed same-origin cards, so
-         the cascade self-limits as older toasts fade. */
-      let cohort = 0;
-      for (const other of this.cards.values()) {
-         if (other === card) continue;
-         if (other.notice.x === card.notice.x && other.notice.y === card.notice.y && !localStorage.getItem(this.posKey(other.notice.id))) cohort++;
-      }
-      const cascade = (cohort % 6) * 18;
-      /* Clamp AFTER adding the cascade so a burst can't push a card past the docking inset /
-         off-screen (the base term alone is clamped; the +cascade would escape it). */
-      const left = Math.min(Math.round(edge + nx * Math.max(0, W - cw - 2 * edge)) + cascade, Math.max(edge, W - cw - edge));
-      const top = Math.min(Math.round(edge + ny * Math.max(0, H - ch - 2 * edge)) + cascade, Math.max(edge, H - ch - edge));
-      card.root.style.left = `${left}px`;
-      card.root.style.top = `${top}px`;
+      const spot = findOpenSpot(r.width || 260, r.height || 96, card.root);
+      card.root.style.left = `${spot.left}px`;
+      card.root.style.top = `${spot.top}px`;
       card.root.style.right = "auto";
       card.root.style.bottom = "auto";
    }

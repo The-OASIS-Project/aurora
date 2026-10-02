@@ -725,6 +725,32 @@ frame - attachments ride the message text as inline markers.
   on reload. **Gate image attach on a vision-capable model** (`get_config` `llm.cloud/local.vision_enabled`,
   resolved by active mode). Fails SAFE-and-silent on a bad id (persists text-only) - the tell is the
   daemon log `WebUI: ignoring invalid image_id in turn frame`.
+  **Superseded by `image_turns_by_id` (DAWN 04e6d506 + its flag, 2026-10-01):** a DAWN advertising
+  the flag takes images ONLY via `image_ids` (base64 `images[]` is ignored, so Aurora stops sending
+  it) and an image turn is all-or-nothing: a malformed/missing/foreign id, too many images, or an
+  inline `[IMAGE:data:…]` marker refuses the WHOLE turn with an `error` frame (`IMAGE_UNAVAILABLE`
+  / `IMAGE_LIMIT` / `IMAGE_ERROR`, severity error) and saves nothing. Aurora holds each sent turn (in
+  order) until DAWN's user `transcript` echo confirms it (the echo carries the sent text, so it
+  confirms the oldest held turn with that text). Only one IMAGE turn may be held at a time (a
+  second image message waits), so an IMAGE_* refusal names exactly one turn: its bubble comes back
+  out, its text + attachments return to the composer (images re-uploaded for fresh ids on
+  IMAGE_UNAVAILABLE), and "Message not sent: <reason>" shows. A `TURN_QUEUE_FULL` doesn't say which
+  turn it refused (typed, push-to-talk, or always-on), so Aurora only shows "DAWN is busy - a
+  message wasn't sent" (and swallows the PROCESSING_ERROR DAWN sends right after it) rather than
+  guess. An image-only message (no text) is sent only to a DAWN advertising `image_only_turns` (d226e575;
+  the sender's own echo then has empty text, which confirms the held turn whose sent text is
+  empty, and the bubble keeps showing the attached images); an older DAWN silently drops a turn with
+  empty text, so Aurora asks for a message there. `EMPTY_MESSAGE` (neither text nor images) is a
+  plain notice. Holds are
+  dropped on a link loss or a conversation switch. **`turn_refs` (DAWN d94f227c):** Aurora tags every
+  typed turn with `client_ref` (a short counter); DAWN echoes it on that turn's own user
+  `transcript` and on EVERY `error` raised for that turn. Aurora then confirms by ref, and any
+  error-severity error naming a turn that hasn't echoed yet is a refusal (it never ran): its draft
+  comes back, whatever the code. A ref'd error for a turn that already echoed (LLM_ERROR mid-reply,
+  PERSIST_ERROR after it) gets the normal handling. With the flag the one-image-turn limit is gone,
+  and a ref-less TURN_QUEUE_FULL (a voice turn's) no longer drops typed holds. `INVALID_CLIENT_REF`
+  (carries no ref) restores the newest turn. Without the flag the rules above apply. Against
+  an older DAWN (no flag) Aurora still sends `images[]` + `image_ids` as above.
 - **Display:** parse `[IMAGE:img_id]` (fetch `GET /api/images/:id`) + `[ATTACHED DOCUMENT: … blob:id]`
   markers out of message text (`src/conversation/attachments.ts`); images render inline (lightbox),
   documents as chips (download original or view extracted text). All strings via `textContent`.

@@ -875,6 +875,33 @@
    }
 }
 
+/* "Message not sent: <why>" above the composer: a needs-you line where the eyes already are. */
+.composer-note {
+   display: flex;
+   align-items: center;
+   gap: 0.5rem;
+   margin: 0 0.2rem 0.45rem;
+   padding: 0.35rem 0.6rem;
+   font-size: var(--fs-data);
+   color: var(--alert);
+   background: color-mix(in srgb, var(--alert) 10%, var(--ground-raise));
+   box-shadow: inset 2px 0 0 var(--alert);
+   pointer-events: auto; /* #console is pointer-events:none; the dismiss must click */
+}
+.composer-note-text {
+   flex: 1 1 auto;
+   overflow-wrap: anywhere;
+}
+.composer-note-close {
+   flex: none;
+   padding: 0 0.2rem;
+   border: none;
+   background: none;
+   color: var(--alert);
+   font-size: 1rem;
+   line-height: 1;
+   cursor: pointer;
+}
 /* Pending attachments (above the composer bar); hidden until something is attached. */
 .composer-pending {
    display: none;

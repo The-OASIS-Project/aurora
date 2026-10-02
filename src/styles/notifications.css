@@ -15,7 +15,7 @@
    position: absolute;
    left: 28px;
    top: 28px;
-   z-index: 7; /* above the instruments (5) and docks (6); below the drag ghost (40) */
+   z-index: 25; /* above the panel band (5..20) and docks (21); below the drag ghost (40) */
    width: 15rem;
    max-width: 80vw;
    box-sizing: border-box;

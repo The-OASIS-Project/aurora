@@ -21,7 +21,8 @@ const USER_KEYS = [
    "dawn.hero.hud", // hud HUD_CACHE_KEY: last telemetry (conversation title, model, ...)
    "dawn.hero.rateEma", // dawn-ws RATE_EMA_KEY: token-rate average
    "dawn.hero.cacheSums", // dawn-ws CACHE_SUM_KEY: prompt-cache totals
-   "dawn.hero.sessionKeepalive" // dawn-ws KEEPALIVE_KEY: this user's "Always on" consent
+   "dawn.hero.sessionKeepalive", // dawn-ws KEEPALIVE_KEY: this user's "Always on" consent
+   "dawn.hero.mailPrefs" // email-panel MAIL_PREFS_KEY: account filter + per-account notify (account ids)
 ];
 
 function tryStorage(fn: () => void): void {

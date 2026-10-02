@@ -27,10 +27,11 @@ beforeEach(() => {
 
 describe("user state", () => {
    it("clears every per-user key but keeps layout prefs", () => {
-      for (const k of ["dawn.hero.sessionToken", "dawn.hero.convId", "dawn.hero.hud", "dawn.hero.sessionKeepalive"]) {
+      for (const k of ["dawn.hero.sessionToken", "dawn.hero.convId", "dawn.hero.hud", "dawn.hero.sessionKeepalive", "dawn.hero.mailPrefs"]) {
          localStorage.setItem(k, "x");
       }
       localStorage.setItem("dawn.hero.contextPos", "keep");
+      localStorage.setItem("dawn.hero.mailSize", "keep");
       localStorage.setItem("aurora.notice.attention:Front door open.pos", "1,2");
       rememberUser("admin");
       clearUserState();
@@ -38,7 +39,9 @@ describe("user state", () => {
       expect(localStorage.getItem("dawn.hero.convId")).toBeNull();
       expect(localStorage.getItem("dawn.hero.hud")).toBeNull();
       expect(localStorage.getItem("dawn.hero.sessionKeepalive")).toBeNull();
+      expect(localStorage.getItem("dawn.hero.mailPrefs")).toBeNull();
       expect(localStorage.getItem("dawn.hero.contextPos")).toBe("keep");
+      expect(localStorage.getItem("dawn.hero.mailSize")).toBe("keep"); // mail layout is per machine
       expect(localStorage.getItem("aurora.notice.attention:Front door open.pos")).toBeNull();
       expect(isDifferentUser("admin")).toBe(false); // the last-user marker survives a plain clear
       clearUserState({ forgetUser: true });

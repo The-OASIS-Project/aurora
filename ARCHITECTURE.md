@@ -142,7 +142,7 @@ src/
   ingest/            the DAWN boundary (Ingest, DawnIngest, StubIngest, sinks)
   state/             Store + ElementState
   choreography/      importance -> depth / presence
-  render/            css3d renderer, RenderNode contract, makeMovable, panel drag
+  render/            css3d renderer, RenderNode contract, makeMovable + makeResizable, panel drag
   anchor/            the Three.js reactor (the only WebGL)
   conversation/      the front window, markdown, the 3D-lean recede, attachment
                      display + the composer's attach/upload (attachments.ts), and the
@@ -158,6 +158,9 @@ src/
   homeassistant/     the movable Home Assistant board
   watches/           the movable Watches board (SAGE proactive-alert rules + live readings)
   stocks/            the movable Stocks panel (read-only Schwab portfolio; default-off, opt-in)
+  email/             the movable, resizable Mail panel (docs/EMAIL_PANEL_DESIGN.md; fed by the
+                     EmailSource boundary in ingest/email.ts, not IngestSinks; default-off) + its
+                     email-only HTML -> markdown -> sanitize body pipeline
   audio/             TTS playback + FFT tap to the reactor
   hud/               clock + telemetry readout (both movable + Panels-menu toggleable)
   menu/              top menu: panels, display, model, system

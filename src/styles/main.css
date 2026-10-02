@@ -71,8 +71,7 @@ body {
       and only the reactor glow shows. Central atmosphere comes from the reactor
       itself now, not a page gradient. */
    background: var(--ground);
-   font-family:
-      "IBM Plex Sans", "Inter", system-ui, -apple-system, sans-serif;
+   font-family: var(--font-sans);
    color: var(--text);
    -webkit-font-smoothing: antialiased;
    text-rendering: optimizeLegibility;
@@ -362,7 +361,7 @@ body.engaged #docks {
    top: 24px;
    left: 50%;
    transform: translateX(-50%);
-   z-index: 6;
+   z-index: 30; /* above the click-to-front panel band (5..20) */
    display: flex;
    gap: 0.3rem;
    font-family: var(--font-mono);

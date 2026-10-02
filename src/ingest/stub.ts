@@ -379,9 +379,10 @@ export class StubIngest implements Ingest {
    loadConversation(id: number): void {
       this.sinks.conversationList.setActive(id);
    }
-   newConversation(): void {
+   newConversation(_opts?: { private?: boolean }): Promise<boolean> {
       this.sinks.conversation.clear();
       this.sinks.conversationList.setActive(0);
+      return Promise.resolve(true);
    }
    renameConversation(_id: number, _title: string): void {}
    deleteConversation(_id: number): void {}
