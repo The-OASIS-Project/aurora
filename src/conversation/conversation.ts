@@ -15,7 +15,7 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus, ConversationItem, OutImage, ToolCall, UploadedDoc } from "../ingest/ingest.ts";
+import type { ActivityStatus, ConversationItem, OutDocument, OutImage, ToolCall, UploadedDoc } from "../ingest/ingest.ts";
 import type { EmailRef } from "../ingest/email.ts";
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
@@ -78,6 +78,7 @@ export interface ConversationOptions {
       text: string,
       attachments?: {
          turnRef?: string;
+         documents?: OutDocument[];
          images?: OutImage[];
          imageIds?: string[];
          emailRefs?: Array<{ accountId: number; messageId: string }>;
@@ -102,6 +103,10 @@ export interface ConversationOptions {
    imageOnlyTurns?: () => boolean;
    /* Whether DAWN echoes a turn reference on the echo and on refusals (turn_refs). */
    turnRefs?: () => boolean;
+   /* Whether documents go as the structured `attachments` field (document_attachments + turn_refs). */
+   structuredDocs?: () => boolean;
+   /* DAWN's per-turn document limits (checked before sending a structured turn). */
+   documentLimits?: () => { maxDocuments: number; maxContentBytes: number };
    /* A short user-facing notice (e.g. an image that couldn't be re-attached). */
    notify?: (msg: string) => void;
    onEngage?: (engaged: boolean) => void;
@@ -484,7 +489,7 @@ export function mountConversation(
       /* Split inline attachment markers ([IMAGE:...] / [ATTACHED DOCUMENT:...]) out of the
          text; render the remaining prose, then the thumbnails/chips below it. Markers only
          appear in complete/replayed text (history, showReply/showUser), never mid-stream. */
-      const { text, images, docs } = parseAttachments(rawText);
+      const { text, images, docs } = parseAttachments(rawText, role);
 
       const body = document.createElement("div");
       body.className = "convo-body";
@@ -1296,15 +1301,44 @@ export function mountConversation(
          opts.onImageTurnBusy?.();
          return;
       }
-      /* Documents inline into the turn TEXT as [ATTACHED DOCUMENT] markers (daemon persists
-         the text verbatim). Images ride SEPARATELY as base64 + order-matched ids; the daemon
+      /* Images ride SEPARATELY as order-matched ids (+ base64 for an older DAWN); the daemon
          appends the [IMAGE:id] markers server-side. The local bubble adds those image markers
          too (displayedText) so it matches exactly what a reload will render - but the SENT text
-         omits them (the daemon owns them), which is also what DAWN echoes, so the typed-echo
-         dedup still matches. */
+         omits them (the daemon owns them). Documents are described below. */
+      /* Documents: a DAWN taking `document_attachments` gets them as a structured field (it builds
+         the markers itself, safely) and `text` carries only the words; an older one gets them
+         inlined into the text as [ATTACHED DOCUMENT] markers. The local bubble shows the inlined
+         form either way (the same chips a reload renders; DAWN joins its markers with a blank
+         line, so the stored text isn't byte-identical, which nothing depends on). */
+      const structuredDocs = pendingDocs.length > 0 && (opts.structuredDocs?.() ?? false);
+      if (structuredDocs) {
+         const lim = opts.documentLimits?.() ?? { maxDocuments: 5, maxContentBytes: 1024 * 1024 };
+         const enc = new TextEncoder();
+         const tooBig = pendingDocs.find((d) => enc.encode(d.content).length > lim.maxContentBytes);
+         /* DAWN takes a filename of 1-255 bytes with no line break (a long non-Latin name can come
+            back from the upload just over that). */
+         const badName = pendingDocs.find((d) => {
+            const n = enc.encode(d.filename).length;
+            return n < 1 || n > 255 || /[\r\n]/.test(d.filename);
+         });
+         if (pendingDocs.length > lim.maxDocuments || tooBig || badName) {
+            noteRefusal(
+               tooBig
+                  ? `Not sent: “${tooBig.filename}” has more text than DAWN takes in one message.`
+                  : badName
+                    ? "Not sent: a document's name is too long. Rename the file and attach it again."
+                    : `Not sent: at most ${lim.maxDocuments} documents per message.`
+            );
+            return;
+         }
+      }
       const docMarkers = pendingDocs.map(buildDocMarker).join("\n");
-      const sentText = docMarkers ? (typed ? `${docMarkers}\n\n${typed}` : docMarkers) : typed;
-      const displayedText = sentText + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
+      const inlined = docMarkers ? (typed ? `${docMarkers}\n\n${typed}` : docMarkers) : typed;
+      const sentText = structuredDocs ? typed : inlined;
+      const documents = structuredDocs
+         ? pendingDocs.map((d) => ({ filename: d.filename, size: d.size, content: d.content, ...(d.blobId ? { blobId: d.blobId } : {}) }))
+         : [];
+      const displayedText = inlined + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
       const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
       const imageIds = pendingImages.map((im) => im.id);
       const emailRefs = pendingEmail ? [{ accountId: pendingEmail.accountId, messageId: pendingEmail.messageId }] : [];
@@ -1322,6 +1356,7 @@ export function mountConversation(
       summon();
       opts.onSubmit?.(sentText, {
          turnRef: ref,
+         ...(documents.length ? { documents } : {}),
          ...(images.length ? { images, imageIds } : {}),
          ...(emailRefs.length ? { emailRefs } : {})
       });

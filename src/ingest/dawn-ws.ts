@@ -39,6 +39,7 @@ import type {
    MusicTrack,
    NoticeAction,
    NoticeOpen,
+   OutDocument,
    OutImage,
    StockAccount,
    StockAssetType,
@@ -886,7 +887,7 @@ export class DawnIngest implements Ingest {
       let us dedupe the echo of our own typing. What is left unmatched is spoken input. Each
       carries a timestamp so a stale entry (echo that never arrived) can't later swallow an
       identical spoken turn. */
-   private readonly typedEchoes: Array<{ text: string; at: number }> = [];
+   private readonly typedEchoes: Array<{ text: string; at: number; ref?: string }> = [];
    /* When a TURN_QUEUE_FULL arrived (its trailing PROCESSING_ERROR is swallowed). */
    private queueFullAt = 0;
    private readonly jobs = new Map<number, { title: string; running: boolean }>();
@@ -2625,13 +2626,18 @@ export class DawnIngest implements Ingest {
             const errRef = typeof p.client_ref === "string" ? p.client_ref : "";
             const errSeverity = typeof p.severity === "string" ? p.severity : "error";
             const refusalCode =
-               code === "IMAGE_UNAVAILABLE" || code === "IMAGE_LIMIT" || code === "IMAGE_ERROR" || code === "EMPTY_MESSAGE" || code === "TURN_QUEUE_FULL";
+               code === "IMAGE_UNAVAILABLE" ||
+               code === "IMAGE_LIMIT" ||
+               code === "IMAGE_ERROR" ||
+               code === "EMPTY_MESSAGE" ||
+               code === "TURN_QUEUE_FULL" ||
+               code === "ATTACHMENT_INVALID";
             const refusalText = (): string =>
                typeof p.message === "string" && p.message ? p.message : code === "TURN_QUEUE_FULL" ? "DAWN is busy. Try again in a moment." : "it couldn't be sent.";
             if (errRef && errSeverity === "error") {
                const refused = this.sinks.conversation.rejectTurn({ ref: errRef }, code === "IMAGE_UNAVAILABLE");
                if (refused !== null) {
-                  this.dropTypedEcho(refused);
+                  this.dropTypedEchoRef(errRef); // by ref: two turns can share their text
                   if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
                   this.sinks.conversation.noteRefusal(`Message not sent: ${refusalText()}`);
                   break;
@@ -3456,7 +3462,8 @@ export class DawnIngest implements Ingest {
                this.handleIncomingUser(
                   p.text.trim(),
                   Number((p as { message_id?: number }).message_id ?? 0),
-                  p.replay === true
+                  p.replay === true,
+                  typeof (p as { client_ref?: unknown }).client_ref === "string" ? (p as { client_ref: string }).client_ref : undefined
                );
                break;
             }
@@ -3501,7 +3508,11 @@ export class DawnIngest implements Ingest {
                transcript echo, so the origin's optimistic bubble is recognized (dedup) and a
                non-origin viewer renders it as a user bubble. */
             if (role === "user") {
-               this.handleIncomingUser(String((p as { text?: string }).text ?? "").trim(), messageId, false);
+               /* Our own turn's fan-out may carry its client_ref (turn_refs): needed to recognize a
+                  structured-attachments turn whose echo was lost, since its server-built text can't
+                  match what we sent. */
+               const fanRef = typeof (p as { client_ref?: unknown }).client_ref === "string" ? (p as { client_ref: string }).client_ref : undefined;
+               this.handleIncomingUser(String((p as { text?: string }).text ?? "").trim(), messageId, false, fanRef);
                break;
             }
             const info = interpretMessage(String((p as { text?: string }).text ?? ""));
@@ -4725,7 +4736,7 @@ export class DawnIngest implements Ingest {
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
-   submit(text: string, attachments?: { turnRef?: string; images?: OutImage[]; imageIds?: string[] }): void {
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[] }): void {
       /* Don't let a message vanish into a dead/half-open link: tell the user instead of
          silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
       if (!this.isLinkLive()) {
@@ -4758,7 +4769,18 @@ export class DawnIngest implements Ingest {
          images?: OutImage[];
          image_ids?: string[];
          client_ref?: string;
+         attachments?: Array<{ filename: string; size: number; content: string; blob_id?: string }>;
       } = { text };
+      /* document_attachments (+ turn_refs): documents as a structured field; DAWN builds the
+         markers itself (the composer only sends `documents` when supportsStructuredDocs()). */
+      if (attachments?.documents?.length && this.supportsStructuredDocs()) {
+         payload.attachments = attachments.documents.map((d) => ({
+            filename: d.filename,
+            size: d.size,
+            content: d.content,
+            ...(d.blobId ? { blob_id: d.blobId } : {})
+         }));
+      }
       /* turn_refs: tag the turn so its echo and any refusal name it exactly. */
       if (attachments?.turnRef && this.hasFeature("turn_refs")) payload.client_ref = attachments.turnRef;
       if (this.convId > 0) payload.conversation_id = this.convId;
@@ -4775,9 +4797,15 @@ export class DawnIngest implements Ingest {
          bubble). We already showed it locally, so remember it to dedupe that echo; a
          voice transcript has no local counterpart and displays. Bounded so a dropped
          echo cannot grow the list without limit. */
-      this.typedEchoes.push({ text: text.trim(), at: performance.now() });
+      this.typedEchoes.push({ text: text.trim(), at: performance.now(), ref: payload.client_ref });
       if (this.typedEchoes.length > 8) this.typedEchoes.shift();
       this.sinks.conversation.setThinking(true);
+   }
+
+   /* A refused turn named by its ref will never echo: drop exactly its dedup entry. */
+   private dropTypedEchoRef(ref: string): void {
+      const i = this.typedEchoes.findIndex((e) => e.ref === ref);
+      if (i >= 0) this.typedEchoes.splice(i, 1);
    }
 
    /* A refused turn will never echo: drop ITS dedup entry (by text, not the newest), so it can't
@@ -4979,6 +5007,18 @@ export class DawnIngest implements Ingest {
       return this.isLinkLive() && this.configSeen;
    }
 
+   /* Whether documents go as the structured `attachments` field: `document_attachments`, which only
+      ever ships with `turn_refs` (required too: the echo of such a turn is matched by its ref). */
+   supportsStructuredDocs(): boolean {
+      return this.hasFeature("document_attachments") && this.hasFeature("turn_refs");
+   }
+
+   /* DAWN's per-turn document limits. Its defaults (5 documents, 1024 KB of text each) until the
+      config field names are confirmed; the daemon enforces them regardless (ATTACHMENT_INVALID). */
+   documentLimits(): { maxDocuments: number; maxContentBytes: number } {
+      return { maxDocuments: 5, maxContentBytes: 1024 * 1024 };
+   }
+
    /* Whether DAWN echoes a turn reference on the echo and on refusals: the `turn_refs` flag. */
    supportsTurnRefs(): boolean {
       return this.hasFeature("turn_refs");
@@ -5153,8 +5193,18 @@ export class DawnIngest implements Ingest {
       a 0/absent id on either would double the user's own message. DAWN guards the fan-out on
       message_id > 0 on BOTH the text and voice paths (verified), so a save-failure/id-0 turn
       emits only the echo (single frame - the splice handles it), never a doubling second frame. */
-   private handleIncomingUser(text: string, messageId: number, replay: boolean): void {
+   private handleIncomingUser(text: string, messageId: number, replay: boolean, ref?: string): void {
       if (this.sinks.conversation.hasMessage(messageId)) return;
+      /* turn_refs: our own echo names its turn, so dedup by the ref (a structured-attachments
+         turn's echo carries server-built text that can't match what we showed). */
+      if (ref !== undefined) {
+         const i = this.typedEchoes.findIndex((e) => e.ref === ref);
+         if (i >= 0) {
+            this.typedEchoes.splice(i, 1);
+            this.sinks.conversation.noteMessageId(messageId);
+            return;
+         }
+      }
       /* An image-only turn's own echo has empty text (image_only_turns): it can only be ours (the
          local bubble already shows the attached images), so adopt its id and draw nothing. */
       if (!text) {

@@ -24,9 +24,12 @@ afterEach(() => {
 });
 
 /* The composer markup the view binds to (a subset of index.html). */
+type Sent = { turnRef?: string; documents?: Array<{ filename: string; size: number; content: string; blobId?: string }> };
+
 function mount(
-   onSubmit: (text: string, a?: { turnRef?: string }) => void,
-   turnRefs = false
+   onSubmit: (text: string, a?: Sent) => void,
+   turnRefs = false,
+   structuredDocs = false
 ): { input: HTMLTextAreaElement; send: (text: string) => void } {
    document.body.innerHTML = `<div id="stage"><div id="console"><div id="convo"></div>
       <form id="composer"><div class="composer-row"><button id="composer-attach" type="button"></button>
@@ -36,7 +39,8 @@ function mount(
       onSubmit,
       canSubmit: () => true,
       turnRefs: () => turnRefs,
-      uploadDocument: () => Promise.reject(new Error("unused")),
+      structuredDocs: () => structuredDocs,
+      uploadDocument: (f: File) => Promise.resolve({ filename: f.name, content: "extracted body", size: 42, type: "txt", blobId: "blb_abcdefabcdef" }),
       uploadImage: () => Promise.resolve({ id: "img_fresh", mimeType: "image/jpeg", size: 1 })
    });
    const input = document.getElementById("composer-input") as HTMLTextAreaElement;
@@ -65,6 +69,35 @@ describe("held turns with turn references (turn_refs)", () => {
       expect(userBubbles()).toEqual(["same", "other"]);
       expect(input.value).toBe("same");
       expect(view!.rejectTurn({ ref: refs[1] }, false)).toBeNull(); // already confirmed
+   });
+});
+
+async function attachDoc(): Promise<void> {
+   const fileInput = document.querySelector<HTMLInputElement>('#composer input[type="file"]')!;
+   Object.defineProperty(fileInput, "files", { value: [new File(["x"], "notes.txt")], configurable: true });
+   fileInput.dispatchEvent(new Event("change"));
+   await new Promise((r) => setTimeout(r, 0));
+   await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("document attachments", () => {
+   it("sends documents as a structured field with words-only text when DAWN takes them", async () => {
+      const calls: Array<[string, Sent | undefined]> = [];
+      const { send } = mount((t, a) => calls.push([t, a]), true, true);
+      await attachDoc();
+      send("what does this say?");
+      expect(calls[0][0]).toBe("what does this say?");
+      expect(calls[0][1]?.documents).toEqual([{ filename: "notes.txt", size: 42, content: "extracted body", blobId: "blb_abcdefabcdef" }]);
+      expect(userBubbles()[0]).toContain("what does this say?"); // the local bubble still shows the doc chip + words
+   });
+
+   it("inlines documents as markers for an older DAWN", async () => {
+      const calls: Array<[string, Sent | undefined]> = [];
+      const { send } = mount((t, a) => calls.push([t, a]), true, false);
+      await attachDoc();
+      send("hi");
+      expect(calls[0][0]).toBe("[ATTACHED DOCUMENT: notes.txt (42 bytes) blob:blb_abcdefabcdef]\nextracted body\n[END DOCUMENT]\n\nhi");
+      expect(calls[0][1]?.documents).toBeUndefined();
    });
 });
 

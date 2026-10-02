@@ -337,10 +337,12 @@ and same-origin URLs are dropped.
 
 ### 7.1 Subscription rule
 
-`subscribed = panelEffective || (anyNotifyOn && linkLive)`, where `panelEffective` = shown AND
+`subscribed = panelEffective || (panelShown && anyNotifyOn && linkLive)`, where `panelEffective` = shown AND
 expanded AND not standby AND tab visible (the Stocks pattern). The view computes it (it owns the
 prefs); DawnIngest stores the intent and replays it on reconnect. Standby suspends only the
-`panelEffective` half, because standby and a hidden tab are exactly when a notification matters.
+`panelEffective` half, because standby and a hidden tab are exactly when a notification matters. Turning the
+panel OFF (Panels menu) silences it entirely, notifications included: the bells live in the panel,
+so an off panel must not raise cards the user can't trace. Collapsed keeps listening.
 No subscriber = DAWN doesn't poll.
 
 ### 7.2 Applying changes
@@ -370,7 +372,7 @@ updates every open panel.
 - A notification card (`src/notify/`, ambient tone, never alert) per account, **coalescing**
   arrivals within ~30 s ("3 new · Work", latest sender + subject). Respects engagement dim.
 - A **"sender only"** option hides the subject on cards, for shared screens.
-- Click opens the message in the panel (expanding it, or turning the panel on if it was off).
+- Click opens the message in the panel (expanding it if collapsed; cards only fire while the panel is on).
 - **Notice id is per account (`mail-new:<accountId>`)**, never per message and never sender/subject
   text: the notify layer persists `aurora.notice.<id>.*` positions to localStorage, so a message id
   or subject in the id would put mail into browser storage.

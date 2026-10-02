@@ -703,6 +703,8 @@ const conversation = mountConversation(stage, {
    onImageNeedsText: () => dawn.notifyUser("Add a message to send with the image."),
    imageOnlyTurns: () => dawn.supportsImageOnlyTurns(),
    turnRefs: () => dawn.supportsTurnRefs(),
+   structuredDocs: () => dawn.supportsStructuredDocs(),
+   documentLimits: () => dawn.documentLimits(),
    notify: (m) => dawn.notifyUser(m),
    /* Inline attachment display: images + doc originals are fetched through the ingest
       boundary (never a direct DAWN call from the view). */

@@ -686,10 +686,19 @@ export interface IngestSinks {
    memoryForget: MemoryForgetSink;
 }
 
+/* One document on an outgoing turn, for a DAWN taking `document_attachments` (it builds the
+   [ATTACHED DOCUMENT] markers itself). `content` is the upload's extracted text. */
+export interface OutDocument {
+   filename: string;
+   size: number;
+   content: string;
+   blobId?: string;
+}
+
 /* A document uploaded via POST /api/documents: DAWN extracts its text server-side and
-   optionally stores the original. The composer holds this as a pending attachment and, on
-   send, inlines it into the outgoing turn's text as an [ATTACHED DOCUMENT] marker (which the
-   daemon persists and the LLM reads - documents ride the message text, not a separate field). */
+   optionally stores the original. The composer holds this as a pending attachment and, on send,
+   either passes it as a structured attachment (`document_attachments`) or, for an older DAWN,
+   inlines it into the turn's text as an [ATTACHED DOCUMENT] marker. */
 export interface UploadedDoc {
    filename: string;
    content: string; // extracted text
@@ -724,9 +733,10 @@ export interface Ingest {
    /* User submitted a turn. `attachments.images` (base64) rides the frame for the live LLM
       call; `attachments.imageIds` (from the /api/images upload, order-matched) is MANDATORY
       whenever images are present - the daemon persists it as [IMAGE:id] markers so images
-      survive a reload (hard cut-over, no fallback). Documents are inlined into `text` by the
-      caller, so they need nothing here. */
-   submit(text: string, attachments?: { turnRef?: string; images?: OutImage[]; imageIds?: string[] }): void;
+      survive a reload (hard cut-over, no fallback). `attachments.documents` go as the structured
+      `attachments` field for a DAWN taking `document_attachments`; otherwise the caller inlines them
+      into `text`. `attachments.turnRef` rides as `client_ref` under `turn_refs`. */
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[] }): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */

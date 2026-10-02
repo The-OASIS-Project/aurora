@@ -464,8 +464,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let tabHidden = document.hidden;
    let subscribed = false;
    const panelEffective = (): boolean => vis.isVisible() && expanded && !suspended && !tabHidden;
+   /* Listen while the panel is on screen, or (opt-in bells) while it's COLLAPSED or the tab is
+      hidden. Turning the panel off in the Panels menu silences it entirely: the bell settings live
+      in the panel, so an off panel must not keep raising cards the user can't trace. */
    const wantSubscription = (): boolean =>
-      availability === "available" && (panelEffective() || (prefs.notify.length > 0 && linked));
+      availability === "available" && (panelEffective() || (vis.isVisible() && prefs.notify.length > 0 && linked));
    const syncSubscription = (): void => {
       const want = wantSubscription();
       if (want === subscribed) return;
@@ -1419,7 +1422,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       notifyState.delete(accountId);
    };
    const queueNotice = (row: EmailRow): void => {
-      if (!prefs.notify.includes(row.accountId) || !row.unread) return;
+      if (!prefs.notify.includes(row.accountId) || !row.unread || !vis.isVisible()) return;
       if (panelEffective()) return; // they're looking at the list: the arrival itself is the signal
       const st = notifyState.get(row.accountId);
       /* The window runs from the LAST arrival, so the card's count and the coalescing agree. */
