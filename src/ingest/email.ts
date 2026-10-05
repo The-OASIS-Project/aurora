@@ -24,6 +24,10 @@ export type EmailErrorCode =
    | "FOLDER_MISSING"
    | "NO_TRASH"
    | "CANNOT_CALCULATE"
+   | "UNSUPPORTED_QUERY"
+   | "ALREADY_THERE"
+   | "LEFT_FLAGGED"
+   | "NOT_REMOVED"
    | "UNAVAILABLE";
 
 export type EmailAccountStatus = "ok" | "auth_revoked" | "auth_failed" | "unreachable";
@@ -77,13 +81,18 @@ export interface EmailMessage {
    fromAddr: string;
    to: EmailAddress[];
    cc: EmailAddress[];
-   replyTo?: string;
+   /* The real recipient counts when DAWN cut a list (it sends at most 32 of each). */
+   toTotal?: number;
+   ccTotal?: number;
+   replyTo?: EmailAddress;
    date: number;
    bodyText: string;
    bodyHtml?: string;
    textTruncated: boolean;
    htmlTruncated: boolean;
    attachments: EmailAttachment[];
+   /* More attachments than listed (DAWN's MIME walk stopped at its part cap). */
+   attachmentsTruncated?: boolean;
 }
 
 export interface EmailFailure {

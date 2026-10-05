@@ -813,6 +813,11 @@
    text-overflow: ellipsis;
    white-space: nowrap;
 }
+.mail-attachment-more {
+   align-self: center;
+   font-size: var(--fs-label);
+   color: var(--text-faint);
+}
 .mail-attachment-size {
    color: var(--text-faint);
 }

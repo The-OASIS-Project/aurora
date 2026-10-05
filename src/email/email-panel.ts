@@ -742,6 +742,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const bannerCopy = (code: EmailErrorCode, name: string): string => {
       if (code === "AUTH_REVOKED" || code === "AUTH_FAILED") return `${name} needs reconnecting in DAWN's settings`;
       if (code === "UNREACHABLE" || code === "TIMEOUT") return `Couldn't reach ${name}`;
+      if (code === "UNSUPPORTED_QUERY") return `Search for non-English text isn't supported on ${name}`;
       return `${name} had a problem loading mail`;
    };
 
@@ -958,19 +959,22 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (r.message) {
          const m = r.message;
          const recips = [...m.to, ...m.cc];
+         /* Count every recipient, including any DAWN cut from a long list. */
+         const totalRecips = Math.max(m.to.length, m.toTotal ?? 0) + Math.max(m.cc.length, m.ccTotal ?? 0);
          if (recips.length) {
             const own = account(m.accountId)?.address;
             const toMe = recips.some((a) => a.addr === own);
             const first = toMe ? "me" : addrList(recips.slice(0, 1));
-            const more = recips.length - 1;
+            const more = totalRecips - 1;
             const toLine = div("mail-reader-to");
             const expand = textButton("mail-link mail-to-toggle", `to ${first}${more > 0 ? `, +${more}` : ""}`);
             expand.setAttribute("aria-expanded", "false");
             const full = div("mail-reader-to-full");
             full.hidden = true;
-            full.append(div("", `To: ${addrList(m.to)}`));
-            if (m.cc.length) full.append(div("", `Cc: ${addrList(m.cc)}`));
-            if (m.replyTo && m.replyTo !== m.fromAddr) full.append(div("", `Reply-To: ${m.replyTo}`));
+            const cut = (shown: number, total?: number): string => (total && total > shown ? ` +${total - shown} more` : "");
+            full.append(div("", `To: ${addrList(m.to)}${cut(m.to.length, m.toTotal)}`));
+            if (m.cc.length) full.append(div("", `Cc: ${addrList(m.cc)}${cut(m.cc.length, m.ccTotal)}`));
+            if (m.replyTo && m.replyTo.addr !== m.fromAddr) full.append(div("", `Reply-To: ${addrList([m.replyTo])}`));
             expand.addEventListener("click", () => {
                full.hidden = !full.hidden;
                expand.setAttribute("aria-expanded", full.hidden ? "false" : "true");
@@ -1025,6 +1029,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                chip.title = `${a.mime} · downloads come later`;
                att.appendChild(chip);
             }
+            if (m.attachmentsTruncated) att.appendChild(span("mail-attachment-more", "More attachments than shown"));
             scroll.appendChild(att);
          }
       }

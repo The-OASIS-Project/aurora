@@ -78,6 +78,31 @@
    gap: 0.45rem;
    margin-bottom: 0.3rem;
 }
+/* A caller's photo (a validated raster data URI), round, ahead of the kind label. */
+.notice-img {
+   flex: none;
+   width: 1.9rem;
+   height: 1.9rem;
+   border-radius: 50%;
+   object-fit: cover;
+   box-shadow: 0 0 0 1px color-mix(in srgb, var(--node-accent) 45%, transparent);
+}
+.notice-img[hidden] {
+   display: none;
+}
+/* A one-line card (a minimized in-call bar): title + actions only, tighter. */
+.notice-card.notice-compact {
+   width: auto;
+   padding-top: 0.45rem;
+   padding-bottom: 0.45rem;
+}
+.notice-card.notice-compact .notice-head {
+   margin-bottom: 0.15rem;
+}
+.notice-card.notice-compact .notice-sub,
+.notice-card.notice-compact .notice-list {
+   display: none;
+}
 .notice-dot {
    flex: 0 0 auto;
    width: 7px;
@@ -111,6 +136,9 @@
    border: none;
    cursor: pointer;
    transition: color 140ms ease;
+}
+.notice-close[hidden] {
+   display: none;
 }
 .notice-close:hover {
    color: var(--node-accent-glow);
@@ -170,7 +198,11 @@
       background 140ms ease,
       border-color 140ms ease;
 }
-.notice-action:hover {
+.notice-action:disabled {
+   opacity: 0.45;
+   cursor: default;
+}
+.notice-action:hover:not(:disabled) {
    background: color-mix(in srgb, var(--node-accent, var(--accent)) 20%, transparent);
    border-color: color-mix(in srgb, var(--node-accent, var(--accent)) 65%, transparent);
 }

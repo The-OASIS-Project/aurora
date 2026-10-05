@@ -518,6 +518,8 @@ export interface NoticeAction {
       The selected option's `value` is passed to noticeAction as the 3rd arg on click. */
    options?: Array<{ value: string; label: string }>;
    defaultValue?: string; // pre-selected option value (e.g. "10" minutes)
+   disabled?: boolean; // shown but not clickable (e.g. a call's buttons while it's answering)
+   keepOpen?: boolean; // pressing it leaves the card up (its owner updates or removes it)
 }
 
 /* What tapping a click-to-open notice opens. The notify layer only reports it; main.ts routes
@@ -559,6 +561,10 @@ export interface Notice {
       carries the briefing's conversation_id); a new-mail card opens the message in the Mail
       panel. Absent for notices with nothing behind them. */
    open?: NoticeOpen;
+   /* An optional picture (a caller's photo): a raster data: URI only; anything else is ignored. */
+   image?: string;
+   /* A small, single-line card (a minimized in-call bar). */
+   compact?: boolean;
 }
 
 /* What ingest can push to the notification layer. Notices are self-owned movable cards

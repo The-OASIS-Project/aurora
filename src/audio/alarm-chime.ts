@@ -10,7 +10,10 @@
  * Both notes carry the daemon's linear ADSR (10% attack, 10% decay to 0.7, 60% sustain, 20%
  * release).
  *
- * Gated by the "Alarm sounds" preference (System-menu toggle): when off, both are no-ops.
+ *   - Incoming-call ring (startRing): 440 Hz then 480 Hz bursts every 3 s (the WebUI's phone.js
+ *     pattern; the real ring plays only at the daemon).
+ *
+ * Gated by the "Alarm sounds" preference (System-menu toggle): when off, all are no-ops.
  * Own lazy, isolated AudioContext (suspended when idle so it doesn't hold an output thread);
  * every path error-swallowed - purely cosmetic, must never break the notification flow. Below
  * the render seam (audio I/O only).
@@ -31,9 +34,17 @@ const ALARM_PERIOD_MS = NOTE_DUR * 2 * 1000 + ALARM_GAP_MS; // 500ms tone + 200m
 const PEAK = 0.3;
 const SUSTAIN_FRAC = 0.7;
 
+/* Incoming-call ring (the WebUI's phone.js pattern): a 440 Hz then a 480 Hz burst, repeating
+   every 3 s. The real ring only plays at the daemon, so a client rings for itself. */
+const RING_HI = 480;
+const RING_LO = 440;
+const RING_BURST = 0.4; // seconds per tone
+const RING_PERIOD_MS = 3000;
+
 export class AlarmChime {
    private ctx: AudioContext | null = null;
    private loopTimer = 0;
+   private ringTimer = 0;
    private enabled: boolean;
 
    constructor(enabled: boolean) {
@@ -42,7 +53,10 @@ export class AlarmChime {
 
    setEnabled(on: boolean): void {
       this.enabled = on;
-      if (!on) this.stopLoop();
+      if (!on) {
+         this.stopLoop();
+         this.stopRing();
+      }
    }
 
    isEnabled(): boolean {
@@ -91,7 +105,38 @@ export class AlarmChime {
          window.clearInterval(this.loopTimer);
          this.loopTimer = 0;
       }
-      /* Release the audio output thread once the loop is done (a later tone resumes it). */
+      this.suspendWhenSilent();
+   }
+
+   /* Begin the incoming-call ring (idempotent). Gated by the same "Alarm sounds" preference. */
+   startRing(): void {
+      if (!this.enabled || this.ringTimer) return;
+      const burst = (): void => {
+         const ctx = this.ensure();
+         if (!ctx) return;
+         try {
+            const t = ctx.currentTime;
+            this.tone(ctx, RING_LO, t, RING_BURST);
+            this.tone(ctx, RING_HI, t + RING_BURST, RING_BURST);
+         } catch {
+            /* cosmetic */
+         }
+      };
+      burst();
+      this.ringTimer = window.setInterval(burst, RING_PERIOD_MS);
+   }
+
+   stopRing(): void {
+      if (this.ringTimer) {
+         window.clearInterval(this.ringTimer);
+         this.ringTimer = 0;
+      }
+      this.suspendWhenSilent();
+   }
+
+   /* Release the audio output thread once nothing is looping (a later tone resumes it). */
+   private suspendWhenSilent(): void {
+      if (this.loopTimer || this.ringTimer) return;
       try {
          if (this.ctx && this.ctx.state === "running") void this.ctx.suspend().catch(() => {});
       } catch {
@@ -132,7 +177,7 @@ export class AlarmChime {
 
    private suspendIfIdle(ctx: AudioContext): void {
       try {
-         if (this.ctx === ctx && !this.loopTimer && ctx.state === "running") {
+         if (this.ctx === ctx && !this.loopTimer && !this.ringTimer && ctx.state === "running") {
             void ctx.suspend().catch(() => {});
          }
       } catch {
@@ -142,6 +187,7 @@ export class AlarmChime {
 
    dispose(): void {
       this.stopLoop();
+      this.stopRing();
       if (this.ctx && this.ctx.state !== "closed") void this.ctx.close().catch(() => {});
       this.ctx = null;
    }

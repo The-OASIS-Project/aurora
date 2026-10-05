@@ -74,6 +74,10 @@ interface Card {
    titleEl: HTMLElement;
    subEl: HTMLElement;
    listEl: HTMLElement;
+   imgEl: HTMLImageElement;
+   imgSrc: string; // the validated src last applied (validated once per change, not every paint)
+   actionsEl: HTMLDivElement | null;
+   actionsSig: string;
    disposeMovable: () => void;
    snapped: boolean;
    hovered: boolean;
@@ -316,15 +320,15 @@ export class Notifications implements NotificationsSink {
          action carries the dismiss, so no redundant x. */
       const hasActions = !!notice.actions?.length;
       if (hasActions) root.classList.add("notice-has-actions"); // wider card for the action row
-      let close: HTMLButtonElement | null = null;
-      if (!notice.sticky && !hasActions) {
-         close = document.createElement("button");
-         close.className = "notice-close";
-         close.type = "button";
-         close.setAttribute("aria-label", "Dismiss notification");
-         close.textContent = "×"; // ×
-         head.append(close);
-      }
+      /* Always built; hidden while the notice has actions or is sticky (paintActions keeps it in
+         step if the action set later changes). */
+      const close = document.createElement("button");
+      close.className = "notice-close";
+      close.type = "button";
+      close.setAttribute("aria-label", "Dismiss notification");
+      close.textContent = "×"; // ×
+      close.hidden = !!notice.sticky || hasActions;
+      head.append(close);
 
       const titleEl = document.createElement("div");
       titleEl.className = "notice-title";
@@ -333,42 +337,16 @@ export class Notifications implements NotificationsSink {
       const listEl = document.createElement("ul");
       listEl.className = "notice-list";
 
-      /* Actions are fixed at mount: a notice's action set is immutable for its lifetime.
-         update()/paint() do NOT reconcile them, because a given notice id never changes its
-         action shape in practice (a scheduler event's type is fixed per event_id). The only
-         theoretical exception - a missed replay (no actions) reusing an id that later rings
-         live - degrades safely: the plain x rendered at that first mount still dismisses and
-         stops the loop, just without the Snooze option. */
-      let actionsEl: HTMLDivElement | null = null;
-      if (hasActions) {
-         actionsEl = document.createElement("div");
-         actionsEl.className = "notice-actions";
-         for (const a of notice.actions!) {
-            /* Each action is a group: an optional value dropdown (e.g. snooze minutes) plus
-               the button. The delegated click handler reads the group's select on fire. */
-            const grp = document.createElement("span");
-            grp.className = "notice-action-group";
-            if (a.options?.length) {
-               const sel = document.createElement("select");
-               sel.className = "notice-action-select";
-               for (const o of a.options) {
-                  const opt = document.createElement("option");
-                  opt.value = o.value;
-                  opt.textContent = o.label;
-                  if (o.value === a.defaultValue) opt.selected = true;
-                  sel.append(opt);
-               }
-               grp.append(sel);
-            }
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "notice-action";
-            btn.dataset.action = a.id;
-            btn.textContent = a.label;
-            grp.append(btn);
-            actionsEl.append(grp);
-         }
-      }
+      /* The action row (built and later reconciled by paint(), so a notice can change its buttons:
+         a call goes Answer/Reject -> disabled while answering -> Hang Up). */
+      const actionsEl: HTMLDivElement | null = hasActions ? document.createElement("div") : null;
+      if (actionsEl) actionsEl.className = "notice-actions";
+      /* An optional picture (a caller's photo), set by paint() from a validated raster data URI. */
+      const imgEl = document.createElement("img");
+      imgEl.className = "notice-img";
+      imgEl.alt = "";
+      imgEl.hidden = true;
+      head.prepend(imgEl);
 
       root.append(head, titleEl, subEl, listEl);
       if (actionsEl) root.append(actionsEl);
@@ -383,6 +361,10 @@ export class Notifications implements NotificationsSink {
          titleEl,
          subEl,
          listEl,
+         imgEl,
+         imgSrc: "",
+         actionsEl,
+         actionsSig: "",
          disposeMovable: () => {},
          snapped,
          hovered: false,
@@ -418,7 +400,8 @@ export class Notifications implements NotificationsSink {
          e.stopPropagation();
          this.dismiss(card);
       });
-      actionsEl?.addEventListener("click", (e) => {
+      /* Delegated from the card (the action row can be created later by paintActions). */
+      root.addEventListener("click", (e) => {
          const btn = (e.target as HTMLElement).closest<HTMLElement>(".notice-action");
          if (!btn?.dataset.action) return;
          e.stopPropagation();
@@ -499,7 +482,10 @@ export class Notifications implements NotificationsSink {
       report the action. Routed through onAction, NOT onDismiss, so it isn't double-handled. */
    private act(card: Card, action: string, value?: string): void {
       const id = card.notice.id;
-      this.teardown(card);
+      /* Most actions end the notice (an alarm's Snooze/Dismiss); a `keepOpen` one leaves the card
+         for its owner to update (a call's Answer -> "Answering…", Hang Up -> waiting for "ended"). */
+      const keep = card.notice.actions?.find((a) => a.id === action)?.keepOpen;
+      if (!keep) this.teardown(card);
       this.onAction(id, action, value);
    }
 
@@ -516,6 +502,18 @@ export class Notifications implements NotificationsSink {
    private paint(card: Card): void {
       const { notice } = card;
       card.root.classList.toggle("notice-attention", notice.tone === "attention");
+      card.root.classList.toggle("notice-compact", !!notice.compact);
+      /* Picture: only a raster data URI ever reaches the src (never SVG, never a URL). Validated
+         only when the notice's image changes (an in-call card repaints every second). */
+      const want = notice.image ?? "";
+      if (want !== card.imgSrc) {
+         card.imgSrc = want;
+         const ok = !!want && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(want);
+         if (ok) card.imgEl.src = want;
+         else card.imgEl.removeAttribute("src");
+         card.imgEl.hidden = !ok;
+      }
+      this.paintActions(card);
       const kind = (notice.kind || "notice").toUpperCase();
       if (card.kindEl.textContent !== kind) card.kindEl.textContent = kind;
       if (card.titleEl.textContent !== notice.summary) card.titleEl.textContent = notice.summary;
@@ -539,6 +537,61 @@ export class Notifications implements NotificationsSink {
          }
       } else {
          card.listEl.style.display = "none";
+      }
+   }
+
+   /* Build or reconcile the action row from the notice (only when its buttons actually changed). */
+   private paintActions(card: Card): void {
+      const actions = card.notice.actions ?? [];
+      const sig = JSON.stringify(actions.map((a) => [a.id, a.label, !!a.disabled, a.options?.map((o) => o.value), a.defaultValue]));
+      if (sig === card.actionsSig) return;
+      card.actionsSig = sig;
+      card.root.classList.toggle("notice-has-actions", actions.length > 0);
+      /* A card that lost all its buttons must still be closable (and one that gained them drops
+         its plain x): the close button follows the action set. */
+      const close = card.root.querySelector<HTMLElement>(".notice-close");
+      if (close) close.hidden = actions.length > 0 || !!card.notice.sticky;
+      /* Keep keyboard focus across the rebuild (e.g. on Answer when it becomes "Answering…"). */
+      const focusedAction = (document.activeElement as HTMLElement | null)?.closest?.(".notice-action") as HTMLElement | null;
+      const hadFocus = !!focusedAction && card.root.contains(focusedAction);
+      const focusedId = hadFocus ? focusedAction!.dataset.action : undefined;
+      if (!card.actionsEl) {
+         if (!actions.length) return;
+         card.actionsEl = document.createElement("div");
+         card.actionsEl.className = "notice-actions";
+         card.root.append(card.actionsEl);
+         card.root.classList.add("notice-has-actions");
+      }
+      const groups = actions.map((a) => {
+         /* Each action is a group: an optional value dropdown (e.g. snooze minutes) plus the
+            button. The delegated click handler reads the group's select on fire. */
+         const grp = document.createElement("span");
+         grp.className = "notice-action-group";
+         if (a.options?.length) {
+            const sel = document.createElement("select");
+            sel.className = "notice-action-select";
+            for (const o of a.options) {
+               const opt = document.createElement("option");
+               opt.value = o.value;
+               opt.textContent = o.label;
+               if (o.value === a.defaultValue) opt.selected = true;
+               sel.append(opt);
+            }
+            grp.append(sel);
+         }
+         const btn = document.createElement("button");
+         btn.type = "button";
+         btn.className = "notice-action";
+         btn.dataset.action = a.id;
+         btn.textContent = a.label;
+         btn.disabled = !!a.disabled;
+         grp.append(btn);
+         return grp;
+      });
+      card.actionsEl.replaceChildren(...groups);
+      if (hadFocus) {
+         const btns = Array.from(card.actionsEl.querySelectorAll<HTMLButtonElement>(".notice-action"));
+         (btns.find((b) => b.dataset.action === focusedId && !b.disabled) ?? btns.find((b) => !b.disabled) ?? card.root).focus?.();
       }
    }
 

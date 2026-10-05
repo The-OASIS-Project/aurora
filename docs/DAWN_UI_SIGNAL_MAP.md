@@ -167,7 +167,7 @@ chunks (`0x20`) are a separate concern you can ignore for a display-only panel.
 
 | Frame | Payload | Fires when |
 |-------|---------|------------|
-| `phone_call_notification` | (call state: number, direction, status) | An inbound/outbound call changes state. Good for a transient "incoming call" spike. |
+| `phone_call_notification` | `status` (ringing \| active \| ended), `name`, `number`, `call_id`, `elapsed_sec`, `photo?{data,mime}` | A call changes state (owner's browsers only; an outbound call's first frame is `active`). **Consumed (WebUI parity, 2026-10-05, `src/ingest/phone-wire.ts`):** ringing = a critical/urgent notice card with Answer / Reject + a local ring tone (the "Alarm sounds" toggle); active = a sticky in-call card (live duration from `elapsed_sec`, Hang Up, Minimize); ended clears it. Controls: `phone_action {action: answer\|reject\|hangup}` (no reply; the next frame is the result). `phone_status` after every (re)connect (DAWN replies only while a call is live; it does NOT push it on connect despite the protocol doc). Call audio stays on the daemon's modem/speaker; the admin call-audio tuning stays in the WebUI. |
 
 ### 3.7 Session / lifecycle
 

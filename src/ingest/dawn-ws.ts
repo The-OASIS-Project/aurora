@@ -66,6 +66,7 @@ import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
 import type { EmailSource } from "./email.ts";
+import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
 import {
@@ -899,6 +900,8 @@ export class DawnIngest implements Ingest {
    /* Client-side chime/loop for scheduled events (the daemon tone is daemon-local). Initial
       enabled state from the persisted "Alarm sounds" preference; the System-menu toggle flips it. */
    private readonly alarmChime = new AlarmChime(localStorage.getItem(ALARM_SOUNDS_KEY) !== "false");
+   /* Phone calls (WebUI parity): the call card + ring tone; see phone-wire.ts. */
+   private readonly phone = new PhoneCalls((m) => this.send(m), () => this.sinks.notifications, this.alarmChime);
    private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
@@ -1477,6 +1480,7 @@ export class DawnIngest implements Ingest {
             would otherwise beep forever. The persistent card carries the state across. */
          this.alarmChime.stopLoop();
          this.ringingAlarms.clear();
+         this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -1790,6 +1794,8 @@ export class DawnIngest implements Ingest {
             this.capsSynced = true;
             /* Connection confirmed live: (re)start the liveness heartbeat. */
             this.startHeartbeat();
+            /* Is a phone call live? (DAWN replies only while one is; it doesn't push it on connect.) */
+            this.phone.requestStatus();
             /* Re-announce "connected" now that a send can actually go out (isLinkLive): listeners
                that gate on it (the composer's send control) re-sync past the open->session gap. */
             if (this.lastStatus === "connected") this.emit("connected");
@@ -2598,6 +2604,10 @@ export class DawnIngest implements Ingest {
             }
             break;
          }
+
+         case "phone_call_notification":
+            this.phone.onFrame(p as Record<string, unknown>);
+            break;
 
          case "state":
             this.applyState(String(p.state ?? "idle"), typeof p.detail === "string" ? p.detail : undefined, p.tools);
@@ -4841,6 +4851,10 @@ export class DawnIngest implements Ingest {
          if (action === "retry" && retryId > 0) this.forgetConversationMemories(retryId);
          return;
       }
+      if (id === PHONE_NOTICE_ID) {
+         this.phone.action(action); // Answer / Reject / Hang Up / Minimize / Expand
+         return;
+      }
       if (!id.startsWith("scheduler-")) return;
       if (action !== "snooze" && action !== "dismiss") return;
       const eventId = Number(id.slice("scheduler-".length));
@@ -4860,7 +4874,7 @@ export class DawnIngest implements Ingest {
       server-timed-out / auto-dismissed alarm (whose card lingers) correctly reads as not
       ringing, unlike the notice's `critical` flag. */
    isAlarmRinging(): boolean {
-      return this.ringingAlarms.size > 0;
+      return this.ringingAlarms.size > 0 || this.phone.isRinging(); // a ringing phone keeps the display awake too
    }
 
    /* Register a callback fired at a wake-word match (the always-on VAD entering "recording"),
@@ -4876,6 +4890,7 @@ export class DawnIngest implements Ingest {
    }
    setAlarmSounds(on: boolean): void {
       this.alarmChime.setEnabled(on);
+      if (on) this.phone.resumeRing(); // a call ringing right now starts ringing here too
       localStorage.setItem(ALARM_SOUNDS_KEY, on ? "true" : "false");
    }
 
@@ -4930,6 +4945,7 @@ export class DawnIngest implements Ingest {
       this.closeMusicStream();
       this.alarmChime.stopLoop();
       this.ringingAlarms.clear();
+      this.phone.reset();
       this.tts?.stop();
       window.clearTimeout(this.micMuteCooldown);
       this.micMuteCooldown = 0;
@@ -4998,6 +5014,7 @@ export class DawnIngest implements Ingest {
       this.music.dispose();
       this.mic.dispose();
       this.ding.dispose();
+      this.phone.dispose();
       this.alarmChime.dispose();
    }
 

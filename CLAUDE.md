@@ -70,7 +70,10 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     (`delete_memory_fact` / `_preference` / `_summary` / `_entity` - user-scoped, the user's own
     memory, from the Context panel), plus **`forget_conversation_memories`** (everything one
     conversation and its continuations taught memory: offered after `set_private` from DAWN's
-    `conversation_learned` count, or from the picker's per-row Forget).
+    `conversation_learned` count, or from the picker's per-row Forget), plus **phone calls**
+    (`phone_action` answer / reject / hangup on the user's own phone from the call card, and the
+    `phone_status` read on connect; DAWN allows only the modem owner; the call audio stays on the
+    daemon's hardware).
   - **Destructive writes are gated.** Any write that permanently destroys DAWN-side data -
     `delete_conversation` (cascade-deletes the conversation's images + child background jobs and
     refuses on a running job), `watch_remove`, `delete_memory_*`, `forget_conversation_memories` -
