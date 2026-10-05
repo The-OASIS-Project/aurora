@@ -66,6 +66,7 @@ import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
 import type { EmailSource } from "./email.ts";
+import { formatCacheState } from "../util/cache-state.ts";
 import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
@@ -2605,6 +2606,14 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "cache_alert": {
+            /* Admin-only: DAWN found a cache bug (e.g. reasoning dropped from the cached prefix).
+               Plain-language message; shown as text by the notify layer. */
+            const msg = typeof p.message === "string" && p.message ? p.message : "DAWN reported a prompt-cache problem.";
+            this.spikeNotice("cache-alert", "cache", msg, { tone: "attention", persist: true, hold: 9 });
+            break;
+         }
+
          case "phone_call_notification":
             this.phone.onFrame(p as Record<string, unknown>);
             break;
@@ -3321,8 +3330,12 @@ export class DawnIngest implements Ingest {
                } catch {
                   /* storage full/disabled - the rows still update in-memory */
                }
+               /* Why the cache did or didn't hit (DAWN 8ed2552d; absent on an older daemon -> "--"). */
+               const cs = formatCacheState((p as { cache_state?: unknown }).cache_state);
                this.sinks.telemetry.update({
                   cache: formatCacheTurn(cached, input, saved, local),
+                  cachestate: cs.text,
+                  cachestate_flag: cs.flag ? "1" : "",
                   cacheavg: formatCacheAvg(this.cacheSum)
                });
             }

@@ -78,7 +78,7 @@ The center visualization and the conversation console live on these.
 | Frame | Payload (key fields) | Fires when |
 |-------|----------------------|------------|
 | `state` | `state` ∈ idle \| listening \| thinking \| speaking \| summarizing \| error; `detail?`; `tools?[]` | The assistant changes what it is doing. **Directly drives the reactor state machine.** |
-| `metrics_update` | `state`, `ttft_ms`, `token_rate` (tokens/sec), `context_percent` | During generation, per session. **This is the throughput-gauge feed.** `context_percent` is often `-1` (not populated on that path). |
+| `metrics_update` | `state`, `ttft_ms`, `token_rate` (tokens/sec), `context_percent`; on the final `idle` frame also `input_tokens` / `cached_tokens` / `cache_saved_tokens` and (DAWN 8ed2552d) `cache_state` | During generation, per session. **This is the throughput-gauge feed.** `context_percent` is often `-1` (not populated on that path). `cache_state` (warm, warm_miss, first, ttl, model, tools, system, thinking, images, rewritten, shared, untracked; unknown = untracked) drives the HUD's CACHE STATE row; only `warm_miss` is flagged (gold). The admin-only `cache_alert {message}` becomes an attention notice. |
 | `context` | `current`, `max`, `usage` (%), `threshold` | Token budget changes. Feeds a context-fill gauge. |
 | `context_compacted` | `tokens_before`, `tokens_after`, `messages_summarized`, `summary` | Auto-compaction ran. |
 | `transcript` | `role` (user \| assistant \| satellite_response), `text`, `replay?` | A complete (non-streamed or replayed) message. |

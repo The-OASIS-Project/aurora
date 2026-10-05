@@ -56,6 +56,10 @@ export function mountHud(root: HTMLElement): HudController {
          const key = el.dataset.tel;
          if (key && values[key] !== undefined) el.textContent = values[key];
       });
+      /* The cache state's one problem value (a warm call that missed) is flagged, not just named. */
+      if (values.cachestate_flag !== undefined) {
+         root.querySelector(".tel-cachestate")?.classList.toggle("tel-flag", values.cachestate_flag === "1");
+      }
    };
 
    /* Cache the last values so a refresh shows them immediately instead of "--"

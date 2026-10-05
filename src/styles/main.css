@@ -347,6 +347,11 @@ body.engaged #docks {
 .tel-title .tel-val {
    color: var(--accent-glow);
 }
+/* A warm cache call that missed (the one cache state worth noticing): gold energy, not the
+   red that means "needs you". */
+.tel-cachestate.tel-flag .tel-val {
+   color: var(--warn);
+}
 .tel-sep {
    height: 1px;
    margin: 0.35rem 0 0.4rem;
