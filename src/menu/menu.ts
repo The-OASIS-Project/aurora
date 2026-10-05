@@ -579,11 +579,15 @@ function modelSelect(options: string[], current: string, onSelect: (value: strin
    };
 
    btn.addEventListener("click", () => (open ? close() : openList()));
-   /* mousedown (not click) so it fires before the open-only outside-close listener. */
+   /* mousedown (not click) so it fires before the open-only outside-close listener. It stops
+      here: choosing rebuilds the whole panel during this very event, detaching the clicked option,
+      and the menubar's document-level "mousedown outside?" check would then read the detached
+      target as outside and close the MODEL panel. */
    list.addEventListener("mousedown", (e) => {
       const li = (e.target as HTMLElement).closest<HTMLElement>(".model-dd-opt");
       if (li && li.dataset.index) {
          e.preventDefault();
+         e.stopPropagation();
          choose(Number(li.dataset.index));
       }
    });
