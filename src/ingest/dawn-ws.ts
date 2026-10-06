@@ -1018,6 +1018,10 @@ export class DawnIngest implements Ingest {
    private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
    /* Cumulative cache token sums for the CACHE AVG row, restored across a refresh. Corrupt or
       absent storage starts fresh at zero. */
+   /* A turn's stream ended and its cache figures haven't been added to the session sums yet: DAWN
+      repeats the last call's figures on every metrics_update (several idle frames can carry the
+      same call), so CACHE AVG adds each turn ONCE, on the first idle frame after its stream_end. */
+   private cacheTurnPending = false;
    private cacheSum = ((): { cached: number; input: number; saved: number } => {
       try {
          const v = localStorage.getItem(CACHE_SUM_KEY);
@@ -3320,15 +3324,20 @@ export class DawnIngest implements Ingest {
                const input = Math.max(0, Number(p.input_tokens) || 0);
                const saved = Number(p.cache_saved_tokens ?? 0) || 0; // may be negative
                const local = this.llm.mode === "local"; // local models report no billing savings
-               this.cacheSum = {
-                  cached: this.cacheSum.cached + cached,
-                  input: this.cacheSum.input + input,
-                  saved: this.cacheSum.saved + saved
-               };
-               try {
-                  localStorage.setItem(CACHE_SUM_KEY, JSON.stringify(this.cacheSum));
-               } catch {
-                  /* storage full/disabled - the rows still update in-memory */
+               /* Sum each turn once (the first idle after its stream_end); later idle frames repeat
+                  the same call's figures, and only refresh the per-turn rows. */
+               if (this.cacheTurnPending) {
+                  this.cacheTurnPending = false;
+                  this.cacheSum = {
+                     cached: this.cacheSum.cached + cached,
+                     input: this.cacheSum.input + input,
+                     saved: this.cacheSum.saved + saved
+                  };
+                  try {
+                     localStorage.setItem(CACHE_SUM_KEY, JSON.stringify(this.cacheSum));
+                  } catch {
+                     /* storage full/disabled - the rows still update in-memory */
+                  }
                }
                /* Why the cache did or didn't hit (DAWN 8ed2552d; absent on an older daemon -> "--"). */
                const cs = formatCacheState((p as { cache_state?: unknown }).cache_state);
@@ -3390,6 +3399,7 @@ export class DawnIngest implements Ingest {
                stream_start/end per iteration); only a TERMINAL end carries the final answer. */
             const reason = typeof p.reason === "string" ? p.reason : "";
             if (reason !== "tool_iteration") {
+               this.cacheTurnPending = true; // the next idle metrics_update carries this turn's cache figures
                /* DAWN is the sole writer of the turn (server-authoritative persistence): the
                   client no longer saves the reply. Register the finalized bubble under
                   (conv, streamId) so the fanned message_appended adopts onto it instead of
