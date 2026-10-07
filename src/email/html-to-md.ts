@@ -15,6 +15,8 @@
  *   - Depth is capped, so pathological nesting can't blow the stack.
  */
 
+import { designWidth } from "./fit-images.ts";
+
 /* Subtrees dropped entirely (with their text). */
 const DROP = new Set([
    "script", "style", "head", "title", "noscript", "template", "svg", "math", "iframe", "frame",
@@ -198,9 +200,45 @@ function wrapInline(node: Node, ctx: Ctx, depth: number, mark: string): string {
    return text ? `${lead}${mark}${text}${mark}${trail}` : lead || trail;
 }
 
+/* An image, or a linked image, in the markdown this walker emits (alt/label text is escaped, so
+   `\]` can appear in it; destinations never hold a space or ")"). */
+const MEDIA = String.raw`(?:\[!\[(?:\\.|[^\]\\])*\]\([^)\s]*\)\]\([^)\s]*\)|!\[(?:\\.|[^\]\\])*\]\([^)\s]*\))`;
+const MEDIA_ONLY = new RegExp(`^${MEDIA}(?:(?:\\s|\\\\(?=\\n))+${MEDIA})*$`);
+
+/* Markdown that is nothing but images / linked images (a row of social icons), or null. Returned
+   on one line, so they sit side by side as the sender laid them out. */
+export function mediaLine(md: string): string | null {
+   const t = md.trim();
+   if (!t || !MEDIA_ONLY.test(t)) return null;
+   return t.replace(/\\\n/g, " ").replace(/\s+/g, " ");
+}
+
+/* A node's children. Consecutive blocks that are only images (icons each in their own little
+   table or div, a common newsletter pattern) are joined on one line instead of stacking; images
+   already inline in running text are left as they are. */
 function children(node: Node, ctx: Ctx, depth: number): string {
    let out = "";
-   for (const c of Array.from(node.childNodes)) out += walk(c, ctx, depth + 1);
+   let run: Array<{ raw: string; line: string }> = [];
+   let gap = ""; // whitespace between run members, kept if the run turns out to be a single item
+   const flush = (): void => {
+      if (run.length > 1 && run.some((r) => r.raw.includes("\n"))) out += `\n\n${run.map((r) => r.line).join(" ")}\n\n`;
+      else out += run.map((r) => r.raw).join(gap);
+      run = [];
+      gap = "";
+   };
+   for (const c of Array.from(node.childNodes)) {
+      const part = walk(c, ctx, depth + 1);
+      const line = mediaLine(part);
+      if (line !== null) {
+         run.push({ raw: part, line });
+      } else if (run.length && part.trim() === "") {
+         gap += part;
+      } else {
+         flush();
+         out += part;
+      }
+   }
+   flush();
    return out;
 }
 
@@ -337,11 +375,16 @@ function row(el: Element, ctx: Ctx, depth: number): string {
       const ct = c.tagName.toLowerCase();
       if ((ct !== "td" && ct !== "th") || isHidden(c)) continue;
       let md = normalize(children(c, ctx, depth + 1), ctx, false);
+      md = mediaLine(md) ?? md; // a cell of icons (even from a nested table) stays on one line
       if (ct === "th" && md && !md.includes("\n") && !BLOCK_START.test(md)) md = `**${md}**`;
       if (md) cells.push(md);
    }
    if (cells.length === 0) return "";
-   const inline = cells.every((c) => !c.includes("\n") && !BLOCK_START.test(c)) && cells.join("").length < 200;
+   /* A row of image cells (social icons) sits side by side, plainly spaced. */
+   if (cells.every((c) => mediaLine(c) !== null)) return `\n\n${cells.join(" ")}\n\n`;
+   /* "Short" is the visible text: link and image destinations (long tracking URLs) don't count. */
+   const visible = cells.join("").replace(/\]\([^)\s]*\)/g, "]").length;
+   const inline = cells.every((c) => !c.includes("\n") && !BLOCK_START.test(c)) && visible < 200;
    return `\n\n${inline ? cells.join(" · ") : cells.join("\n\n")}\n\n`;
 }
 
@@ -374,6 +417,8 @@ export interface MdResult {
    markdown: string;
    /* Remote images the user could show (https; tracking pixels excluded): the "N blocked" count. */
    images: number;
+   /* The width the email was designed at (fit-images.ts), 0 when it doesn't say. */
+   designWidth: number;
 }
 
 /* Convert one email's HTML to escaped markdown. Pure: reads an inert parsed document only. */
@@ -382,5 +427,5 @@ export function htmlToMarkdown(html: string): MdResult {
    const ctx: Ctx = { pre: [], images: 0 };
    const root = doc.body ?? doc.documentElement;
    const md = normalize(root ? walk(root, ctx, 0) : "", ctx, true);
-   return { markdown: md, images: ctx.images };
+   return { markdown: md, images: ctx.images, designWidth: designWidth(doc) };
 }

@@ -43,6 +43,7 @@ import { makeMovableHandle, raiseMovable, type MovableHandle } from "../render/m
 import { makeResizable } from "../render/resizable.ts";
 import { makeVisibility } from "../render/visibility.ts";
 import { renderEmailBody } from "./render-body.ts";
+import { fitImages, fitRatio } from "./fit-images.ts";
 
 export interface EmailPanelOptions {
    source: EmailSource;
@@ -388,7 +389,24 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let readSeq = 0;
    let advanceAfterPage = false; // Next pressed at the end of the loaded rows: open the next once it loads
    let readerSig = "";
-   let bodyCache: { key: string; showImages: boolean; node: DocumentFragment; images: number } | null = null;
+   let bodyCache: { key: string; showImages: boolean; node: DocumentFragment; images: number; designWidth: number } | null = null;
+   /* The open message's body + its design width: its images are re-fitted when the reader resizes. */
+   let fitTarget: { el: HTMLElement; design: number; width: number } | null = null;
+   const refit = (): void => {
+      if (!fitTarget) return;
+      const cs = getComputedStyle(fitTarget.el);
+      const width = fitTarget.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (width === fitTarget.width) return; // only the height moved (e.g. images loading)
+      fitTarget.width = width;
+      fitImages(fitTarget.el, fitRatio(width, fitTarget.design));
+   };
+   /* Watches the reader's scroll area, whose size comes from the panel layout, never the body the
+      fitting resizes (watching that would re-trigger itself every frame). */
+   const bodyRo = new ResizeObserver(() => refit());
+   const unfit = (): void => {
+      bodyRo.disconnect();
+      fitTarget = null;
+   };
    const notifyState = new Map<number, { count: number; last: EmailRow; timer: number }>();
 
    /* --- accounts ----------------------------------------------------------- */
@@ -854,12 +872,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const addrList = (list: Array<{ name: string; addr: string }>): string => list.map((a) => (a.name ? `${a.name} <${a.addr}>` : a.addr)).join(", ");
 
    /* The rendered body for the open message, once per (message, images shown). */
-   const bodyFor = (r: Reader, m: EmailMessage): { node: Node; images: number } => {
+   const bodyFor = (r: Reader, m: EmailMessage): { node: Node; images: number; designWidth: number } => {
       if (!bodyCache || bodyCache.key !== r.key || bodyCache.showImages !== r.showImages) {
          const rendered = renderEmailBody({ html: m.bodyHtml, text: m.bodyText }, r.showImages);
-         bodyCache = { key: r.key, showImages: r.showImages, node: rendered.fragment, images: rendered.images };
+         bodyCache = { key: r.key, showImages: r.showImages, node: rendered.fragment, images: rendered.images, designWidth: rendered.designWidth };
       }
-      return { node: bodyCache.node.cloneNode(true), images: bodyCache.images };
+      return { node: bodyCache.node.cloneNode(true), images: bodyCache.images, designWidth: bodyCache.designWidth };
    };
 
    /* The open message's neighbors in the list order (null at an end; Next past the loaded rows
@@ -895,6 +913,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       readerSig = sig;
       const hadFocus = readerCol.contains(document.activeElement);
       readerCol.replaceChildren();
+      unfit(); // the old body is gone (a new one re-arms below)
       if (!reader) {
          if (split) readerCol.appendChild(div("mail-reader-empty", "Select a message"));
          return;
@@ -1045,6 +1064,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const bodyEl = div("mail-reader-body");
          bodyEl.appendChild(rendered.node);
          scroll.appendChild(bodyEl);
+         /* Keep the images in proportion to each other at this reader width (and on resize). */
+         if (rendered.designWidth && bodyEl.querySelector("img")) {
+            fitTarget = { el: bodyEl, design: rendered.designWidth, width: -1 };
+            bodyRo.observe(scroll, { box: "border-box" }); // a scrollbar coming or going is not a resize
+         }
          if (m.textTruncated || m.htmlTruncated) scroll.appendChild(div("mail-reader-trunc", "Shortened · the rest of this message wasn't loaded"));
          if (m.attachments.length) {
             const att = div("mail-attachments");
@@ -1860,6 +1884,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          notifyState.clear();
          io.disconnect();
          layoutRo.disconnect();
+         unfit();
          document.removeEventListener("visibilitychange", onVisChange);
          document.removeEventListener("pointerdown", onDocPointer);
          window.removeEventListener("pointermove", onPointerMove);

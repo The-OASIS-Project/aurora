@@ -32,7 +32,7 @@ listing do not exist even in the tool.
 |---|---|
 | **P1: Read + triage** | Merged list across chosen accounts, infinite scroll, Unread filter, search, reader, open marks read, Mark unread, archive, trash (with undo), send to chat (new private chat / current chat), unread counts on the collapsed bar, live updates while visible, opt-in new-mail notifications, collapse + resize, HTML bodies as markdown (section 6), attachment LIST (names/sizes, no download). |
 | **P2: Write** | Reply, Reply all, Forward, Compose (To/CC/BCC, multiple recipients, threading headers, a real body cap), server-held send with undo, Server-side drafts optional. |
-| **P3: Depth** | Attachment download + **"Add to Library"** (save a supported attachment into the user's DAWN document library so the assistant can use it) + inline `cid:` images, thread view, folders/labels picker, star/flag, "View original" for layout-heavy HTML. |
+| **P3: Depth** | Attachment download + **"Add to Library"** (save a supported attachment into the user's DAWN document library so the assistant can use it) + inline `cid:` images, thread view, folders/labels picker, star/flag. ("View original" moved forward: 6.4.) |
 | **Future (parked)** | AI one-line summaries per row (section 11), full keyboard shortcuts, per-sender "always show images", archive-vs-delete preference, user-chosen account colors/letters, a reloaded email chip that opens the message in the Mail panel. |
 
 ## 3. Panel UX
@@ -308,10 +308,13 @@ covers instead).
   is `https:`; a blocked image becomes an alt-text placeholder (dashed 1 px `--text` 20% box,
   aspect from width/height capped at 120 px tall; no dimensions -> an inline chip).
 - Shown images get `referrerpolicy="no-referrer"` (set in the hook; DOMPurify would strip it).
+- Images keep the sender's intended width/height (carried through markdown as a `#aurora-size=WxH`
+  URL fragment the hook reads back), and in a reader narrower than the email's design width every
+  image scales by the same factor (`src/email/fit-images.ts`), so they stay in proportion.
 - Tracking pixels stay dropped after "Show images".
 - Inline `cid:` images come in P3, mapped (before sanitize) only from `attachments[].content_id`
   values DAWN returned for that message, to the owner-checked part route (9.10).
-- A DAWN image proxy (hides the IP, still signals the open) is parked.
+- Fetching shown images through DAWN (and optionally an outside proxy) is specified in 9.13.
 
 ### 6.3 Links
 
@@ -320,16 +323,60 @@ visible text is a URL whose host differs from the target, the real host is appen
 `--text-faint` mono, e.g. "(-> evil.example)". Neutral styling: marketing redirects mismatch
 constantly, and an alarm color would cry wolf.
 
-### 6.4 View original (P3)
+### 6.4 View original: the real layout, zoomed to fit (drafted 2026-10-07, for review; pulled forward from P3)
 
-`<iframe sandbox="" referrerpolicy="no-referrer" srcdoc=...>` (empty sandbox: never
-allow-scripts / allow-same-origin / allow-forms / allow-top-navigation). The srcdoc is built by
-DOMParser -> DOMPurify (`WHOLE_DOCUMENT`, stripping script/meta/base/link/form/iframe/object/embed
-and event attributes) -> serialize, with a meta CSP as the first head child:
-`default-src 'none'; style-src 'unsafe-inline'; img-src data:` (+ `https:` only after Show images)
-`; font-src 'none'; form-action 'none'; base-uri 'none'`. Links rewritten to `target=_blank
-rel="noopener noreferrer"` with only `allow-popups allow-popups-to-escape-sandbox` added. No
-bridge script, no postMessage handler.
+**Why.** The reader turns mail into markdown: calm and safe, but a newsletter's layout (columns,
+buttons, image grids) is gone. Images already keep the sender's sizes and stay in proportion at the
+reader's width (6.2), so most mail reads well. "View original" is for the mail whose layout carries
+the meaning, shown the way a phone mail app shows it: the sender's layout, scaled down to the panel.
+
+**UX.**
+- A two-state control in the reader bar: **Reading** (default) / **Original**. Per message, not
+  remembered across messages (a per-sender preference can come with the parked per-sender options).
+- Original shows on a light "paper" surface inside the panel (mail is designed on white), filling the
+  reader area and scrolling inside it. The Show images bar works the same in both views; the choice is
+  shared, so showing images in one shows them in the other.
+- Switching message, closing the reader, or going back to Reading destroys the frame.
+
+**Rendering (the security design).**
+1. **Sanitize, keeping layout.** DOMParser (inert) -> a SEPARATE DOMPurify instance with
+   `WHOLE_DOCUMENT` that keeps tables, inline `style`, and `<style>` blocks, and strips `script`,
+   `meta` (incl. refresh), `base`, `link`, `form` and its controls, `iframe`, `frame`, `object`,
+   `embed`, `svg`, `math`, every event attribute, `srcset`, and any URL attribute except `a[href]` and
+   `img[src]`. The same choke-point hook as the reader: links pass `safeUrl` and get `target=_blank
+   rel="noopener noreferrer"` plus the hostname title; an image keeps its `src` only when images are
+   shown AND the URL is https (or, with 9.13, is replaced by its token URL). `cid:` stays blocked
+   until P3. Serialize, then put our CSP as the first child of `<head>`.
+2. **CSP:** `default-src 'none'; style-src 'unsafe-inline'; img-src data:` (+ `https:` once shown,
+   or only DAWN's origin with 9.13) `; font-src 'none'; media-src 'none'; form-action 'none';
+   base-uri 'none'; frame-src 'none'`. This also stops CSS-based fetches (`@import`, `url()` fonts)
+   and keeps CSS `background` images behind Show images.
+3. **Frame:** `<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy=
+   "no-referrer" srcdoc=...>`, so no scripts, no same-origin, no forms, no top navigation, no
+   bridge script or postMessage handler. The parent never reads the frame's DOM (no
+   `allow-same-origin`, ever), so a future slip can't combine it with scripts.
+4. **Zoom without reading the frame.** The parent already knows the design width (fit-images.ts
+   `designWidth`, from its own inert parse). The iframe element is laid out at that width with
+   `transform: scale(readerWidth / designWidth)` (never above 1) and `transform-origin: top left`,
+   and its height set to `readerHeight / scale`, so it fills the reader area and scrolls inside.
+   A resize only changes the transform (no reload). Unknown design width: no scaling, width 100%.
+
+**What it does NOT do:** run anything the sender wrote; load fonts or remote CSS; load any image
+before Show images; let the sender see Aurora's origin (no referrer, opaque frame origin).
+
+**Known gaps and open questions.**
+- With 9.13 tokens, CSS `background:url()` images aren't tokenized, so they stay blocked by the CSP
+  (missing backgrounds) unless DAWN also tokenizes CSS URLs. Acceptable for v1?
+- 9.13's token route must authorize from the token alone: a request from the opaque-origin frame is
+  cross-site, so a `SameSite` login cookie won't ride it.
+- Light paper in a dark HUD is bright; optionally dim it slightly (a brightness filter on the frame).
+- Dark-mode-aware mail (`prefers-color-scheme` in its CSS) will follow the system setting.
+
+**Phasing.** 2a: the toggle, sanitizer, CSP, frame and zoom, with direct https images (today's Show
+images). 2b: switch the frame's images to 9.13's tokens when DAWN ships it.
+
+**Review before code:** a security review of the second sanitizer + frame (this is a new rendering
+path), and a UI review of the toggle and the paper surface.
 
 ### 6.5 Tests
 
@@ -719,7 +766,63 @@ push email_sent { send_id, message_id }   |   push email_send_failed { send_id, 
 | **P1.3** | snapshot + poller, `email_subscribe`, external `email_changed`, `email_changes` | a phone-side archive disappears from Aurora within a poll |
 | **P1.4** | `email_refs`, kinded snapshot row, shared wrapper (also on the tool), flag `email_refs` | discuss-privately end to end; extraction verified to skip the email |
 
-P1.3 and P1.4 are independent and can land in either order.
+P1.3 and P1.4 are independent and can land in either order. 9.13 (image fetching) comes after them.
+
+### 9.13 Image fetching: through DAWN, or an outside proxy (drafted 2026-10-07, not yet sent)
+
+**Why.** Today "Show images" makes the browser load each image straight from the sender: no referrer
+or cookies for the sender's host, but the sender sees the reader's IP and user agent and logs the open.
+Gmail's proxy does not help: DAWN reads mail over IMAP, so the bodies carry the senders' own image
+URLs. DAWN usually sits on the same home network as the browser, so DAWN fetching an image does NOT
+hide the home IP; only a proxy outside that network does. No proxy stops the open event (whoever
+fetches a tracking pixel triggers it); only not fetching known trackers does (Aurora's job, below).
+
+**Three modes, chosen by the operator** (DAWN config, so set in DAWN's WebUI, never from Aurora):
+
+| Mode | Who fetches | Hides the IP | Third party sees reading |
+|---|---|---|---|
+| `direct` | the browser, from the sender (today's behaviour) | no | no |
+| `dawn` (proposed default) | DAWN | no (same home address) | no |
+| `proxy` | DAWN, through a configured upstream (a self-hosted imgproxy / camo, or a service the operator chooses to trust) | yes | the upstream |
+
+In `dawn` and `proxy` the browser only ever loads same-origin, so senders never see the browser at all.
+
+**What DAWN adds:**
+
+1. **No open fetcher.** DAWN must never fetch an arbitrary URL a client names (an SSRF into the LAN).
+   `email_read` returns, per message, the https image URLs found in its HTML with a short-lived
+   opaque token each: `images: [{ url, token }]`. The token binds user + account + message + URL
+   (HMAC with a server key, expiring with the read, e.g. 1 hour). `GET /api/email/image/<token>`
+   serves only a URL that token names. Owner-checked like the other email routes; `?app=` tagged.
+2. **Fetch rules** for both modes: https only; resolve the host and refuse loopback, private,
+   link-local, CGNAT and multicast addresses, re-checked on each redirect and pinned to the resolved
+   address (no DNS rebinding); at most 3 redirects; connect and total timeouts; a size cap
+   (e.g. 5 MB); no cookies, no referrer, a fixed generic user agent; serve only png / jpeg / gif /
+   webp after sniffing the bytes (never SVG, never the sender's content type alone), with
+   `Content-Type` from the sniff, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`,
+   and a restrictive CSP on the response.
+3. **Cache** by URL with a TTL (repeat opens don't refetch, so the sender can't count reopens), bounded
+   in size, wiped with the user's other email state. Tracking URLs are unique per recipient, so a
+   shared cache leaks nothing across users.
+4. **`proxy` mode:** a URL template plus an optional signing key in `secrets.toml` (imgproxy and camo
+   both sign URLs with an HMAC so the proxy can't be used as an open relay). DAWN fetches the
+   upstream's URL with the same rules (the upstream is the only host it contacts).
+5. **Advertise it:** flag `email_image_fetch` (signal-map 9.15). The `images[]` list is present only
+   in `dawn` / `proxy` mode; in `direct` mode (or an older DAWN) Aurora keeps loading from the sender
+   as today.
+6. Optional, later: re-encode fetched images (strips metadata and odd payloads) at a CPU cost.
+
+**What Aurora does:**
+
+- "Show images" stays off by default, per message.
+- With `images[]`, the sanitize hook maps each image's URL to its same-origin token route (through
+  `dawnUrl()`), the only same-origin image it allows; an image with no token stays blocked. The
+  sender's intended size (6.2) carries through unchanged.
+- Tracking pixels stay dropped before any fetch (1x1 / hidden today); a known-tracker host list is a
+  later option. This, not the proxy, is what cuts open tracking.
+
+**Open questions:** the default mode for a fresh install (recommended `dawn`); whether a per-user
+"always show images from this sender" belongs here or with the parked per-sender option (2).
 
 ## 10. Security and privacy summary
 

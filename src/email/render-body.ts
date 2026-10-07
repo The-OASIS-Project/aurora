@@ -137,12 +137,14 @@ export interface RenderedBody {
    fragment: DocumentFragment;
    /* Real remote images in an HTML body (0 for text): drives the "Show images" bar. */
    images: number;
+   /* The width the email was designed at, for keeping its images in proportion (0 = unknown). */
+   designWidth: number;
 }
 
 /* Render one message body. `showImages` = the user pressed Show images for this message. */
 export function renderEmailBody(body: { html?: string; text: string }, showImages: boolean): RenderedBody {
    if (body.html && body.html.trim()) {
-      const { markdown, images } = htmlToMarkdown(body.html);
+      const { markdown, images, designWidth } = htmlToMarkdown(body.html);
       const html = md.parse(markdown, { async: false });
       showImagesNow = showImages;
       let clean: string;
@@ -157,7 +159,7 @@ export function renderEmailBody(body: { html?: string; text: string }, showImage
       tpl.innerHTML = clean;
       const frag = tpl.content;
       placeholders(frag);
-      return { fragment: frag, images };
+      return { fragment: frag, images, designWidth };
    }
-   return { fragment: renderText(body.text), images: 0 };
+   return { fragment: renderText(body.text), images: 0, designWidth: 0 };
 }

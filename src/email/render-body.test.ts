@@ -176,6 +176,26 @@ describe("renderEmailBody", () => {
       expect(shown.querySelectorAll(".mail-img-blocked").length).toBe(1);
    });
 
+   it("keeps a row of social icons side by side", () => {
+      const icon = (n: string): string =>
+         `<a href="https://track.example.com/click?u=${"x".repeat(80)}&n=${n}"><img src="https://cdn.example.com/${n}.png" width="24" height="24" alt="${n}"></a>`;
+      const sameLine = (html: string): void => {
+         const root = render(html, true);
+         const ps = Array.from(root.querySelectorAll("p")).filter((p) => p.querySelector("img"));
+         expect(ps.length).toBe(1); // one paragraph holds them all
+         expect(ps[0].querySelectorAll("img").length).toBe(4);
+      };
+      /* One row of cells, with long tracking links. */
+      sameLine(`<table><tr>${["fb", "ig", "x", "yt"].map((n) => `<td>${icon(n)}</td>`).join("")}</tr></table>`);
+      /* Each icon in its own little table (a common newsletter builder pattern). */
+      sameLine(`<div>${["fb", "ig", "x", "yt"].map((n) => `<table align="left"><tr><td>${icon(n)}</td></tr></table>`).join("\n")}</div>`);
+      /* Images inside running text stay inline, and text around them isn't split. */
+      const p = render(`<p>Hello ${icon("a")}${icon("b")} world</p>`, true).querySelector("p")!;
+      expect(p.textContent).toContain("Hello");
+      expect(p.textContent).toContain("world");
+      expect(p.querySelectorAll("img").length).toBe(2);
+   });
+
    it("keeps each image's intended size, and loads it without the size fragment", () => {
       const html =
          '<img src="https://a.example.com/icon.png" width="24" height="24" alt="Nav">' +
