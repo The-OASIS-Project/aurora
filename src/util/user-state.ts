@@ -22,7 +22,8 @@ const USER_KEYS = [
    "dawn.hero.rateEma", // dawn-ws RATE_EMA_KEY: token-rate average
    "dawn.hero.cacheSums", // dawn-ws CACHE_SUM_KEY: prompt-cache totals
    "dawn.hero.sessionKeepalive", // dawn-ws KEEPALIVE_KEY: this user's "Always on" consent
-   "dawn.hero.mailPrefs" // email-panel MAIL_PREFS_KEY: account filter + per-account notify (account ids)
+   "dawn.hero.mailPrefs", // email-panel MAIL_PREFS_KEY: account filter + per-account notify (account ids)
+   "dawn.hero.prefs" // ingest/prefs PREFS_KEY: settings that follow the person (trusted senders, reading)
 ];
 
 function tryStorage(fn: () => void): void {

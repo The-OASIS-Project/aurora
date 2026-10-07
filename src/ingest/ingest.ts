@@ -13,6 +13,7 @@
  * knows whether the data is real.
  */
 
+import type { UserPrefs } from "./prefs.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 
@@ -870,6 +871,11 @@ export interface Ingest {
    updateDocText(id: number, text: string): Promise<string | null>;
    /* Stop the live session (disconnect); in-session, audio contexts are kept for reuse. */
    stop(): void;
+   /* The user's settings that follow the person (8.7): DAWN-backed where DAWN keeps them, else this
+      browser. One instance for the page; disposed with the ingest. */
+   userPrefs(): UserPrefs;
+   /* The Mail panel's new-mail chime (gated by the "Alarm sounds" preference; silent without audio). */
+   playMailChime(): void;
    /* Final teardown (HMR/unmount): stop AND release the audio graphs. Distinct from stop()
       so an in-session reconnect can reuse the AudioContexts instead of stacking new ones. */
    dispose(): void;

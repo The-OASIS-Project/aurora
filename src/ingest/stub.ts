@@ -11,6 +11,7 @@
  * ambient panel events, reactor state, telemetry, and canned replies.
  */
 
+import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
 import type { Ingest, IngestSinks, LibraryItem, OutImage, StockPosition, StockPortfolio, StockStatus, StockWatchlist, StockWatchSymbol, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
@@ -469,9 +470,18 @@ export class StubIngest implements Ingest {
       this.timeouts = [];
    }
 
-   /* No audio graph in the stub, so teardown is just stop(). */
+   private readonly prefs = new LocalUserPrefs();
+   userPrefs(): UserPrefs {
+      return this.prefs;
+   }
+
+   /* No audio in the stub. */
+   playMailChime(): void {}
+
+   /* No audio graph in the stub, so teardown is just stop() (and the settings' listeners). */
    dispose(): void {
       this.stop();
+      this.prefs.dispose();
    }
 
    /* --- seed + synthetic activity ------------------------------------------ */

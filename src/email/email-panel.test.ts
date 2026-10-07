@@ -2,6 +2,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { assignMonograms, MAIL_STORAGE_KEYS, mountEmailPanel } from "./email-panel.ts";
 import { EmailSim } from "../ingest/email-sim.ts";
+import { LocalUserPrefs } from "../ingest/prefs.ts";
+import { AFTER_MOVE, ALWAYS_IMAGES, MARK_READ, TRUSTED_SENDERS } from "./mail-prefs.ts";
 
 beforeAll(() => {
    /* jsdom lacks these layout observers; the panel only needs them to exist. */
@@ -11,6 +13,7 @@ beforeAll(() => {
       disconnect(): void {}
    }
    Object.assign(globalThis, { IntersectionObserver: NoopObserver, ResizeObserver: NoopObserver });
+   Element.prototype.scrollIntoView ??= function () {};
    if (!window.matchMedia) {
       Object.assign(window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
    }
@@ -40,7 +43,7 @@ describe("assignMonograms", () => {
 
 async function mounted() {
    const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-   const panel = mountEmailPanel(document.body, { source: sim, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+   const panel = mountEmailPanel(document.body, { source: sim, prefs: new LocalUserPrefs(), onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
    panel.setVisible(true);
    await flush();
    return panel;
@@ -101,6 +104,7 @@ describe("Mail panel storage", () => {
       const notices: string[] = [];
       const panel = mountEmailPanel(document.body, {
          source: sim,
+         prefs: new LocalUserPrefs(),
          onDiscuss: () => {},
          notify: (n) => notices.push(n.id),
          removeNotice: () => {}
@@ -126,5 +130,116 @@ describe("Mail panel storage", () => {
          expect(v).not.toMatch(/@|subject|receipt/i); // prefs hold ids and flags, never addresses or text
       }
       for (const id of notices) expect(id).toMatch(/^mail-new:\d+$/);
+   });
+});
+
+describe("Mail options (3.9)", () => {
+   const mountWith = async (prefs: LocalUserPrefs) => {
+      const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
+      const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      panel.setVisible(true);
+      await flush();
+      return panel;
+   };
+   const rowBySubject = (text: string): HTMLElement =>
+      Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.textContent?.includes(text))!;
+   const bar = (): string => document.querySelector(".mail-images-bar")?.textContent ?? "";
+   const link = (label: string): HTMLButtonElement =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".mail-images-bar .mail-link")).find((b) => b.textContent?.startsWith(label))!;
+
+   it("trusts a sender from the images bar, shows their images, and Stop takes it back", async () => {
+      const prefs = new LocalUserPrefs();
+      const panel = await mountWith(prefs);
+      rowBySubject("calm UIs").click();
+      await flush();
+      expect(bar()).toContain("Always show from digest@news.example.net");
+      expect(document.querySelector(".mail-reader-body img[src]")).toBeNull();
+      link("Always show from").click();
+      await flush();
+      expect(bar()).toContain("Images from digest@news.example.net load automatically");
+      expect(document.querySelector(".mail-reader-body img[src]")).not.toBeNull();
+      expect(prefs.get(TRUSTED_SENDERS)).toEqual(["digest@news.example.net"]);
+      link("Stop").click();
+      await flush();
+      expect(bar()).toContain("blocked");
+      expect(document.querySelector(".mail-reader-body img[src]")).toBeNull();
+      expect(prefs.get(TRUSTED_SENDERS)).toEqual([]);
+      panel.destroy();
+      prefs.dispose();
+   });
+
+   it("marks read after 3 s on screen, or only when chosen", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+      try {
+         const prefs = new LocalUserPrefs();
+         prefs.set(MARK_READ, "delayed");
+         const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
+         const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+         panel.setVisible(true);
+         await vi.advanceTimersByTimeAsync(10);
+         const first = (): HTMLElement => document.querySelector<HTMLElement>(".mail-row.unread")!;
+         const key = first().dataset.key!;
+         first().click();
+         await vi.advanceTimersByTimeAsync(10);
+         const row = (): HTMLElement => document.querySelector<HTMLElement>(`.mail-row[data-key="${key}"]`)!;
+         expect(row().classList.contains("unread")).toBe(true);
+         expect(document.querySelector(".mail-r-mark")?.getAttribute("aria-label")).toBe("Mark read");
+         await vi.advanceTimersByTimeAsync(3100);
+         expect(row().classList.contains("unread")).toBe(false);
+
+         prefs.set(MARK_READ, "manual");
+         const next = document.querySelector<HTMLElement>(".mail-row.unread")!;
+         const nextKey = next.dataset.key!;
+         next.click();
+         await vi.advanceTimersByTimeAsync(5000);
+         const nextRow = (): HTMLElement => document.querySelector<HTMLElement>(`.mail-row[data-key="${nextKey}"]`)!;
+         expect(nextRow().classList.contains("unread")).toBe(true);
+         (document.querySelector(".mail-r-mark") as HTMLButtonElement).click(); // the reader's toggle
+         await vi.advanceTimersByTimeAsync(10);
+         expect(nextRow().classList.contains("unread")).toBe(false);
+         panel.destroy();
+         prefs.dispose();
+      } finally {
+         vi.useRealTimers();
+      }
+   });
+
+   it("opens the next message after archiving when chosen", async () => {
+      const prefs = new LocalUserPrefs();
+      prefs.set(AFTER_MOVE, "next");
+      const panel = await mountWith(prefs);
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(".mail-row"));
+      const secondSubject = rows[1].querySelector(".mail-row-subject")?.textContent;
+      rows[0].click();
+      await flush();
+      (document.querySelector(".mail-r-archive") as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 250)); // the stepped open settles before it reads
+      expect(document.querySelector(".mail-reader-subject")?.textContent).toBe(secondSubject);
+      panel.destroy();
+      prefs.dispose();
+   });
+
+   it("has two levels; Escape steps back before it closes", async () => {
+      const prefs = new LocalUserPrefs();
+      const panel = await mountWith(prefs);
+      (document.querySelector(".mail-filter-btn") as HTMLButtonElement).click();
+      (document.querySelector(".mail-pop-more") as HTMLButtonElement).click();
+      expect(document.querySelector(".mail-popover")?.textContent).toContain("Mark as read");
+      const delayed = document.querySelector<HTMLInputElement>('input[name="mail-markread"][value="delayed"]')!;
+      delayed.click();
+      expect(prefs.get(MARK_READ)).toBe("delayed");
+      /* Always show images asks before it turns on. */
+      document.querySelector<HTMLInputElement>('[data-focus-id="always"]')!.click();
+      expect(prefs.get(ALWAYS_IMAGES)).toBe(false);
+      (document.querySelector(".mail-pop-turn-on") as HTMLButtonElement).click();
+      expect(prefs.get(ALWAYS_IMAGES)).toBe(true);
+      const pop = document.querySelector(".mail-popover") as HTMLElement;
+      pop.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(pop.hidden).toBe(false);
+      expect(pop.textContent).toContain("Show mail from");
+      pop.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(pop.hidden).toBe(true);
+      panel.destroy();
+      prefs.dispose();
    });
 });

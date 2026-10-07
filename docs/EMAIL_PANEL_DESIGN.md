@@ -200,6 +200,99 @@ Glow only on the panel title. Color is spent on account tiles/bars and the unrea
 else. Row actions hidden at rest. Arrivals use a fading wash, never motion or a pulse. Reduced
 motion removes every animation listed here.
 
+### 3.9 Mail options (v2 2026-10-08: UI, security and architecture reviews folded)
+
+**Container: a two-level popover**, renamed **"Mail options"** (the filter button's label and title
+too; `role="dialog"`, non-modal). It gains `max-height: min(70vh, calc(100% - 2.6rem));
+overflow-y: auto; overscroll-behavior: contain`, so a short panel can't cut it off.
+
+- **Level 1** (what's touched often):
+  - **Show mail from (this screen)**: All + a checkbox per account, each with its bell (unchanged).
+  - **Notifications** (only while a bell is on): "Show the sender only" and **"Chime for new mail"**,
+    with a faint footnote "Notifications apply to this screen only."
+  - A last row, **"Reading options ›"**, swaps the content in place to level 2 (focus moves to the
+    back row; Escape goes level 2 -> level 1 -> closed, focus back on the filter button; a 120 ms
+    crossfade, instant under reduced motion).
+- **Level 2** ("‹ Back to Mail options" at the top), fieldsets with legends in the existing legend
+  style, radio groups (`name=` per group, styled via `accent-color`) and checkboxes only (no
+  `<select>`, no new toggle component):
+  - **Images**: "Always show images" (off) with its description line in `--text-dim` (tied by
+    `aria-describedby`): "Anyone who emails you, spammers included, can see when and roughly where
+    you open it." Turning it ON is a deliberate step: the line shows first with "Turn on" / "Cancel"
+    before it commits. Then **Trusted senders**: always shown ("none yet · trust a sender from the
+    images bar in a message" at 0), a list in its own scroll region (`max-height: 10rem`), sorted by
+    domain then local part, a filter field once there are more than 8, each row the exact address
+    (middle-ellipsized, full value in `title`) with an x ("Stop trusting {addr}"). Removing shows an
+    inline "Removed · Undo" for ~5 s and moves focus to the next remove button (or the previous, or the
+    heading). While Always show images is on, the list stays editable but reads "Not needed while
+    Always show images is on".
+  - **Reading**: **Mark as read**: Immediately / After 3 seconds / Only when I choose.
+    **After archive or trash**: Go back to the list (default) / Open the next message (older) /
+    Open the previous message (newer). **"Preview line under each message"** (on; off also tightens
+    the row height token, so the list really gets denser).
+
+**Mark as read, precisely.**
+- "Shown" = the body is loaded (not the loading state) AND the reader is visible: the panel expanded,
+  the tab visible, standby not up. The 3 s timer pauses (not resets) while any of those is false.
+- Cancelled by J/K, Back, opening another row, Archive / Trash / Mark unread on that message,
+  collapsing, or a live update removing it: the message stays unread and nothing is sent.
+- Split view: opening in the reader starts it; moving the list selection without opening doesn't.
+- No flash and no countdown: the row's unread dot and weight stay until the timer fires, then settle
+  with the arrival wash (instant under reduced motion). One mark per open; a list refresh never marks.
+- **The reader's mark button becomes a read/unread toggle in every mode** ("Mark read" / "Mark
+  unread", icon and label swap), so "Only when I choose" has a control in the reader, including the
+  narrow view (where only Mark unread returns to the list, as 3.4 says). Keyboard shortcuts for it stay
+  parked with the full shortcut set (2).
+
+**After archive or trash.** The default, "Go back to the list", is today's behaviour exactly (split:
+the next row is selected, not opened; narrow: the list). "Open the next / previous message" opens it,
+so it is marked read per the Mark as read setting (Gmail's behaviour; two explicit choices). At the
+end of the list it falls back to the list; it never wraps.
+
+**Per-sender images, in the reader.** The images bar: "N images blocked · **Show images** ·
+**Always show from {addr}**" (the explanation that images can track opens moves to the bar's `title`;
+both actions `--text-dim`; Show images first, the one-off safe action). For a trusted sender:
+"Images from {addr} load automatically · **Stop**". Stop reverts at once (images unload, the bar
+returns to blocked, a polite live line "Stopped trusting {addr}"); Always again re-trusts; no confirm.
+The exact address is always shown (bound via `textContent`), so "PayPal <x@paypa1.example>" reads as
+what it is; an IDN domain is shown as punycode.
+- **Key:** the reader's message `from_addr`, normalized: NFC, domain as a lowercase IDN A-label, local
+  part lowercased; never strip `+tags` or dots (that would trust other mailboxes); well-formed only
+  (one `@`, <= 254 bytes). Reply-To is never used for trust.
+- **Spoofing.** A forged From gets a trusted sender's images loaded: a privacy cost (an open signal),
+  never safety (images are inert). The guard is DAWN's authentication result (9.14 item 5): trust and
+  the global switch auto-show only on `pass`; `fail` never auto-shows; a missing result (an older DAWN)
+  falls back to address alone, said in the Trusted senders list ("trusted by address").
+- **One gate.** Trust and the global switch only set the same per-message "shown" flag the single
+  sanitize choke point reads (6.2). No separate path; the held Layout view (6.4) honours it the same
+  way, and a per-sender Layout preference never implies it.
+
+**Undo grouping (no setting).** Moves of the same kind on the same account while the Undo toast shows
+merge into it ("Archived 3 · Undo" takes back all three); another kind or account starts a new toast.
+
+**No "Show archived" setting.** The inbox excludes archived mail by definition and search already
+covers all mail (Gmail; IMAP with an All Mail folder); an Archive view belongs with the P3 folder picker.
+
+**Where each setting lives.** What follows the PERSON goes to DAWN (9.14) and syncs; what's about
+THIS SCREEN stays in the browser. Only the two per-screen groups say so ("this screen"); no sync badges.
+
+| Setting | Lives | Key |
+|---|---|---|
+| Trusted senders | DAWN | `mail.trusted_senders` |
+| Always show images | DAWN | `mail.always_images` |
+| Mark as read | DAWN | `mail.mark_read` |
+| After archive or trash | DAWN | `mail.after_move` |
+| Preview line | DAWN | `mail.previews` |
+| Show the sender only | DAWN | `mail.sender_only` |
+| Account filter, bells, Chime | browser | `dawn.hero.mailPrefs` (as today) |
+| Unread only, position / size / open / visible | browser | existing keys |
+
+**Fail-safe until loaded.** Until this connection's settings have loaded, the privacy-sensitive ones
+take the stricter of the cached value and the default: no automatic images (trusted or global) and
+sender-only notices. Everything else renders from the cache straight away (no held render).
+
+How these are stored, cached, synced and validated: 8.7.
+
 ## 4. Send to chat
 
 **The rule:** email is attacker-authored text, and the assistant has tools (including sending
@@ -323,60 +416,138 @@ visible text is a URL whose host differs from the target, the real host is appen
 `--text-faint` mono, e.g. "(-> evil.example)". Neutral styling: marketing redirects mismatch
 constantly, and an alarm color would cry wolf.
 
-### 6.4 View original: the real layout, zoomed to fit (drafted 2026-10-07, for review; pulled forward from P3)
+### 6.4 View original: the real layout, zoomed to fit (spec v2 2026-10-07, reviewed; HELD until DAWN fetches images, 9.13)
 
 **Why.** The reader turns mail into markdown: calm and safe, but a newsletter's layout (columns,
-buttons, image grids) is gone. Images already keep the sender's sizes and stay in proportion at the
-reader's width (6.2), so most mail reads well. "View original" is for the mail whose layout carries
-the meaning, shown the way a phone mail app shows it: the sender's layout, scaled down to the panel.
+buttons, image grids) is gone. Images already keep the sender's sizes, stay in proportion, and icon
+rows stay side by side (6.2), so most mail reads well. "View original" is for the mail whose layout
+carries the meaning, shown the way a phone mail app shows it: the sender's layout, scaled down.
 
 **UX.**
-- A two-state control in the reader bar: **Reading** (default) / **Original**. Per message, not
-  remembered across messages (a per-sender preference can come with the parked per-sender options).
-- Original shows on a light "paper" surface inside the panel (mail is designed on white), filling the
-  reader area and scrolling inside it. The Show images bar works the same in both views; the choice is
-  shared, so showing images in one shows them in the other.
-- Switching message, closing the reader, or going back to Reading destroys the frame.
+- **The control:** one toggle button, **"Layout"** (columns glyph, `aria-pressed`, title "Show the
+  sender's layout" / "Back to reading view"), in a slim **view row** between the header and the body,
+  which also holds the Show images bar. Not in the reader bar (it is full, and this is a view mode, not
+  an action on the message). Not "Original": in Gmail "Show original" means the raw source. Shown only
+  for HTML mail. Focus stays on the toggle after switching.
+- **Per message,** reverting when the message changes (J/K included) in v1; whether Layout should stick
+  through one J/K session is decided before build. A per-sender preference comes with the parked
+  per-sender options; it would be a per-user key in `USER_KEYS` and never imply Show images.
+- **One scroller.** In Layout, `.mail-reader-scroll` stops scrolling and becomes a flex column: a
+  compact header (subject on one line, From, date) and the view row are fixed; the paper fills the
+  rest (`flex:1; min-height:0`) and the frame is the ONLY scroller (both axes). Attachments and the
+  "shortened" note sit in a fixed strip under the paper so they stay reachable. The injected stylesheet
+  sets `html{overscroll-behavior:contain}` so the email's scroll doesn't chain into the panel.
+- **No white flash, dimmed paper.** The frame starts at `opacity:0` over a `--ground-raise` skeleton
+  and is revealed on its `load` event or after 600 ms, whichever comes first (a 120 ms fade, none under
+  reduced motion). The whole frame is dimmed with `filter: brightness(var(--paper-brightness))`
+  (0.88; never below ~0.85, it would sink low-contrast mail). Never auto-invert.
+- **Framed as the sender's content:** inset 6 px in the reader on a `--ground-raise` gutter, a 1 px
+  `--paper-edge` border, 2 px radius, no glow. The view row reads "SENDER'S LAYOUT · 72%" (mono,
+  label size, faint): the current scale is always shown.
+- **Minimum zoom 0.6** (about a phone's 375/600): below that the frame's layout width becomes
+  `readerWidth / 0.6`, the email scrolls sideways inside the same frame, and the view row adds
+  "widen the panel to fit". (A "Fit" action that widens the panel can come later.)
+- **Light, predictably:** `color-scheme: light` on the frame and `:root{color-scheme:light}` in the
+  injected CSS, so the same email looks the same everywhere (sender dark modes are often half-built;
+  honouring them can be a later per-sender option). Verify engines propagate it to the frame's
+  `prefers-color-scheme`.
+- **Keyboard contract** (no bridge, by design): J/K/Esc work while focus is in Aurora's chrome; inside
+  the frame, Space / PgDn / arrows scroll the email and Tab / Shift+Tab leave it. Focus order: reader
+  bar, view row (toggle, Show images), header, frame, the strip under it. Prev/Next clicks always work.
+- **Drag and raise:** while any `makeMovable` / `makeResizable` drag is active, the frame gets
+  `pointer-events:none` (a body class set by those helpers), so a drag crossing the paper isn't lost.
+  A press inside the frame raises the panel: on window `blur` with `document.activeElement === frame`,
+  call `raiseMovable(panel)`.
+- **Links:** the browser's own title tooltip and status-bar URL work inside the frame (the reliable
+  host disclosure there); no "(-> host)" mismatch text is injected (sender CSS could hide it, and it
+  breaks button layouts). An injected `a:focus-visible` outline (3 px `--paper-focus`, `!important`)
+  survives senders' `outline:none` and the scale.
+- **Show images** is shared with Reading. In Layout it rebuilds the frame (the policy changes), so the
+  email returns to the top: known behaviour.
+- **Accessibility:** frame `title="Email from {sender}, sender's layout"`. Layout tables are noisy for
+  screen readers and the layout can't reflow (WCAG 1.4.10): Reading is the conforming alternative,
+  one more reason it stays the default. No transitions on scale or reveal under reduced motion.
+- **Tokens** (tokens.ts, mirrored): `paper` (#F2F4F3, the pre-load and fallback canvas), `paperEdge`
+  (accent 22% mix), `paperFocus` (#0A6A73, ~6:1 on white where the cyan accent fails), feel
+  `paperBrightness` 0.88.
 
 **Rendering (the security design).**
-1. **Sanitize, keeping layout.** DOMParser (inert) -> a SEPARATE DOMPurify instance with
-   `WHOLE_DOCUMENT` that keeps tables, inline `style`, and `<style>` blocks, and strips `script`,
-   `meta` (incl. refresh), `base`, `link`, `form` and its controls, `iframe`, `frame`, `object`,
-   `embed`, `svg`, `math`, every event attribute, `srcset`, and any URL attribute except `a[href]` and
-   `img[src]`. The same choke-point hook as the reader: links pass `safeUrl` and get `target=_blank
-   rel="noopener noreferrer"` plus the hostname title; an image keeps its `src` only when images are
-   shown AND the URL is https (or, with 9.13, is replaced by its token URL). `cid:` stays blocked
-   until P3. Serialize, then put our CSP as the first child of `<head>`.
-2. **CSP:** `default-src 'none'; style-src 'unsafe-inline'; img-src data:` (+ `https:` once shown,
-   or only DAWN's origin with 9.13) `; font-src 'none'; media-src 'none'; form-action 'none';
-   base-uri 'none'; frame-src 'none'`. This also stops CSS-based fetches (`@import`, `url()` fonts)
-   and keeps CSS `background` images behind Show images.
-3. **Frame:** `<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy=
-   "no-referrer" srcdoc=...>`, so no scripts, no same-origin, no forms, no top navigation, no
-   bridge script or postMessage handler. The parent never reads the frame's DOM (no
-   `allow-same-origin`, ever), so a future slip can't combine it with scripts.
-4. **Zoom without reading the frame.** The parent already knows the design width (fit-images.ts
-   `designWidth`, from its own inert parse). The iframe element is laid out at that width with
-   `transform: scale(readerWidth / designWidth)` (never above 1) and `transform-origin: top left`,
-   and its height set to `readerHeight / scale`, so it fills the reader area and scrolls inside.
-   A resize only changes the transform (no reload). Unknown design width: no scaling, width 100%.
+1. **Sanitize to an explicit allowlist, never DOMPurify's defaults** (they keep `background`,
+   `poster`, `download`, `usemap`, `video`, `picture`, `source`, `noscript`, which fetch or misbehave).
+   A SEPARATE DOMPurify instance, `WHOLE_DOCUMENT` + `RETURN_DOM`, on an inert DOMParser document.
+   - Tags: html, head, body, title, style, table, thead, tbody, tfoot, tr, td, th, caption, colgroup,
+     col, div, span, p, center, font, h1-h6, ul, ol, li, a, img, br, hr, b, i, u, s, strong, em,
+     small, sub, sup, blockquote, pre, code.
+   - Attributes: align, valign, width, height, bgcolor, color, border, cellpadding, cellspacing,
+     colspan, rowspan, style, class, id, dir, lang, alt, title, href (a only), src (img only). On
+     html/body only lang, dir, bgcolor.
+   - `FORBID_ATTR` (belt and braces): background, srcset, imagesrcset, poster, ping, download,
+     attributionsrc, crossorigin, loading, longdesc, lowsrc, dynsrc, usemap, action, formaction,
+     xlink:href, data, cite, plus every event attribute.
+   - The frame's hook: links pass `safeUrl` and get `target=_blank rel="noopener noreferrer"` and the
+     hostname title; an image keeps `src` only under the image rule below; EVERY other URL-bearing
+     attribute is removed generically (not just href/src); tracking pixels are dropped with the
+     walker's own pixel test (shared code, not a copy); every kept image gets `loading="eager"` (a
+     sender's lazy loading on a hidden image is a scroll-depth beacon).
+   - DOMPurify's `SAFE_FOR_XML` drops a `<style>` whose text contains `<!--` (the common
+     `<style><!-- ... --></style>` and MSO conditionals). That fails safe but can lose a layout:
+     verify against real newsletters and, if needed, strip those comment markers before sanitizing.
+2. **Build the document ourselves, never string-splice.** A fresh document: OUR `<head>` built with
+   `createElement` / `setAttribute`, in this order: the CSP meta, `<meta name="referrer"
+   content="no-referrer">`, `<meta http-equiv="x-dns-prefetch-control" content="off">`,
+   `<base target="_blank">` (a missed link opens a tab instead of navigating the frame, which would
+   drop our meta CSP), the injected stylesheet (color-scheme, overscroll, focus ring); then the
+   sanitized `<style>` nodes and the sanitized body. Every sender `<meta>`, `<base>`, `<html>` /
+   `<head>` attribute is discarded. Serialize as `'<!doctype html>' + documentElement.outerHTML`.
+   (The iframe's `referrerpolicy` attribute does NOT cover a srcdoc's subresources, which take the
+   parent's policy: the referrer meta is what keeps Aurora's origin from senders.)
+3. **CSP:** `default-src 'none'; style-src 'unsafe-inline'; img-src data:` plus, in 2b only, DAWN's
+   image route by PATH (`https://<dawn-host>/api/email/image/`); `font-src 'none'; media-src 'none';
+   form-action 'none'; base-uri 'none'; frame-src 'none'`. Also set as the iframe's `csp` attribute
+   (CSP Embedded Enforcement: Chromium, applied before parsing); the meta stays the cross-browser
+   control. A srcdoc also inherits any CSP DAWN serves Aurora with.
+4. **The frame:** create the iframe and set `sandbox="allow-popups allow-popups-to-escape-sandbox"`,
+   `csp`, `credentialless` (Chromium: an ephemeral cookie partition), and `referrerpolicy` FIRST, then
+   `srcdoc`, then insert it (sandbox flags are captured at navigation; srcdoc before sandbox would load
+   the first document unsandboxed and same-origin). Never change `sandbox` afterwards, never give it a
+   `name`. No scripts, no same-origin (ever: the parent never reads the frame), no forms, no top
+   navigation, no bridge script, no postMessage handler. It sits in a wrapper with `overflow:hidden;
+   contain:strict`, so its layout box can never spill over the reader bar.
+5. **Zoom without reading the frame.** The parent knows the design width (fit-images.ts
+   `designWidth`, from its own inert parse). The frame is laid out at that width (or `readerWidth/0.6`
+   at the floor) with `transform: scale(...)` (never above 1, never below 0.6), `transform-origin: top
+   left`, and height `readerHeight / scale`. A resize changes only the transform. Unknown design
+   width: no scaling, width 100%. (The transform shrinks the frame's scrollbar and wheel step; CSS
+   `zoom` on the injected `:root`, rebuilt on resize end, would keep them native. Decide before 2b.)
 
-**What it does NOT do:** run anything the sender wrote; load fonts or remote CSS; load any image
-before Show images; let the sender see Aurora's origin (no referrer, opaque frame origin).
+**Images in Layout.** Remote images arrive with 2b, not before. With `img-src https:` (2a's
+direct-loading alternative), the sender's own CSS could fetch anything after Show images (hover and
+click beacons via `url()`, `image-set()`, `cursor`, `content`, escaped forms no filter catches; a
+host-list CSP doesn't help, it ignores the query string), bypassing the image choke point. In 2b the
+CSP admits only DAWN's token route, whose URLs sender CSS never sees, so `<img>` images load and CSS
+images stay blocked. Until then Layout shows the layout with image placeholders, and Show images
+applies to the Reading view. (The alternative, stripping CSS URLs through a CSSOM pass in 2a, is work
+2b makes redundant.)
 
-**Known gaps and open questions.**
-- With 9.13 tokens, CSS `background:url()` images aren't tokenized, so they stay blocked by the CSP
-  (missing backgrounds) unless DAWN also tokenizes CSS URLs. Acceptable for v1?
-- 9.13's token route must authorize from the token alone: a request from the opaque-origin frame is
-  cross-site, so a `SameSite` login cookie won't ride it.
-- Light paper in a dark HUD is bright; optionally dim it slightly (a brightness filter on the frame).
-- Dark-mode-aware mail (`prefers-color-scheme` in its CSS) will follow the system setting.
+**What it does NOT do:** run anything the sender wrote; load fonts or remote CSS; fetch any remote
+image before 2b; send Aurora's origin as a referrer; carry cookies (opaque origin, `credentialless`).
 
-**Phasing.** 2a: the toggle, sanitizer, CSP, frame and zoom, with direct https images (today's Show
-images). 2b: switch the frame's images to 9.13's tokens when DAWN ships it.
+**Accepted risks:** sender CSS can draw fake UI inside the frame (display only: no forms, links open a
+new tab; the paper and border keep it distinguishable); a `cursor` image can restyle the pointer over
+the frame; heavy CSS animation or a decompression-bomb data: image can cost the tab while that message
+is open in Layout (the frame is destroyed on leaving it).
 
-**Review before code:** a security review of the second sanitizer + frame (this is a new rendering
-path), and a UI review of the toggle and the paper surface.
+**Phasing.** 2a: the Layout toggle, sanitizer, document builder, frame, zoom, and UX above, with
+image placeholders. 2b (with 9.13): images through DAWN's token route.
+
+**Tests (2a):** the sanitized frame document has no URL attribute except `a[href]`; `<body
+background>` / `<td background>` / `<video poster>` / `srcset` come out with no URL; our CSP is the
+first `<head>` child and no sender meta/base survives; `iframe.sandbox.value` is exactly
+`allow-popups allow-popups-to-escape-sandbox` and is set before `srcdoc`; tracking pixels are dropped;
+a `<style><!-- ... --></style>` newsletter keeps its styles (or the drop is documented).
+
+**Reader follow-up found by this review:** the Reading view's `loading="lazy"` is also a reading-depth
+signal once images are shown; switch it to eager loading.
 
 ### 6.5 Tests
 
@@ -502,6 +673,48 @@ Aurora** (outward-facing, irreversible): explicit review, a server-held undo win
 an explicit button press (never a keyboard default, frame path, or auto-advance), and when
 `Reply-To` differs from `From` the compose view shows the real recipient clearly. No account setup
 or credentials in Aurora.
+
+### 8.7 User settings: the UserPrefs boundary (2026-10-08)
+
+Aurora-wide, first used by Mail (3.9); other panels adopt it later without touching ingest.
+
+- **`src/ingest/prefs.ts`** (no socket): `PrefDef<T> { key, default, parse(raw): T | undefined }`,
+  `definePref()` (checks the key: `[a-z0-9._-]`, <= 64 bytes, namespaced by view, at module load);
+  `UserPrefs { get(def), set(def, value), onChange(cb) -> unsubscribe, synced(), dispose() }`; and
+  `LocalUserPrefs`: one map in `dawn.hero.prefs` = `{ v: 1, values, authority: "local" | "dawn",
+  dirty: [] }`, plus a `storage` listener so other tabs follow on the browser-only path.
+- **Ingest stores raw JSON per key and knows nothing about meaning.** Each view owns its typed defs
+  (`src/email/mail-prefs.ts`); `get` runs `def.parse(raw)` and falls back to `def.default`. Values are
+  parsed into `Object.create(null)` maps and looked up with `Object.hasOwn` (a key like `constructor`
+  can't resolve to a prototype member). Per-key rules: booleans exactly booleans, enums exact, the
+  trusted list an array, re-normalized, de-duplicated, capped by BYTES so its JSON fits 9.14's value cap.
+- **`src/ingest/prefs-wire.ts`: `DawnPrefs`** wraps a `LocalUserPrefs` (the store without the flag,
+  the cache with it). DawnIngest delegates like DawnEmail: `setServerSupport(hasFeature
+  ("client_prefs") && hasFeature("app_logins"))` from the config frame (before email's, so the get
+  goes out first), `setLinked()`, and `handleFrame()` for the three frames. `userPrefs(): UserPrefs` is
+  on the `Ingest` interface; StubIngest returns a `LocalUserPrefs`, so the stub swap stays one line for
+  this source. main.ts injects it: `mountEmailPanel(stage, { source, prefs, ... })`.
+- **Lifecycle.**
+  - Reads return the cache (or defaults in a brand-new browser) at once; when DAWN's values arrive,
+    only changed keys are notified and the panel re-applies just those settings.
+  - A write updates the cache, notifies this tab, then sends; offline or failed, the key is marked
+    dirty and re-sent after the reconnect's get (the user's latest choice wins). Every reconnect gets
+    again (recovers changes missed while offline). `client_prefs_changed` triggers a get.
+  - **Trusted senders are edited as add/remove operations**, sent with compare-and-set (9.14
+    `expect`): on a mismatch Aurora re-reads, re-applies the operation to the fresh list, and retries;
+    a removal is never undone by another device's stale write.
+  - If the flag disappears mid-page, the local map takes over with no gap.
+- **The one-time upload.** While `authority` is `"local"`, the map is the truth. On the first get from
+  a DAWN with the store, AFTER the user-identity check (and any user-switch wipe and reload), keys DAWN
+  lacks are sent with set-if-absent (atomic on the server), excluding `mail.trusted_senders` and
+  `mail.always_images` (privacy-loosening; they start fresh, and are new anyway). Then `authority`
+  becomes `"dawn"` and the map is only a cache. The legacy `senderOnly` inside `dawn.hero.mailPrefs`
+  moves into the map at mount (a one-shot local step), so the upload carries it. Edge (documented): a
+  daemon downgraded then upgraded keeps DAWN's values over local edits made in between.
+- **Wipe.** `dawn.hero.prefs` is in `USER_KEYS`; logout and a user switch wipe and reload it, so the
+  next user's upload has nothing of the previous user's. §8.5's storage-key test covers it.
+- **HMR:** `DawnIngest.dispose()` disposes the prefs (listeners, the `storage` listener, dirty state);
+  the panel's `destroy()` unsubscribes.
 
 ## 9. What DAWN needs to add
 
@@ -771,7 +984,9 @@ P1.3 and P1.4 are independent and can land in either order. 9.13 (image fetching
 ### 9.13 Image fetching: through DAWN, or an outside proxy (drafted 2026-10-07, not yet sent)
 
 **Why.** Today "Show images" makes the browser load each image straight from the sender: no referrer
-or cookies for the sender's host, but the sender sees the reader's IP and user agent and logs the open.
+(set per image), but the sender sees the reader's IP and user agent, logs the open, and gets any
+third-party cookies the browser still allows for its host (a plain `<img>` is a credentialed request),
+which can tie messages together. Only the `dawn` / `proxy` modes fix the cookie part.
 Gmail's proxy does not help: DAWN reads mail over IMAP, so the bodies carry the senders' own image
 URLs. DAWN usually sits on the same home network as the browser, so DAWN fetching an image does NOT
 hide the home IP; only a proxy outside that network does. No proxy stops the open event (whoever
@@ -793,7 +1008,11 @@ In `dawn` and `proxy` the browser only ever loads same-origin, so senders never 
    `email_read` returns, per message, the https image URLs found in its HTML with a short-lived
    opaque token each: `images: [{ url, token }]`. The token binds user + account + message + URL
    (HMAC with a server key, expiring with the read, e.g. 1 hour). `GET /api/email/image/<token>`
-   serves only a URL that token names. Owner-checked like the other email routes; `?app=` tagged.
+   serves only a URL that token names. **The token alone authorizes; cookies are ignored on this
+   route**: View original (6.4) loads images from an opaque-origin frame, and DAWN's `SameSite=Strict`
+   login cookie never rides those requests. Response headers add `Cross-Origin-Resource-Policy:
+   cross-origin` (a same-site CORP would block the opaque frame), `Cache-Control: private`,
+   `Referrer-Policy: no-referrer`; no `Set-Cookie`, no CORS headers (images load no-cors), no redirects.
 2. **Fetch rules** for both modes: https only; resolve the host and refuse loopback, private,
    link-local, CGNAT and multicast addresses, re-checked on each redirect and pinned to the resolved
    address (no DNS rebinding); at most 3 redirects; connect and total timeouts; a size cap
@@ -824,6 +1043,43 @@ In `dawn` and `proxy` the browser only ever loads same-origin, so senders never 
 **Open questions:** the default mode for a fresh install (recommended `dawn`); whether a per-user
 "always show images from this sender" belongs here or with the parked per-sender option (2).
 
+### 9.14 Per-user settings that follow the person (v2 2026-10-08, reviewed; not yet sent)
+
+**Why.** Aurora keeps every setting in the browser, so a second browser starts from scratch and
+trusted senders (3.9) would be re-trusted per device. `get_my_settings` / `set_my_settings` is a fixed
+set of columns, not a place a client can keep its own settings.
+
+**Ask:** a small per-user, per-app settings store (the user acting on their own data; nothing
+operator-level).
+
+1. **Storage:** `client_prefs(user_id, app, key, value_json, updated_at)`, unique on (user, app, key).
+   **`app` comes only from the authenticated session's per-app login, never the payload**, so the
+   store needs `app_logins`: a session without an app is refused with a code. Values are opaque JSON.
+   Caps: key `[a-z0-9._-]` <= 64 bytes; value <= 16 KB; <= 128 keys per user per app; over a cap is a
+   coded refusal. Deleted with the user, and with "wipe the user's email state" for `mail.*` keys;
+   never returned in admin or all-users listings.
+2. **Verbs** (both echo `req`):
+   - `client_prefs_get {}` -> `{ success, prefs: { key: value }, updated: { key: epoch_ms } }`.
+   - `client_prefs_set { set?: { key: value }, remove?: [key], expect?: { key: epoch_ms | 0 },
+     req }` -> `{ success, updated: { key: epoch_ms } }`. `expect` is compare-and-set per key (0 =
+     only if absent, which makes a one-time upload atomic); any mismatch refuses the whole call with
+     `CONFLICT` and the current `updated` stamps. Without `expect`, last write wins per key.
+   - **Push** `client_prefs_changed { keys: [..] }` (names only, never values) to the same user's
+     OTHER connections of the same app; they re-read.
+3. **Never to the LLM.** `client_prefs` is not exposed to any tool, LLM context or memory extraction;
+   only these verbs, on the owner's own connection, touch it. (Otherwise a prompt-injected email could
+   add itself to `mail.trusted_senders`, or read who you correspond with.)
+4. **Flag** `client_prefs` (signal-map 9.15), advertised only alongside `app_logins`. Without it Aurora
+   keeps settings in the browser.
+5. **For trusted-sender images:** `email_read` reports the message's From-domain authentication,
+   `auth: "pass" | "fail" | "none" | "unknown"`: DMARC alignment from the topmost
+   `Authentication-Results` whose authserv-id is the receiving server's (RFC 8601 section 5; any
+   sender can add their own header), or DAWN's own check. A message with more than one From (address
+   or header) is `fail`. Cheap to ship with 9.13.
+
+Typed rows for trusted senders were considered; nothing DAWN-side reads them yet, so the generic
+store holds them as one key, and a typed table can come when a DAWN feature needs them.
+
 ## 10. Security and privacy summary
 
 - References, not bodies, go to the assistant; the email is a kinded, wrapped, untrusted row that
@@ -834,7 +1090,9 @@ In `dawn` and `proxy` the browser only ever loads same-origin, so senders never 
   email-only Marked + DOMPurify pair with a strict allowlist; only absolute http(s)/mailto URLs, never
   same-origin, never login-tagged; remote images blocked by default (https-only once shown,
   no-referrer). Tracking-pixel removal is best-effort on top of that guarantee.
-- No mail in browser storage (notice ids are per account); one per-user pref key in `USER_KEYS`.
+- No mail in browser storage (notice ids are per account). Per-user browser keys in `USER_KEYS`: the
+  mail pref key and the settings map (`dawn.hero.prefs`, which caches trusted senders and the synced
+  reading settings).
 - Trash is recoverable or refused, never expunged; no permanent delete; no account setup or
   credentials in Aurora.
 

@@ -18,9 +18,11 @@
  *
  * Security/privacy: every email string is attacker-authored and is bound via textContent; bodies
  * go only through renderEmailBody (inert parse, escaped markdown, strict sanitizer, remote images
- * blocked until "Show images"). Mail lives in memory only (logout/user switch reload the page);
- * the one per-user pref key is in USER_KEYS, layout keys are per machine. New-mail notice ids are
- * per account, never a message id or subject (the notify layer persists positions by id).
+ * blocked until "Show images", or a trusted sender / Always show images, which only set that same
+ * per-message flag). Mail lives in memory only (logout/user switch reload the page). Settings that
+ * follow the person (3.9) go through the injected UserPrefs (8.7); this screen's choices (account
+ * filter, bells, chime) are one per-user key in USER_KEYS; layout keys are per machine. New-mail
+ * notice ids are per account, never a message id or subject (the notify layer persists positions by id).
  */
 
 import type {
@@ -44,9 +46,27 @@ import { makeResizable } from "../render/resizable.ts";
 import { makeVisibility } from "../render/visibility.ts";
 import { renderEmailBody } from "./render-body.ts";
 import { fitImages, fitRatio } from "./fit-images.ts";
+import type { UserPrefs } from "../ingest/prefs.ts";
+import {
+   AFTER_MOVE,
+   ALWAYS_IMAGES,
+   cleanTrusted,
+   MARK_READ,
+   MARK_READ_DELAY_MS,
+   normalizeAddress,
+   PREVIEWS,
+   SENDER_ONLY,
+   TRUSTED_SENDERS,
+   type AfterMove,
+   type MarkRead
+} from "./mail-prefs.ts";
 
 export interface EmailPanelOptions {
    source: EmailSource;
+   /* The settings that follow the person (3.9 / 8.7): trusted senders, reading habits. */
+   prefs: UserPrefs;
+   /* A soft chime for a new-mail notice (gated by the app's "Alarm sounds"); absent = silent. */
+   playChime?(): void;
    /* Hand a message to the assistant: a new private chat, or the current one. */
    onDiscuss(ref: EmailRef, opts: { newChat: boolean }): void;
    /* Raise / clear a new-mail notification card (opt-in per account). */
@@ -89,10 +109,11 @@ const WASH_MS = 1500;
 const NOTIFY_COALESCE_MS = 30_000;
 const SEARCH_DEBOUNCE_MS = 300;
 
+/* This screen's choices (3.9): which accounts to show, which ring a bell, and whether it chimes. */
 interface Prefs {
    filter: number[] | null; // null = all accounts
    notify: number[];
-   senderOnly: boolean;
+   chime: boolean;
 }
 
 interface Reader {
@@ -102,6 +123,10 @@ interface Reader {
    message?: EmailMessage;
    error?: string;
    showImages: boolean;
+   /* The images were shown by a setting (a trusted sender or Always show images), not a click. */
+   autoImages?: boolean;
+   /* The sender's address as a trust key (null when it isn't one well-formed address). */
+   fromKey?: string | null;
 }
 
 interface Toast {
@@ -130,6 +155,7 @@ const ICONS: Record<string, string[]> = {
    bell: ["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9", "M13.73 21a2 2 0 0 1-3.46 0"],
    image: ["M3 5h18v14H3z", "M3 16l5-5 4 4 3-3 6 6", "M15.5 9.5h.01"],
    filter: ["M3 5h18", "M6 12h12", "M10 19h4"],
+   close: ["M6 6l12 12", "M18 6L6 18"],
    clip: ["M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"]
 };
 
@@ -232,7 +258,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    toggle.append(caret, titleEl, countEl);
    const tilesEl = span("mail-bar-tiles");
    const headTools = span("mail-head-tools");
-   const filterBtn = iconButton("mail-filter-btn", "filter", "Accounts and notifications");
+   const filterBtn = iconButton("mail-filter-btn", "filter", "Mail options");
    filterBtn.setAttribute("aria-haspopup", "true");
    filterBtn.setAttribute("aria-expanded", "false");
    const unreadPill = textButton("mail-unread-pill", "UNREAD");
@@ -248,7 +274,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const popover = div("mail-popover");
    popover.hidden = true;
    popover.setAttribute("role", "dialog");
-   popover.setAttribute("aria-label", "Accounts and notifications");
+   popover.setAttribute("aria-label", "Mail options");
 
    const body = div("mail-body");
    const searchRow = div("mail-search");
@@ -313,16 +339,18 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const states = new Map<number, string>(); // last change-state per account (reconnect catch-up)
    let tz: string | undefined;
 
-   let prefs: Prefs = { filter: null, notify: [], senderOnly: false };
+   let prefs: Prefs = { filter: null, notify: [], chime: false };
+   let legacySenderOnly = false;
    try {
       const raw = localStorage.getItem(MAIL_PREFS_KEY);
       if (raw) {
-         const p = JSON.parse(raw) as Partial<Prefs>;
+         const p = JSON.parse(raw) as Partial<Prefs> & { senderOnly?: unknown };
          prefs = {
             filter: Array.isArray(p.filter) ? p.filter.filter((n) => Number.isInteger(n)) : null,
             notify: Array.isArray(p.notify) ? p.notify.filter((n) => Number.isInteger(n)) : [],
-            senderOnly: p.senderOnly === true
+            chime: p.chime === true
          };
+         legacySenderOnly = p.senderOnly === true;
       }
    } catch {
       /* defaults */
@@ -334,6 +362,21 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          /* blocked */
       }
    };
+   /* "Show the sender only" moved to the settings that follow the person: carry an old choice over
+      once (8.7), then this screen's key no longer holds it. */
+   const userPrefs = opts.prefs;
+   if (legacySenderOnly) {
+      userPrefs.set(SENDER_ONLY, true);
+      savePrefs();
+   }
+   /* Until this connection's settings have loaded, the privacy-sensitive ones stay strict (3.9):
+      no automatic images, sender-only notices. */
+   const trustedSenders = (): Set<string> => new Set(userPrefs.loaded() ? userPrefs.get(TRUSTED_SENDERS) : []);
+   const alwaysImages = (): boolean => userPrefs.loaded() && userPrefs.get(ALWAYS_IMAGES);
+   const senderOnly = (): boolean => !userPrefs.loaded() || userPrefs.get(SENDER_ONLY);
+   const markReadMode = (): MarkRead => userPrefs.get(MARK_READ);
+   const afterMove = (): AfterMove => userPrefs.get(AFTER_MOVE);
+   const previews = (): boolean => userPrefs.get(PREVIEWS);
 
    let expanded = true;
    let unreadOnly = false;
@@ -388,6 +431,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let renderedLinked: boolean | null = null;
    let readSeq = 0;
    let advanceAfterPage = false; // Next pressed at the end of the loaded rows: open the next once it loads
+   let advanceFrom: number | null = null; // after a move: open rows[advanceFrom] once the next page lands
    let readerSig = "";
    let bodyCache: { key: string; showImages: boolean; node: DocumentFragment; images: number; designWidth: number } | null = null;
    /* The open message's body + its design width: its images are re-fitted when the reader resizes. */
@@ -509,6 +553,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       wasEffective = eff;
       syncSubscription();
+      syncMark();
    };
    const onVisChange = (): void => {
       tabHidden = document.hidden;
@@ -539,6 +584,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       listStale = false;
       lastPageEmpty = false;
       advanceAfterPage = false;
+      advanceFrom = null;
       pendingNew = [];
       pendingOverflow = false;
       searchNewMail = false;
@@ -595,6 +641,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             /* No rows yet the cursor stays set (every account failed this page, or a provider page held
                nothing to show): stop auto-paging; a deliberate Retry / scroll tries again. */
             lastPageEmpty = r.rows.length === 0 && r.cursor !== null;
+            if (advanceFrom !== null) {
+               const t = rows[advanceFrom];
+               advanceFrom = null;
+               if (t && !reader) queueMicrotask(() => openRow(t, true, true));
+            }
             if (advanceAfterPage) {
                advanceAfterPage = false;
                const i = reader ? rows.findIndex((x) => rowKey(x) === reader!.key) : -1;
@@ -664,7 +715,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          accountIndex.get(r.accountId),
          monograms.get(r.accountId),
          tz,
-         today
+         today,
+         previews()
       ].join("\u0001");
 
    const buildRow = (r: EmailRow, k: string): HTMLElement => {
@@ -692,8 +744,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const date = span("mail-row-date", when);
       l1.append(dot, from, glyphs, date);
       const l2 = div("mail-row-subject", r.subject || "(no subject)");
-      const l3 = div("mail-row-preview", r.preview);
-      content.append(l1, l2, l3);
+      content.append(l1, l2);
+      if (previews()) content.appendChild(div("mail-row-preview", r.preview));
       row.append(bar, gutter, content);
       {
          const actions = span("mail-row-actions");
@@ -904,7 +956,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const currentReaderSig = (): string => {
       if (!reader) return `none|${split}`;
       const id = reader.row.accountId;
-      return [reader.key, reader.state, reader.showImages, !!reader.message, split, compactDiscuss, isReadOnly(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
+      /* The read state is NOT here (the mark toggle flips in place, syncReaderActions): a rebuild
+         would throw the reader back to the top. Trust IS, only as far as this message's bar shows it. */
+      const stopBar = !!reader.autoImages && !alwaysImages() && !!reader.fromKey && trustedSenders().has(reader.fromKey);
+      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, isReadOnly(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
    };
 
    const renderReader = (): void => {
@@ -936,9 +991,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          bar.append(prev, next);
       }
       if (r.state !== "gone") {
-         const mark = iconButton("mail-r-mark", "unread", "Mark unread");
-         mark.addEventListener("click", () => markUnread(r.row));
-         const acts = [mark];
+         /* A read / unread toggle in every mode, so "Only when I choose" has a control here. */
+         const local = rows.find((x) => rowKey(x) === r.key) ?? r.row;
+         const markBtn = iconButton("mail-r-mark", local.unread ? "read" : "unread", local.unread ? "Mark read" : "Mark unread");
+         markBtn.addEventListener("click", () => {
+            const cur = rows.find((x) => rowKey(x) === r.key) ?? r.row;
+            cancelMark();
+            if (cur.unread) setUnreadFlag(cur, false);
+            else markUnread(cur);
+         });
+         const acts = [markBtn];
          if (!ro && source.supportsMoves()) {
             const arch = iconButton("mail-r-archive", "archive", "Archive");
             arch.addEventListener("click", () => moveRow(r.row, "archive"));
@@ -1049,8 +1111,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const rendered = bodyFor(r, m);
          if (rendered.images > 0 && !r.showImages) {
             const ib = div("mail-images-bar");
+            ib.title = "Remote images can tell the sender when you open the message";
             ib.appendChild(icon("image"));
-            ib.appendChild(span("", `${rendered.images} remote image${rendered.images === 1 ? "" : "s"} blocked (they can track opens) · `));
+            ib.appendChild(span("", `${rendered.images} image${rendered.images === 1 ? "" : "s"} blocked · `));
             const show = textButton("mail-link", "Show images");
             show.addEventListener("click", () => {
                if (reader && reader.key === r.key) {
@@ -1059,6 +1122,23 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                }
             });
             ib.appendChild(show);
+            if (r.fromKey) {
+               /* The exact address, so a display name can't stand in for who is trusted. */
+               const addr = r.fromKey;
+               ib.appendChild(document.createTextNode(" · "));
+               const always = textButton("mail-link", `Always show from ${addr}`);
+               always.addEventListener("click", () => trustSender(addr));
+               ib.appendChild(always);
+            }
+            scroll.appendChild(ib);
+         } else if (rendered.images > 0 && r.autoImages && r.fromKey && !alwaysImages() && trustedSenders().has(r.fromKey)) {
+            const addr = r.fromKey;
+            const ib = div("mail-images-bar");
+            ib.appendChild(icon("image"));
+            ib.appendChild(span("", `Images from ${addr} load automatically · `));
+            const stop = textButton("mail-link", "Stop");
+            stop.addEventListener("click", () => untrustSender(addr));
+            ib.appendChild(stop);
             scroll.appendChild(ib);
          }
          const bodyEl = div("mail-reader-body");
@@ -1092,6 +1172,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       apply them in place (a rebuild would reset the reader's scroll mid-read). */
    const syncReaderActions = (): void => {
       readerCol.querySelectorAll<HTMLButtonElement>(".mail-r-act").forEach((b) => (b.disabled = !linked || !b.dataset.ready));
+      const markBtn = readerCol.querySelector<HTMLButtonElement>(".mail-r-mark");
+      if (markBtn && reader) {
+         const unread = (rows.find((x) => rowKey(x) === reader!.key) ?? reader.row).unread;
+         const label = unread ? "Mark read" : "Mark unread";
+         if (markBtn.getAttribute("aria-label") !== label) {
+            markBtn.setAttribute("aria-label", label);
+            markBtn.title = label;
+            markBtn.replaceChildren(icon(unread ? "read" : "unread"));
+         }
+      }
       const prev = readerCol.querySelector<HTMLButtonElement>(".mail-prev");
       const next = readerCol.querySelector<HTMLButtonElement>(".mail-next");
       if (prev || next) {
@@ -1101,10 +1191,61 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
    };
 
+   /* A trusted sender's (or, with Always show images, every) message shows its images on open. */
+   const applyAutoImages = (r: Reader): void => {
+      if (r.showImages) return;
+      if (alwaysImages() || (r.fromKey && trustedSenders().has(r.fromKey))) {
+         r.showImages = true;
+         r.autoImages = true;
+      }
+   };
+
+   /* --- Mark as read "After 3 seconds" (3.9) ------------------------------ */
+   /* The delay counts only while the message is actually on screen (the panel expanded and visible,
+      the tab visible, standby down); it pauses otherwise and is cancelled by moving on. */
+   let mark: { key: string; remaining: number; startedAt: number; handle: number } | null = null;
+   const cancelMark = (): void => {
+      if (mark) window.clearTimeout(mark.handle);
+      mark = null;
+   };
+   const fireMark = (): void => {
+      const k = mark?.key;
+      mark = null;
+      if (!k || !reader || reader.key !== k || reader.state !== "ready") return;
+      const local = rows.find((x) => rowKey(x) === k) ?? reader.row;
+      if (!local.unread) return;
+      if (!linked) {
+         mark = { key: k, remaining: 0, startedAt: 0, handle: 0 }; // offline: mark once the link is back
+         return;
+      }
+      washed.set(k, performance.now() + WASH_MS); // the row settles with the arrival wash, no jump
+      scheduleWash();
+      setUnreadFlag(local, false);
+   };
+   const syncMark = (): void => {
+      if (!mark) return;
+      if (panelEffective() && linked) {
+         if (mark.handle) return;
+         mark.startedAt = performance.now();
+         mark.handle = window.setTimeout(fireMark, mark.remaining);
+      } else if (mark.handle) {
+         window.clearTimeout(mark.handle);
+         mark.handle = 0;
+         mark.remaining = Math.max(0, mark.remaining - (performance.now() - mark.startedAt));
+      }
+   };
+   const startMark = (k: string): void => {
+      cancelMark();
+      mark = { key: k, remaining: MARK_READ_DELAY_MS, startedAt: 0, handle: 0 };
+      syncMark();
+   };
+
    let readTimer = 0;
    const openRow = (row: EmailRow, focusReader = true, settle = false): void => {
       advanceAfterPage = false; // any open supersedes a pending "open the next one when it loads"
+      advanceFrom = null;
       window.clearTimeout(readTimer);
+      cancelMark();
       const k = rowKey(row);
       if (!split && !reader) savedListScroll = listEl.scrollTop;
       selectedKey = k;
@@ -1123,14 +1264,20 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
 
    const fetchRead = (row: EmailRow, k: string, seq: number): void => {
+      const mode = markReadMode();
       source
-         .read(row.accountId, row.messageId, true)
+         .read(row.accountId, row.messageId, mode === "immediately")
          .then((res) => {
             if (destroyed || seq !== readSeq || !reader || reader.key !== k) return;
             reader.message = res.message;
             reader.state = "ready";
             const local = rows.find((x) => rowKey(x) === k);
             if (local) local.unread = res.unread;
+            reader.row.unread = res.unread;
+            /* Trust keys on the message's own From address (3.9), never the display name. */
+            reader.fromKey = normalizeAddress(res.message.fromAddr || row.fromAddr);
+            applyAutoImages(reader);
+            if (mode === "delayed" && res.unread) startMark(k);
             render();
          })
          .catch((e: unknown) => {
@@ -1156,7 +1303,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    const closeReader = (restoreFocus: boolean): void => {
       advanceAfterPage = false;
+      advanceFrom = null;
       window.clearTimeout(readTimer);
+      cancelMark();
       const k = reader?.key ?? null;
       reader = null;
       readSeq++;
@@ -1168,6 +1317,45 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       if (restoreFocus && k) rowEls.get(k)?.el.focus({ preventScroll: true });
    };
+
+   /* --- trusted senders (3.9) ------------------------------------------------ */
+   /* Edited as operations on the current list, so a DAWN-backed store can re-apply them on a
+      conflict (8.7). The change comes back through onChange, which updates the open message. */
+   const trustSender = (addr: string): void => {
+      let full = false;
+      userPrefs.update(TRUSTED_SENDERS, (cur) => {
+         const next = cleanTrusted([...cur, addr]);
+         full = !next.includes(addr);
+         return next;
+      });
+      if (full) {
+         const msg = "The trusted senders list is full. Remove one in Mail options first.";
+         if (toast && toast.tokens.length) announce(msg); // never take over a live Undo
+         else showToast(msg, reader?.row.accountId ?? 0, []);
+      }
+   };
+   const untrustSender = (addr: string): void => {
+      userPrefs.update(TRUSTED_SENDERS, (cur) => cur.filter((a) => a !== addr));
+      announce(`Stopped trusting ${addr}`);
+   };
+   const onPrefsChange = (keys: string[]): void => {
+      if (destroyed) return;
+      if (keys.includes(TRUSTED_SENDERS.key) || keys.includes(ALWAYS_IMAGES.key)) {
+         if (reader && reader.state === "ready") {
+            const still = alwaysImages() || (!!reader.fromKey && trustedSenders().has(reader.fromKey));
+            if (reader.autoImages && !still) {
+               reader.showImages = false; // Stop: the images unload, the bar returns
+               reader.autoImages = false;
+            } else {
+               applyAutoImages(reader);
+            }
+         }
+      }
+      if (keys.includes(MARK_READ.key) && markReadMode() !== "delayed") cancelMark();
+      render(); // the reader rebuilds only if this message's images or bar changed (its signature)
+      if (!popover.hidden) renderPopover();
+   };
+   const unsubPrefs = userPrefs.onChange(onPrefsChange);
 
    /* --- triage ------------------------------------------------------------- */
    const removeRows = (keys: string[]): void => {
@@ -1225,8 +1413,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const index = rows.findIndex((r) => rowKey(r) === k);
       const next = index >= 0 ? (rows[index + 1] ?? rows[index - 1]) : undefined;
       const wasOpen = reader?.key === k;
+      /* "After archive or trash" (3.9): open the next (older) / previous (newer) message, or go back
+         to the list (the default; split view keeps the next row selected, not opened). The end of
+         the list falls back to the list; it never wraps. */
+      const mode = afterMove();
+      const advanceTo = wasOpen && index >= 0 && mode !== "list" ? (mode === "next" ? rows[index + 1] : rows[index - 1]) : undefined;
+      /* "Next" past the loaded rows while more exist: open the first one the next page brings. */
+      const advanceLater = wasOpen && index >= 0 && mode === "next" && !rows[index + 1] && cursor !== null && rows.length < ROW_CAP;
       removeRows([k]);
       if (wasOpen) {
+         cancelMark();
          reader = null;
          readSeq++;
          selectedKey = split && next ? rowKey(next) : null;
@@ -1239,6 +1435,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          if (next) rowEls.get(rowKey(next))?.el.scrollIntoView({ block: "nearest" });
       }
       if (next && (wasOpen || listEl.contains(document.activeElement))) rowEls.get(focusKey!)?.el.focus({ preventScroll: true });
+      if (advanceTo) openRow(advanceTo, true, true); // marks read per the Mark as read setting
+      else if (advanceLater) {
+         advanceFrom = index; // after the removal, the next page's first row lands here
+         loadMore();
+      }
 
       const verb = kind === "archive" ? "archive" : "move to Trash";
       const restore = (why: string): void => {
@@ -1357,29 +1558,65 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          .catch((e: unknown) => !destroyed && reportFailure(seq, `Couldn't undo: ${errorText(e)}`, accountId));
    });
 
-   /* --- popover (accounts + notifications) -------------------------------- */
-   const renderPopover = (): void => {
-      const focusedId = (document.activeElement as HTMLElement | null)?.dataset?.focusId;
-      popover.replaceChildren();
+   /* --- popover: Mail options, two levels (3.9) ------------------------------ */
+   let popLevel: 1 | 2 = 1;
+   let confirmAlways = false; // "Always show images" asks once before it commits
+   let trustFilter = "";
+   let removed: { addr: string; timer: number } | null = null;
+
+   const fieldset = (legend: string, cls = ""): HTMLFieldSetElement => {
       const fs = document.createElement("fieldset");
-      fs.className = "mail-pop-set";
+      fs.className = `mail-pop-set${cls ? ` ${cls}` : ""}`;
       const lg = document.createElement("legend");
-      lg.textContent = "Show mail from";
+      lg.textContent = legend;
       fs.appendChild(lg);
-      const allLabel = document.createElement("label");
-      allLabel.className = "mail-pop-row";
-      const allBox = document.createElement("input");
-      allBox.type = "checkbox";
-      allBox.dataset.focusId = "all";
-      allBox.checked = filterIsAll();
-      allBox.addEventListener("change", () => {
-         prefs.filter = allBox.checked ? null : [];
-         savePrefs();
-         reload();
-         renderPopover();
-      });
-      allLabel.append(allBox, span("mail-pop-name", "All accounts"));
-      fs.appendChild(allLabel);
+      return fs;
+   };
+   const checkRow = (label: string, checked: boolean, focusId: string, onChange: (on: boolean) => void): HTMLLabelElement => {
+      const lab = document.createElement("label");
+      lab.className = "mail-pop-row";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.dataset.focusId = focusId;
+      box.checked = checked;
+      box.addEventListener("change", () => onChange(box.checked));
+      lab.append(box, span("mail-pop-name", label));
+      return lab;
+   };
+   const radioGroup = <T extends string>(legend: string, name: string, value: T, options: Array<[T, string]>, onPick: (v: T) => void): HTMLFieldSetElement => {
+      const fs = fieldset(legend, "mail-pop-radios");
+      for (const [v, label] of options) {
+         const lab = document.createElement("label");
+         lab.className = "mail-pop-row";
+         const r = document.createElement("input");
+         r.type = "radio";
+         r.name = `mail-${name}`;
+         r.value = v;
+         r.checked = v === value;
+         r.dataset.focusId = `${name}-${v}`;
+         r.addEventListener("change", () => r.checked && onPick(v));
+         lab.append(r, span("mail-pop-name", label));
+         fs.appendChild(lab);
+      }
+      return fs;
+   };
+   const setLevel = (level: 1 | 2): void => {
+      popLevel = level;
+      confirmAlways = false;
+      renderPopover();
+      popover.querySelector<HTMLElement>(level === 2 ? ".mail-pop-back" : ".mail-pop-more")?.focus();
+   };
+
+   const renderLevel1 = (): void => {
+      const fs = fieldset("Show mail from (this screen)");
+      fs.appendChild(
+         checkRow("All accounts", filterIsAll(), "all", (on) => {
+            prefs.filter = on ? null : [];
+            savePrefs();
+            reload();
+            renderPopover();
+         })
+      );
       const sel = new Set(selectedIds());
       for (const a of accounts) {
          const row = document.createElement("div");
@@ -1423,21 +1660,195 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       popover.appendChild(fs);
       if (notifyOn()) {
-         const so = document.createElement("label");
-         so.className = "mail-pop-row mail-pop-sender";
-         const box = document.createElement("input");
-         box.type = "checkbox";
-         box.dataset.focusId = "sender";
-         box.checked = prefs.senderOnly;
-         box.addEventListener("change", () => {
-            prefs.senderOnly = box.checked;
-            savePrefs();
-         });
-         so.append(box, span("mail-pop-name", "Notifications show the sender only"));
-         popover.appendChild(so);
+         const nf = fieldset("Notifications");
+         nf.appendChild(checkRow("Show the sender only", userPrefs.get(SENDER_ONLY), "sender", (on) => userPrefs.set(SENDER_ONLY, on)));
+         nf.appendChild(
+            checkRow("Chime for new mail", prefs.chime, "chime", (on) => {
+               prefs.chime = on;
+               savePrefs();
+            })
+         );
+         nf.appendChild(div("mail-pop-foot", "Notifications apply to this screen only."));
+         popover.appendChild(nf);
       }
+      const more = textButton("mail-pop-more", "Reading options ›");
+      more.dataset.focusId = "more";
+      more.addEventListener("click", () => setLevel(2));
+      popover.appendChild(more);
+   };
+
+   const renderLevel2 = (): void => {
+      const back = textButton("mail-pop-back", "‹ Back to Mail options");
+      back.dataset.focusId = "back";
+      back.addEventListener("click", () => setLevel(1));
+      popover.appendChild(back);
+
+      /* Images: the privacy-sensitive group. */
+      const img = fieldset("Images");
+      const always = alwaysImages();
+      const descId = "mail-always-desc";
+      const alwaysRow = checkRow("Always show images", always || confirmAlways, "always", (on) => {
+         if (on) {
+            confirmAlways = true; // a deliberate step: the warning first, then Turn on
+            renderPopover();
+            focusPop("turn-on");
+         } else {
+            confirmAlways = false;
+            userPrefs.set(ALWAYS_IMAGES, false);
+            renderPopover(); // the value may not have changed (no onChange), but the confirm must go
+         }
+      });
+      alwaysRow.querySelector("input")?.setAttribute("aria-describedby", descId);
+      img.appendChild(alwaysRow);
+      const desc = div("mail-pop-desc", "Anyone who emails you, spammers included, can see when and roughly where you open it.");
+      desc.id = descId;
+      desc.hidden = !always && !confirmAlways;
+      img.appendChild(desc);
+      if (confirmAlways && !always) {
+         const confirm = div("mail-pop-confirm");
+         const on = textButton("mail-link mail-pop-turn-on", "Turn on");
+         on.dataset.focusId = "turn-on";
+         on.addEventListener("click", () => {
+            confirmAlways = false;
+            userPrefs.set(ALWAYS_IMAGES, true);
+            focusPop("always");
+         });
+         const cancel = textButton("mail-link", "Cancel");
+         cancel.addEventListener("click", () => {
+            confirmAlways = false;
+            renderPopover();
+            focusPop("always");
+         });
+         confirm.append(on, document.createTextNode(" · "), cancel);
+         img.appendChild(confirm);
+      }
+      img.appendChild(renderTrusted(always));
+      popover.appendChild(img);
+
+      const rd = fieldset("Reading");
+      rd.appendChild(
+         radioGroup<MarkRead>("Mark as read", "markread", markReadMode(), [
+            ["immediately", "Immediately"],
+            ["delayed", "After 3 seconds"],
+            ["manual", "Only when I choose"]
+         ], (v) => userPrefs.set(MARK_READ, v))
+      );
+      rd.appendChild(
+         radioGroup<AfterMove>("After archive or trash", "aftermove", afterMove(), [
+            ["list", "Go back to the list"],
+            ["next", "Open the next message (older)"],
+            ["previous", "Open the previous message (newer)"]
+         ], (v) => userPrefs.set(AFTER_MOVE, v))
+      );
+      rd.appendChild(checkRow("Preview line under each message", previews(), "previews", (on) => userPrefs.set(PREVIEWS, on)));
+      popover.appendChild(rd);
+   };
+
+   /* Sorted by domain, then local part (a sender's addresses group together). */
+   const trustOrder = (a: string, b: string): number => {
+      const [la, da] = [a.slice(0, a.lastIndexOf("@")), a.slice(a.lastIndexOf("@") + 1)];
+      const [lb, db] = [b.slice(0, b.lastIndexOf("@")), b.slice(b.lastIndexOf("@") + 1)];
+      return da.localeCompare(db) || la.localeCompare(lb);
+   };
+   const renderTrusted = (alwaysOn: boolean): HTMLElement => {
+      const wrap = div("mail-pop-trusted");
+      const list = userPrefs.get(TRUSTED_SENDERS).slice().sort(trustOrder);
+      const head = div("mail-pop-trusted-head", `Trusted senders${list.length ? ` (${list.length})` : ""}`);
+      head.tabIndex = -1;
+      head.dataset.focusId = "trusted-head";
+      wrap.appendChild(head);
+      if (alwaysOn && list.length) wrap.appendChild(div("mail-pop-desc", "Not needed while Always show images is on."));
+      if (removed) {
+         const r = removed;
+         const undo = div("mail-pop-removed");
+         undo.append(span("", `Removed ${r.addr} · `));
+         const btn = textButton("mail-link", "Undo");
+         btn.dataset.focusId = "trust-undo";
+         btn.addEventListener("click", () => {
+            window.clearTimeout(r.timer);
+            removed = null;
+            trustSender(r.addr);
+            renderPopover(); // even when the re-add changed nothing (another tab got there first)
+            focusPop(`trust-${r.addr}`);
+            if (!popover.contains(document.activeElement)) focusPop("trusted-head");
+         });
+         undo.appendChild(btn);
+         wrap.appendChild(undo);
+      }
+      if (!list.length) {
+         wrap.appendChild(div("mail-pop-desc", "None yet · trust a sender from the images bar in a message."));
+         return wrap;
+      }
+      const ul = document.createElement("ul");
+      ul.className = "mail-pop-trust-list";
+      if (list.length > 8) {
+         const f = document.createElement("input");
+         f.type = "search";
+         f.className = "mail-pop-filter";
+         f.placeholder = "Filter";
+         f.setAttribute("aria-label", "Filter trusted senders");
+         f.dataset.focusId = "trust-filter";
+         f.value = trustFilter;
+         /* Only the list re-renders while typing: the field keeps its caret and any IME input. */
+         f.addEventListener("input", () => {
+            trustFilter = f.value;
+            fillTrusted(ul, list);
+         });
+         wrap.appendChild(f);
+      }
+      fillTrusted(ul, list);
+      wrap.appendChild(ul);
+      return wrap;
+   };
+   const fillTrusted = (ul: HTMLUListElement, list: string[]): void => {
+      ul.replaceChildren();
+      const q = list.length > 8 ? trustFilter.trim().toLowerCase() : ""; // no field, no filter
+      const shown = q ? list.filter((a) => a.includes(q)) : list;
+      shown.forEach((addr, i) => {
+         const li = document.createElement("li");
+         li.className = "mail-pop-trust";
+         const name = span("mail-pop-trust-addr", addr);
+         name.title = addr;
+         const x = iconButton("mail-pop-trust-x", "close", `Stop trusting ${addr}`);
+         x.dataset.focusId = `trust-${addr}`;
+         x.addEventListener("click", () => {
+            if (removed) window.clearTimeout(removed.timer);
+            const after = shown[i + 1] ?? shown[i - 1];
+            const timer = window.setTimeout(() => {
+               removed = null;
+               if (popover.hidden) return;
+               const onUndo = (document.activeElement as HTMLElement | null)?.dataset?.focusId === "trust-undo";
+               renderPopover();
+               if (onUndo) focusPop("trusted-head"); // never drop focus to the page (Escape lives on the panel)
+            }, 5000);
+            removed = { addr, timer };
+            userPrefs.update(TRUSTED_SENDERS, (cur) => cur.filter((a) => a !== addr));
+            /* onChange re-rendered the popover: move focus to a neighbour, never to the page. */
+            focusPop(after ? `trust-${after}` : "trusted-head");
+         });
+         li.append(name, x);
+         ul.appendChild(li);
+      });
+   };
+
+   /* Focus a popover control by its focus id (compared, never built into a selector: ids can hold
+      an email address). */
+   const focusPop = (id: string): void => {
+      for (const n of popover.querySelectorAll<HTMLElement>("[data-focus-id]")) {
+         if (n.dataset.focusId === id) {
+            n.focus();
+            return;
+         }
+      }
+   };
+   const renderPopover = (): void => {
+      const focusedId = (document.activeElement as HTMLElement | null)?.dataset?.focusId;
+      popover.replaceChildren();
+      popover.classList.toggle("mail-pop-l2", popLevel === 2);
+      if (popLevel === 1) renderLevel1();
+      else renderLevel2();
       /* Re-rendering replaced the focused control: put focus back on its twin (Escape keeps working). */
-      if (focusedId) popover.querySelector<HTMLElement>(`[data-focus-id="${focusedId}"]`)?.focus();
+      if (focusedId) focusPop(focusedId);
    };
    const openPopover = (): void => {
       renderPopover();
@@ -1448,6 +1859,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const closePopover = (focusTrigger: boolean): void => {
       if (popover.hidden) return;
       popover.hidden = true;
+      popLevel = 1;
+      confirmAlways = false;
+      trustFilter = "";
       filterBtn.setAttribute("aria-expanded", "false");
       if (focusTrigger) filterBtn.focus();
    };
@@ -1479,7 +1893,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          id: `mail-new:${accountId}`,
          kind: "mail",
          summary: st.count === 1 ? `New mail · ${name}` : `${st.count} new · ${name}`,
-         detail: prefs.senderOnly ? `From ${sender}` : `${sender}: ${st.last.subject || "(no subject)"}`,
+         detail: senderOnly() ? `From ${sender}` : `${sender}: ${st.last.subject || "(no subject)"}`,
          tone: "nominal",
          open: { kind: "email", accountId, messageId: st.last.messageId }
       });
@@ -1498,6 +1912,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const timer = window.setTimeout(() => notifyState.delete(row.accountId), NOTIFY_COALESCE_MS);
       notifyState.set(row.accountId, { count: (st?.count ?? 0) + 1, last: row, timer });
       noticeFor(row.accountId);
+      /* One chime per coalesced burst (this screen's choice; never in standby). */
+      if (!st && prefs.chime && !suspended) opts.playChime?.();
    };
 
    /* --- render ------------------------------------------------------------- */
@@ -1555,6 +1971,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* --- expand / collapse --------------------------------------------------- */
    const setExpanded = (on: boolean): void => {
       expanded = on;
+      if (!on) cancelMark(); // collapsing moves on from the message
       try {
          localStorage.setItem(OPEN_KEY, on ? "true" : "false");
       } catch {
@@ -1656,10 +2073,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (act) {
          e.stopPropagation();
          if (performance.now() < lockUntil) return; // a row slid under the cursor: ignore
-         if (act === "mark" && reader?.key === rowKey(row) && reader.state === "loading") return; // its open marks read: wait
+         if (act === "mark" && reader?.key === rowKey(row) && reader.state === "loading") return; // its open may mark read: wait
          if (act === "archive") moveRow(row, "archive");
          else if (act === "trash") moveRow(row, "trash");
-         else if (act === "mark") setUnreadFlag(row, !row.unread);
+         else if (act === "mark") {
+            if (reader?.key === rowKey(row)) cancelMark(); // an explicit choice beats the pending 3 s mark
+            setUnreadFlag(row, !row.unread);
+         }
          return;
       }
       openRow(row, false);
@@ -1708,7 +2128,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (e.key !== "Escape") return;
       if (!popover.hidden) {
          e.preventDefault();
-         closePopover(true);
+         if (popLevel === 2) setLevel(1); // level 2 -> level 1 -> closed
+         else closePopover(true);
       } else if (closeDiscussMenus()) {
          e.preventDefault();
       } else if (query || searchInput.value) {
@@ -1725,15 +2146,18 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const setCounts = (c: EmailUnreadCount[]): void => {
       counts.clear();
       for (const x of c) counts.set(x.accountId, x);
-      renderHead(); // counts touch only the header (and an open popover)
-      if (!popover.hidden) renderPopover();
+      renderHead(); // counts touch only the header (and an open popover's account list, level 1)
+      if (!popover.hidden && popLevel === 1) renderPopover();
    };
 
    const applyChanges = (ch: EmailChanges): void => {
       if (destroyed || !accounts.some((a) => a.id === ch.accountId)) return;
       states.set(ch.accountId, ch.state);
       for (const c of ch.created) queueNotice(c);
-      if (reader && ch.destroyed.some((id) => keyOf(ch.accountId, id) === reader!.key)) reader.state = "gone";
+      if (reader && ch.destroyed.some((id) => keyOf(ch.accountId, id) === reader!.key)) {
+         reader.state = "gone";
+         cancelMark();
+      }
       if (!panelEffective()) {
          /* Nobody is looking at the list: don't grow or reshape it in the background; reload when
             it comes back into view. */
@@ -1824,6 +2248,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const was = linked;
          linked = on;
          syncSubscription();
+         syncMark(); // a pending mark waits out a link loss
          if (on && !was && availability === "available") {
             refreshCounts();
             /* Before the first account list there is nothing to load yet: setAccounts loads then. */
@@ -1885,6 +2310,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          io.disconnect();
          layoutRo.disconnect();
          unfit();
+         cancelMark();
+         unsubPrefs();
+         if (removed) window.clearTimeout(removed.timer);
          document.removeEventListener("visibilitychange", onVisChange);
          document.removeEventListener("pointerdown", onDocPointer);
          window.removeEventListener("pointermove", onPointerMove);

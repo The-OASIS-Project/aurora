@@ -23,6 +23,7 @@
  * Consumer map:       docs/DAWN_UI_SIGNAL_MAP.md
  */
 
+import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
 import type {
    ActivityStatus,
    CalendarEvent,
@@ -1117,6 +1118,7 @@ export class DawnIngest implements Ingest {
    private configSeen = false; // this connection's config (protocol + features) has arrived
    /* The email boundary (EmailSource): availability follows `email_client`; see email-wire.ts. */
    private readonly email = new DawnEmail((m) => this.send(m));
+   private readonly prefs = new LocalUserPrefs();
    /* DAWN supports per-app logins (`app_logins`, learned from /api/auth/status - on load and again
       at login - never mid-connection, so a socket and its later requests always agree on the
       cookie): then every DAWN URL carries ?app=aurora and login sends "app". Sticky for the page;
@@ -5029,6 +5031,7 @@ export class DawnIngest implements Ingest {
    dispose(): void {
       window.removeEventListener("storage", this.onStorage);
       this.disconnect();
+      this.prefs.dispose();
       window.clearTimeout(this.wsStableTimer);
       /* The forget-learned timers: busy re-asks of the count and the forget's no-reply timeout. */
       for (const t of this.learnedRetryTimers) window.clearTimeout(t);
@@ -5095,6 +5098,16 @@ export class DawnIngest implements Ingest {
    /* The Mail panel's source (the email verbs live behind the `email_client` flag). */
    emailSource(): EmailSource {
       return this.email;
+   }
+
+   /* The Mail panel's new-mail chime, through the same player and "Alarm sounds" gate as alarms. */
+   playMailChime(): void {
+      this.alarmChime.playMailChime();
+   }
+
+   /* The user's settings (8.7). In this browser until DAWN advertises a settings store (9.14). */
+   userPrefs(): UserPrefs {
+      return this.prefs;
    }
 
    /* Whether a chat turn can carry an email reference (DAWN's `email_refs` flag; the turn field

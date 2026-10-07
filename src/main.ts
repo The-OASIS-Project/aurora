@@ -285,6 +285,8 @@ if (import.meta.env.DEV) {
 }
 const emailPanel = mountEmailPanel(stage, {
    source: emailSource,
+   prefs: ingest.userPrefs(),
+   playChime: () => ingest.playMailChime(),
    /* "Discuss": the email goes into the composer as a chip (a reference; DAWN fetches and wraps
       the content itself). "Privately" starts a new chat marked private first. */
    onDiscuss: (ref, { newChat }) => {

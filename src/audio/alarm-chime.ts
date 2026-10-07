@@ -41,10 +41,17 @@ const RING_LO = 440;
 const RING_BURST = 0.4; // seconds per tone
 const RING_PERIOD_MS = 3000;
 
+/* New-mail chime: one soft, low two-note rise (G5 then C6), quieter than the alarm tones so it
+   reads as "for your information", never "needs you". */
+const MAIL_NOTES = [783.99, 1046.5];
+const MAIL_NOTE = 0.14;
+const MAIL_PEAK = 0.12;
+
 export class AlarmChime {
    private ctx: AudioContext | null = null;
    private loopTimer = 0;
    private ringTimer = 0;
+   private shotEnd = 0; // context time the last one-shot chime ends (don't suspend under it)
    private enabled: boolean;
 
    constructor(enabled: boolean) {
@@ -74,8 +81,27 @@ export class AlarmChime {
          CHIME_NOTES.forEach((hz, i) => {
             last = this.tone(ctx, hz, t + i * NOTE_DUR, NOTE_DUR);
          });
+         this.shotEnd = Math.max(this.shotEnd, t + CHIME_NOTES.length * NOTE_DUR);
          /* Suspend once the last note ends (and no loop is running), so a one-off chime
             doesn't leave the output thread spinning all session. */
+         if (last) (last as OscillatorNode).onended = (): void => this.suspendIfIdle(ctx);
+      } catch {
+         /* cosmetic */
+      }
+   }
+
+   /* The Mail panel's new-mail chime (opt-in per screen; same "Alarm sounds" gate). */
+   playMailChime(): void {
+      if (!this.enabled) return;
+      const ctx = this.ensure();
+      if (!ctx) return;
+      try {
+         const t = ctx.currentTime;
+         let last: OscillatorNode | null = null;
+         MAIL_NOTES.forEach((hz, i) => {
+            last = this.tone(ctx, hz, t + i * MAIL_NOTE, MAIL_NOTE, MAIL_PEAK);
+         });
+         this.shotEnd = Math.max(this.shotEnd, t + MAIL_NOTES.length * MAIL_NOTE);
          if (last) (last as OscillatorNode).onended = (): void => this.suspendIfIdle(ctx);
       } catch {
          /* cosmetic */
@@ -136,7 +162,7 @@ export class AlarmChime {
 
    /* Release the audio output thread once nothing is looping (a later tone resumes it). */
    private suspendWhenSilent(): void {
-      if (this.loopTimer || this.ringTimer) return;
+      if (this.loopTimer || this.ringTimer || this.chimePlaying()) return;
       try {
          if (this.ctx && this.ctx.state === "running") void this.ctx.suspend().catch(() => {});
       } catch {
@@ -158,14 +184,14 @@ export class AlarmChime {
    /* One sine note with the daemon's linear ADSR: 10% attack to peak, 10% decay to the 0.7
       sustain, 60% sustain, 20% release to zero. Returns the oscillator so the caller can hang
       an onended on the final note. */
-   private tone(ctx: AudioContext, hz: number, start: number, dur: number): OscillatorNode {
+   private tone(ctx: AudioContext, hz: number, start: number, dur: number, peak = PEAK): OscillatorNode {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(hz, start);
-      const sustain = PEAK * SUSTAIN_FRAC;
+      const sustain = peak * SUSTAIN_FRAC;
       gain.gain.setValueAtTime(0, start);
-      gain.gain.linearRampToValueAtTime(PEAK, start + dur * 0.1); // attack
+      gain.gain.linearRampToValueAtTime(peak, start + dur * 0.1); // attack
       gain.gain.linearRampToValueAtTime(sustain, start + dur * 0.2); // decay to sustain
       gain.gain.setValueAtTime(sustain, start + dur * 0.8); // hold sustain
       gain.gain.linearRampToValueAtTime(0, start + dur); // release
@@ -175,9 +201,14 @@ export class AlarmChime {
       return osc;
    }
 
+   /* A one-shot chime is still sounding (another chime's end must not cut it off). */
+   private chimePlaying(): boolean {
+      return !!this.ctx && this.ctx.currentTime < this.shotEnd - 0.01;
+   }
+
    private suspendIfIdle(ctx: AudioContext): void {
       try {
-         if (this.ctx === ctx && !this.loopTimer && !this.ringTimer && ctx.state === "running") {
+         if (this.ctx === ctx && !this.loopTimer && !this.ringTimer && !this.chimePlaying() && ctx.state === "running") {
             void ctx.suspend().catch(() => {});
          }
       } catch {

@@ -209,12 +209,23 @@
    right: 0.4rem;
    z-index: 3;
    min-width: 16rem;
-   max-width: calc(100% - 0.8rem);
+   max-width: min(21rem, calc(100% - 0.8rem)); /* long copy (the images warning) wraps */
    padding: 0.55rem 0.6rem;
    background: color-mix(in srgb, var(--ground-raise) 92%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
    font-size: var(--fs-label);
    color: var(--text-dim);
+   /* A short panel scrolls the options instead of cutting them off. */
+   max-height: min(70vh, calc(100% - 2.6rem));
+   overflow-y: auto;
+   overscroll-behavior: contain;
+   display: flex;
+   flex-direction: column;
+   gap: 0.6rem;
+}
+/* The display above would otherwise beat the hidden attribute's own display:none. */
+.mail-popover[hidden] {
+   display: none;
 }
 .mail-pop-set {
    border: none;
@@ -254,13 +265,105 @@
    color: var(--text-faint);
    font-variant-numeric: tabular-nums;
 }
-.mail-pop-sender {
-   margin-top: 0.45rem;
-   padding-top: 0.45rem;
+.mail-popover input[type="checkbox"],
+.mail-popover input[type="radio"] {
+   accent-color: var(--accent);
+}
+.mail-pop-set .mail-pop-radios {
+   margin-top: 0.15rem;
+}
+.mail-pop-radios legend {
+   padding-bottom: 0.15rem;
+   text-transform: none;
+   letter-spacing: 0;
+   font-size: var(--fs-label);
+   color: var(--text-dim);
+}
+.mail-pop-more,
+.mail-pop-back {
+   background: none;
+   border: none;
+   font: inherit;
+   cursor: pointer;
+   align-self: stretch;
+   padding: 0.3rem 0;
+   text-align: left;
+   color: var(--text-dim);
    border-top: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.mail-popover input[type="checkbox"] {
-   accent-color: var(--accent);
+.mail-pop-back {
+   border-top: none;
+   border-bottom: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.mail-pop-more:hover,
+.mail-pop-back:hover,
+.mail-pop-more:focus-visible,
+.mail-pop-back:focus-visible {
+   color: var(--accent-glow);
+}
+.mail-pop-foot {
+   font-size: var(--fs-nano);
+   color: var(--text-faint);
+}
+/* Meaningful copy (the privacy line, the empty-list hint): --text-dim for contrast, not faint. */
+.mail-pop-desc {
+   padding-left: 1.4rem;
+   white-space: normal;
+   overflow-wrap: anywhere;
+   font-size: var(--fs-nano);
+   line-height: 1.4;
+   color: var(--text-dim);
+}
+.mail-pop-confirm {
+   padding-left: 1.4rem;
+}
+.mail-pop-trusted {
+   display: flex;
+   flex-direction: column;
+   gap: 0.25rem;
+   margin-top: 0.3rem;
+}
+.mail-pop-trusted-head {
+   color: var(--text-dim);
+}
+.mail-pop-trusted-head:focus-visible {
+   outline: 1px solid var(--accent);
+}
+.mail-pop-filter {
+   width: 100%;
+   padding: 0.2rem 0.35rem;
+   font: inherit;
+   color: var(--text);
+   background: transparent;
+   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.mail-pop-trust-list {
+   list-style: none;
+   margin: 0;
+   padding: 0;
+   max-height: 10rem;
+   overflow-y: auto;
+   overscroll-behavior: contain;
+}
+.mail-pop-trust {
+   display: flex;
+   align-items: center;
+   gap: 0.3rem;
+   padding: 0.1rem 0;
+}
+.mail-pop-trust-addr {
+   flex: 1 1 auto;
+   min-width: 0;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   color: var(--text-dim);
+}
+.mail-pop-removed {
+   font-size: var(--fs-nano);
+   color: var(--text-dim);
 }
 
 /* --- body ---------------------------------------------------------------- */
@@ -713,6 +816,10 @@
    font-size: var(--fs-label);
    color: var(--text-dim);
    background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.mail-images-bar .mail-link {
+   overflow-wrap: anywhere; /* a long sender address wraps instead of overflowing the reader */
+   text-align: left;
 }
 .mail-images-bar svg {
    width: 0.9rem;
