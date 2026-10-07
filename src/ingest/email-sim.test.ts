@@ -12,6 +12,7 @@ function recorder(): EmailSink & { changes: EmailChanges[] } {
       setAccounts: () => {},
       setUnreadCounts: () => {},
       setLinked: () => {},
+      setAccountsError: () => {},
       applyChanges: (c) => changes.push(c)
    };
 }
@@ -99,6 +100,6 @@ describe("EmailSim triage", () => {
       const row = (await sim.list({ accountIds: [3], limit: 1 })).rows[0];
       const r = await sim.archive(3, [row.messageId]);
       expect(r.failed[0].code).toBe("READ_ONLY");
-      await expect(sim.setFlags(3, [row.messageId], { unread: true })).rejects.toMatchObject({ code: "READ_ONLY" });
+      await expect(sim.setFlags(3, [row.messageId], { unread: true })).resolves.toBeUndefined(); // read state is allowed
    });
 });

@@ -76,6 +76,48 @@ function isHidden(el: Element): boolean {
    return /display:none|visibility:hidden|opacity:0(?![.\d])/.test(s);
 }
 
+/* An image's intended display size survives markdown (whose image syntax has no size) as a URL
+   fragment the browser never sends: `#aurora-size=WxH`, 0 for an unknown side. render-body reads it
+   back into width/height and drops it. A sender could write one too; it only sizes the image,
+   within the clamp. Without it, an icon drawn from a high-resolution file shows at full size. */
+const SIZE_MAX = 4000;
+const SIZE_FRAGMENT = /^#aurora-size=(\d{1,4})x(\d{1,4})$/;
+
+function px(v: string | null | undefined): number {
+   const m = /^\s*(\d+(?:\.\d+)?)\s*(px)?\s*$/i.exec(v ?? "");
+   if (!m) return 0; // a percentage, auto, or junk: unknown
+   const n = Math.round(Number(m[1]));
+   return n >= 1 && n <= SIZE_MAX ? n : 0;
+}
+
+/* The width and height the sender asked for (attributes first, then simple pixel styles). */
+export function intendedSize(img: Element): { w: number; h: number } {
+   const s = styleOf(img);
+   const fromStyle = (side: string): number => px(new RegExp(`(?:^|;)${side}:([^;]*)`).exec(s)?.[1]);
+   return {
+      w: px(img.getAttribute("width")) || fromStyle("width"),
+      h: px(img.getAttribute("height")) || fromStyle("height")
+   };
+}
+
+/* `src` with the size fragment (replacing any fragment it had: an image's own fragment does nothing). */
+export function withSize(src: string, size: { w: number; h: number }): string {
+   if (!size.w && !size.h) return src;
+   const u = new URL(src);
+   u.hash = `aurora-size=${size.w}x${size.h}`;
+   return u.href;
+}
+
+/* Split a src into the URL to load and the size it carried (0 = unknown). */
+export function readSize(src: string): { src: string; w: number; h: number } {
+   const u = new URL(src);
+   const m = SIZE_FRAGMENT.exec(u.hash);
+   if (!m) return { src, w: 0, h: 0 };
+   u.hash = "";
+   const clamp = (n: number): number => (n >= 1 && n <= SIZE_MAX ? n : 0);
+   return { src: u.href, w: clamp(Number(m[1])), h: clamp(Number(m[2])) };
+}
+
 /* A tracking pixel: tiny or invisible. */
 function isPixel(img: Element): boolean {
    if (isHidden(img)) return true;
@@ -213,7 +255,7 @@ function walk(node: Node, ctx: Ctx, depth: number): string {
          const alt = escapeMd((el.getAttribute("alt") ?? "").replace(/\s+/g, " ").trim());
          if (!src) return alt ? `\\[${alt}\\]` : "";
          if (src.startsWith("https:")) ctx.images++; // http images can never be shown, so they aren't "blocked"
-         return `![${alt}](${mdDest(src)})`;
+         return `![${alt}](${mdDest(withSize(src, intendedSize(el)))})`;
       }
       case "a": {
          const { text, lead, trail } = inlineParts(el, ctx, depth);

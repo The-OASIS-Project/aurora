@@ -703,6 +703,9 @@ const conversation = mountConversation(stage, {
    onImageNeedsText: () => dawn.notifyUser("Add a message to send with the image."),
    imageOnlyTurns: () => dawn.supportsImageOnlyTurns(),
    turnRefs: () => dawn.supportsTurnRefs(),
+   /* A visual's prompt goes only to a DAWN that refuses confirms in it (`visual_prompt_guard`). */
+   visualPrompts: () => dawn.supportsVisualPromptGuard(),
+   onVisualPromptBlocked: () => dawn.notifyUser("This DAWN can't safely take a prompt from a visual - type it instead."),
    structuredDocs: () => dawn.supportsStructuredDocs(),
    documentLimits: () => dawn.documentLimits(),
    notify: (m) => dawn.notifyUser(m),

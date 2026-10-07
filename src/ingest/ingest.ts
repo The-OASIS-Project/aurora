@@ -741,8 +741,9 @@ export interface Ingest {
       whenever images are present - the daemon persists it as [IMAGE:id] markers so images
       survive a reload (hard cut-over, no fallback). `attachments.documents` go as the structured
       `attachments` field for a DAWN taking `document_attachments`; otherwise the caller inlines them
-      into `text`. `attachments.turnRef` rides as `client_ref` under `turn_refs`. */
-   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[] }): void;
+      into `text`. `attachments.turnRef` rides as `client_ref` under `turn_refs`. `attachments.fromVisual` marks a
+      rendered visual's prompt (`from_visual`), so DAWN lets no confirm count in that turn. */
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean }): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */

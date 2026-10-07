@@ -324,13 +324,35 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
 
 /* Install the one delegated message listener (resize + sendPrompt) and a theme-change cache
    invalidator. Returns a disposer. `onPrompt` receives a node's click-to-prompt text. */
+/* A visual's prompt longer than this is cut (DAWN's WebUI uses the same cap). */
+export const VISUAL_PROMPT_MAX = 2000;
+/* At most one visual prompt per this window (about a gesture's activation lifetime). */
+export const VISUAL_PROMPT_GAP_MS = 5000;
+
+/* Whether the page has a recent user gesture. A missing API counts as none. */
+function recentGesture(): boolean {
+   const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+   return !!ua && ua.isActive;
+}
+
+/* The text to send for a visual's prompt, or null to send nothing (no recent gesture, or empty). */
+export function visualPromptText(raw: string, gesture: boolean): string | null {
+   const text = raw.trim();
+   return text && gesture ? text.slice(0, VISUAL_PROMPT_MAX) : null;
+}
+
 export function initVisuals(onPrompt: (text: string) => void): () => void {
    const onMessage = (e: MessageEvent): void => {
       const d = e.data as { type?: string; text?: string; height?: number } | null;
       if (!d || !e.source) return;
       const src = e.source as Window;
       if (d.type === "dawn_prompt" && typeof d.text === "string" && knownWindows.has(src)) {
-         onPrompt(d.text);
+         /* A visual is model-written, so its prompt is not the person speaking: the host sends it
+            as its own turn marked from_visual (DAWN lets no confirm count in that turn). Only after
+            a recent gesture, so a script running on load sends nothing; that is a first filter
+            only (a click anywhere on the page counts), from_visual is the real control. */
+         const text = visualPromptText(d.text, recentGesture());
+         if (text !== null) onPrompt(text);
       } else if (d.type === "dawn_visual_resize") {
          const entry = resizeMap.get(src);
          if (entry && typeof d.height === "number" && d.height > 0 && d.height !== entry.lastH) {

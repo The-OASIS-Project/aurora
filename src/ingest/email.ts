@@ -25,6 +25,14 @@ export type EmailErrorCode =
    | "NO_TRASH"
    | "CANNOT_CALCULATE"
    | "UNSUPPORTED_QUERY"
+   | "INVALID_REQUEST"
+   | "NO_ACCOUNT"
+   | "ACCOUNT_NOT_FOUND"
+   | "BUSY"
+   | "SUPERSEDED"
+   | "SHUTTING_DOWN"
+   | "CANCELLED"
+   | "FAILED"
    | "ALREADY_THERE"
    | "LEFT_FLAGGED"
    | "NOT_REMOVED"
@@ -132,7 +140,7 @@ export interface EmailUndoResult {
 
 export interface EmailUnreadCount {
    accountId: number;
-   inboxUnread: number;
+   inboxUnread: number | null; // null = not known (the count fetch failed or isn't available)
    status: EmailAccountStatus;
 }
 
@@ -174,11 +182,17 @@ export interface EmailSink {
    applyChanges(changes: EmailChanges): void;
    /* The link to the source dropped or returned (offline state; resubscribe + catch up). */
    setLinked(linked: boolean): void;
+   /* The account list couldn't be loaded (the message says why; it is retried), or null once it has. */
+   setAccountsError(message: string | null): void;
 }
 
 export interface EmailSource {
    attach(sink: EmailSink): void;
    detach(): void;
+   /* Whether archive / trash / undo are available (DAWN adds them after list/read). */
+   supportsMoves(): boolean;
+   /* Whether live changes (and so new-mail notifications) are available (DAWN's change feed). */
+   supportsLiveChanges(): boolean;
    list(q: EmailListQuery): Promise<EmailListResult>;
    read(accountId: number, messageId: string, markRead: boolean): Promise<{ message: EmailMessage; unread: boolean }>;
    setFlags(accountId: number, messageIds: string[], flags: { unread?: boolean }): Promise<void>;

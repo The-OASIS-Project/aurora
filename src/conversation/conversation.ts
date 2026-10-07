@@ -20,7 +20,7 @@ import type { EmailRef } from "../ingest/email.ts";
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
 import { renderMarkdown } from "./format.ts";
-import { hasVisual, splitVisualSegments, stripVisualsForStreaming, createVisualFrame, initVisuals } from "./visual.ts";
+import { hasVisual, splitVisualSegments, stripVisualsForStreaming, createVisualFrame, initVisuals, VISUAL_PROMPT_GAP_MS } from "./visual.ts";
 import { emojify } from "../util/emoji.ts";
 import { compressImage } from "../util/image.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
@@ -82,8 +82,14 @@ export interface ConversationOptions {
          images?: OutImage[];
          imageIds?: string[];
          emailRefs?: Array<{ accountId: number; messageId: string }>;
+         /* The text came from a rendered visual's prompt, not the person (sent as from_visual). */
+         fromVisual?: boolean;
       }
    ) => void;
+   /* Whether DAWN refuses confirms in a turn marked from_visual (`visual_prompt_guard`). Absent/false
+      -> a visual's prompt is not sent at all (never as an ordinary turn) and onVisualPromptBlocked says why. */
+   visualPrompts?: () => boolean;
+   onVisualPromptBlocked?: () => void;
    /* Whether a send can go out right now (the link to DAWN is live). Checked BEFORE the composer
       clears or draws anything, so an offline Enter keeps the draft instead of losing it.
       Absent -> always allowed. */
@@ -132,6 +138,7 @@ interface Msg {
    body: HTMLElement;
    text: string;
    id?: number; // server DB message id, once adopted / loaded (dedup key)
+   visual?: boolean; // a rendered visual's prompt, not the person's words (kept out of recall)
 }
 
 const IDLE_MS = 6000; // pointer off the window + settled -> recede
@@ -1011,6 +1018,7 @@ export function mountConversation(
       images: PendingImage[];
       email: EmailRef | null;
       msg: Msg;
+      visual?: boolean; // a rendered visual's prompt: never restored into the person's draft
    }
    let held: SentTurn[] = [];
 
@@ -1371,7 +1379,7 @@ export function mountConversation(
       already attachment-stripped (see appendMsg), so image-only / document-only turns
       come through empty and are skipped - matching WebUI's data-raw-text reader. */
    const userTurnTexts = (): string[] =>
-      messages.filter((m) => m.role === "user" && m.text.trim() !== "").map((m) => m.text);
+      messages.filter((m) => m.role === "user" && !m.visual && m.text.trim() !== "").map((m) => m.text);
 
    /* Place a recalled entry into the composer: fill, resize, caret-to-end. A programmatic
       .value assignment does NOT fire the 'input' event, so this never trips the nav reset
@@ -1473,13 +1481,32 @@ export function mountConversation(
       preventDefaults Enter to accept, and onKeyDown then sees defaultPrevented and stands down. */
    input.addEventListener("keydown", onKeyDown);
 
-   /* Model-visual bridge (resize + click-to-prompt). A node click inside a sandboxed visual
-      fills the composer and submits, the same deliberate user action as typing. */
+   /* Model-visual bridge (resize + click-to-prompt). A visual is model-written (an injected email
+      can ask for one), so its prompt goes as its OWN turn marked from_visual: DAWN then lets no
+      confirm count in it, so a script calling sendPrompt("yes") can't approve a staged action. It
+      never touches the person's draft or pending attachments. */
+   let lastVisualSend = -Infinity;
+   let lastVisualNotice = -Infinity;
    const disposeVisuals = initVisuals((text) => {
-      input.value = text;
-      autoGrow();
-      input.focus();
-      form.requestSubmit();
+      const now = performance.now();
+      /* A refusal says why once per gesture window (a looping script can't stack notices). */
+      const once = (say: (() => void) | undefined): void => {
+         if (now - lastVisualNotice < VISUAL_PROMPT_GAP_MS) return;
+         lastVisualNotice = now;
+         say?.();
+      };
+      if (!(opts.visualPrompts?.() ?? false)) return once(opts.onVisualPromptBlocked);
+      if (opts.canSubmit && !opts.canSubmit()) return once(opts.onSubmitBlocked);
+      /* One prompt per gesture: a gesture's activation lasts a few seconds and nothing consumes it,
+         so a polling script could otherwise send several turns off one click. */
+      if (now - lastVisualSend < VISUAL_PROMPT_GAP_MS) return;
+      lastVisualSend = now;
+      const ref = `${pageTag}-${++turnSeq}`;
+      const msg = appendMsg("user", text);
+      msg.visual = true;
+      held.push({ ref, sentText: text, typed: "", docs: [], images: [], email: null, msg, visual: true });
+      summon();
+      opts.onSubmit?.(text, { turnRef: ref, fromVisual: true });
    });
 
    return {
@@ -1512,7 +1539,7 @@ export function mountConversation(
             which === "image"
                ? held.find((x) => x.images.length > 0)
                : which === "newest"
-                 ? held[held.length - 1]
+                 ? held.filter((x) => !x.visual).at(-1) // a ref-less refusal is of a typed turn
                  : held.find((x) => x.ref === which.ref);
          if (!t) return null;
          held = held.filter((x) => x !== t);
@@ -1521,6 +1548,8 @@ export function mountConversation(
          const i = messages.indexOf(t.msg);
          if (i >= 0) messages.splice(i, 1);
          if (messages.length === 0) win.classList.add("empty");
+         /* A visual's prompt is never put into the person's draft: the bubble going is enough. */
+         if (t.visual) return t.sentText;
          /* Put the turn back in the composer, ahead of anything typed since (merged, never
             dropped), with its attachments. Restored together, so the text can't go out alone. */
          const restore = (imgs: PendingImage[]): void => {

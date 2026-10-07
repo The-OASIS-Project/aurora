@@ -5,6 +5,13 @@ lenses (plan/state-of-the-art, UI, front-end security, render-seam architecture)
 are folded in. The DAWN half (section 9) goes to DAWN after the Aurora mock-up is agreed.
 The Aurora P1 panel is built against a dev simulator (section 13); the DAWN wire is not.
 
+> **Wire status (2026-10-07):** DAWN P1.1 (branch `email-panel`, `f3a6a597`) is wired in
+> `src/ingest/email-wire.ts`: list / search / read / set_flags / unread_counts / list_accounts, each
+> request tagged with a page-unique `req` (matched out of order; SUPERSEDED ignored; one retry on a
+> timeout). DAWN's WEBSOCKET_PROTOCOL.md "Email" section is the source of truth for shapes. Archive /
+> trash / undo (P1.2) and live changes (P1.3) aren't on the wire yet: the panel hides those actions
+> (`supportsMoves()`) and refreshes by hand.
+
 ## 1. Goal
 
 A calm, movable, resizable mail panel in Aurora: scan every inbox in one list, read a message,

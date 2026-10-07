@@ -304,6 +304,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let availability: EmailAvailability = "unknown";
    let linked = false;
    let accounts: EmailAccount[] = [];
+   let accountsKnown = false; // the source has sent its account list at least once
+   let accountsError: string | null = null; // the account list failed to load (it is retried)
    const accountIndex = new Map<number, number>(); // id -> stable color slot (0-based)
    let monograms = new Map<number, string>();
    const counts = new Map<number, EmailUnreadCount>();
@@ -393,6 +395,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const account = (id: number): EmailAccount | undefined => accounts.find((a) => a.id === id);
    const accountName = (id: number): string => account(id)?.displayName || account(id)?.address || "Mail";
    const isReadOnly = (id: number): boolean => account(id)?.readOnly ?? true;
+   /* Archive / trash: not on a read-only account, and only once the source can move mail.
+      Read/unread works everywhere (only the read state changes). */
+   const canMove = (id: number): boolean => !isReadOnly(id) && source.supportsMoves();
    /* The accounts shown. `filter: null` = all; an empty filter = none (the user unchecked every
       account; the list says so and offers Show all). */
    const selectedIds = (): number[] => {
@@ -467,8 +472,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* Listen while the panel is on screen, or (opt-in bells) while it's COLLAPSED or the tab is
       hidden. Turning the panel off in the Panels menu silences it entirely: the bell settings live
       in the panel, so an off panel must not keep raising cards the user can't trace. */
+   const notifyOn = (): boolean => source.supportsLiveChanges() && prefs.notify.length > 0;
    const wantSubscription = (): boolean =>
-      availability === "available" && (panelEffective() || (vis.isVisible() && prefs.notify.length > 0 && linked));
+      availability === "available" && (panelEffective() || (vis.isVisible() && notifyOn() && linked));
    const syncSubscription = (): void => {
       const want = wantSubscription();
       if (want === subscribed) return;
@@ -539,6 +545,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       loading = true;
       loadError = null;
       const gen = listGen;
+      let superseded = false;
       if (rows.length === 0 && !skeletonTimer) {
          skeletonTimer = window.setTimeout(() => {
             showSkeleton = true;
@@ -567,6 +574,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             }
             if (outOfOrder) rows.sort((a, b) => b.date - a.date); // keep newest-first (stable)
             cursor = r.cursor;
+            /* No rows yet the cursor stays set (every account failed this page, or a provider page held
+               nothing to show): stop auto-paging; a deliberate Retry / scroll tries again. */
             lastPageEmpty = r.rows.length === 0 && r.cursor !== null;
             if (advanceAfterPage) {
                advanceAfterPage = false;
@@ -578,6 +587,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          })
          .catch((e: unknown) => {
             if (destroyed || gen !== listGen) return;
+            /* A newer list request from this connection owns the slot: no error, but don't
+               auto-page again off this one (the newer request drives the list). */
+            if (errorCode(e) === "SUPERSEDED") {
+               superseded = true;
+               return;
+            }
             if (errorCode(e) === "CURSOR_STALE" && staleReloads < 2) {
                staleReloads++;
                loading = false;
@@ -593,6 +608,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             clearSkeleton();
             render();
             /* A short first page may not fill the list: keep going while the sentinel shows. */
+            if (superseded) return;
             requestAnimationFrame(() => {
                if (gen === listGen && canAutoPage() && sentinelVisible()) loadMore();
             });
@@ -661,19 +677,24 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const l3 = div("mail-row-preview", r.preview);
       content.append(l1, l2, l3);
       row.append(bar, gutter, content);
-      if (!isReadOnly(r.accountId)) {
+      {
          const actions = span("mail-row-actions");
-         const arch = iconButton("mail-act-archive", "archive", "Archive");
          const mark = iconButton("mail-act-mark", r.unread ? "read" : "unread", r.unread ? "Mark read" : "Mark unread");
-         const del = iconButton("mail-act-trash", "trash", "Move to Trash");
-         arch.dataset.act = "archive";
          mark.dataset.act = "mark";
-         del.dataset.act = "trash";
-         for (const b of [arch, mark, del]) {
+         const btns = [mark];
+         if (canMove(r.accountId)) {
+            const arch = iconButton("mail-act-archive", "archive", "Archive");
+            const del = iconButton("mail-act-trash", "trash", "Move to Trash");
+            arch.dataset.act = "archive";
+            del.dataset.act = "trash";
+            btns.unshift(arch);
+            btns.push(del);
+         }
+         for (const b of btns) {
             b.tabIndex = focused ? 0 : -1; // reachable by Tab from the focused row
             b.disabled = !linked;
          }
-         actions.append(arch, mark, del);
+         actions.append(...btns);
          row.appendChild(actions);
       }
       return row;
@@ -775,6 +796,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const statusText = (): string => {
       if (availability === "unknown") return "Loading…";
       if (availability === "unavailable") return "Mail isn't available on this DAWN.";
+      if (!accountsKnown) return accountsError ? `Couldn't load your mail accounts: ${accountsError}. Trying again…` : "Loading…";
       if (accounts.length === 0) return "Add an email account in DAWN's settings.";
       if (noneSelected()) return "No accounts selected";
       if (rows.length > 0 || showSkeleton || loading) return "";
@@ -785,7 +807,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       return unreadOnly ? "No unread mail" : "No mail";
    };
 
-   const totalUnread = (): number => selectedIds().reduce((s, id) => s + (counts.get(id)?.inboxUnread ?? 0), 0);
+   const totalUnread = (): number => selectedIds().reduce((s, id) => s + (counts.get(id)?.inboxUnread ?? 0), 0); // unknown counts add nothing
 
    let lastTotal = -1;
    const renderHead = (): void => {
@@ -803,17 +825,17 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       tilesEl.replaceChildren();
       for (const id of selectedIds()) {
          const c = counts.get(id);
-         if (!c || (c.inboxUnread === 0 && c.status === "ok")) continue;
+         if (!c || (!c.inboxUnread && c.status === "ok")) continue;
          const t = tile(id, true);
          t.classList.toggle("broken", c.status !== "ok");
          t.removeAttribute("aria-hidden");
-         t.title = c.status === "ok" ? `${accountName(id)}: ${c.inboxUnread} unread` : `${accountName(id)}: needs attention`;
+         t.title = c.status === "ok" ? `${accountName(id)}: ${c.inboxUnread ?? "?"} unread` : `${accountName(id)}: needs attention`;
          t.setAttribute("aria-label", t.title);
          tilesEl.appendChild(t);
       }
       unreadPill.classList.toggle("on", unreadOnly);
       unreadPill.setAttribute("aria-pressed", unreadOnly ? "true" : "false");
-      filterBtn.classList.toggle("on", !filterIsAll() || prefs.notify.length > 0);
+      filterBtn.classList.toggle("on", !filterIsAll() || notifyOn());
    };
 
    const announce = (text: string): void => {
@@ -894,20 +916,25 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          next.addEventListener("click", () => step(1));
          bar.append(prev, next);
       }
-      if (!ro && r.state !== "gone") {
-         const arch = iconButton("mail-r-archive", "archive", "Archive");
-         arch.addEventListener("click", () => moveRow(r.row, "archive"));
+      if (r.state !== "gone") {
          const mark = iconButton("mail-r-mark", "unread", "Mark unread");
          mark.addEventListener("click", () => markUnread(r.row));
-         const del = iconButton("mail-r-trash", "trash", "Move to Trash");
-         del.addEventListener("click", () => moveRow(r.row, "trash"));
+         const acts = [mark];
+         if (!ro && source.supportsMoves()) {
+            const arch = iconButton("mail-r-archive", "archive", "Archive");
+            arch.addEventListener("click", () => moveRow(r.row, "archive"));
+            const del = iconButton("mail-r-trash", "trash", "Move to Trash");
+            del.addEventListener("click", () => moveRow(r.row, "trash"));
+            acts.unshift(arch);
+            acts.push(del);
+         }
          /* Not until the open (which marks read) has landed: a Mark unread racing it would lose.
             The link state is applied in place by syncReaderActions (no rebuild on a link blip). */
-         for (const b of [arch, mark, del]) {
+         for (const b of acts) {
             b.classList.add("mail-r-act");
             b.dataset.ready = ready ? "1" : "";
          }
-         bar.append(arch, mark, del);
+         bar.append(...acts);
       }
       bar.appendChild(span("mail-spacer"));
       if (r.state !== "gone") {
@@ -1084,6 +1111,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          })
          .catch((e: unknown) => {
             if (destroyed || seq !== readSeq || !reader || reader.key !== k) return;
+            if (errorCode(e) === "SUPERSEDED") {
+               /* Our own newer open replaced it (the seq check above already dropped that case);
+                  anything else must not leave the reader stuck on "Loading". */
+               reader.state = "error";
+               reader.error = "it was interrupted";
+               render();
+               return;
+            }
             if (errorCode(e) === "NOT_FOUND") {
                reader.state = "gone";
                removeRows([k]);
@@ -1160,7 +1195,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
 
    const moveRow = (row: EmailRow, kind: "archive" | "trash"): void => {
-      if (!linked || isReadOnly(row.accountId)) return;
+      if (!linked || !canMove(row.accountId)) return;
       const k = rowKey(row);
       const seq = ++actionSeq;
       const index = rows.findIndex((r) => rowKey(r) === k);
@@ -1214,7 +1249,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
 
    const setUnreadFlag = (row: EmailRow, unread: boolean): void => {
-      if (!linked || isReadOnly(row.accountId)) return;
+      if (!linked) return; // read state changes even on a read-only account
       const seq = ++actionSeq;
       const prev = row.unread;
       row.unread = unread;
@@ -1343,23 +1378,27 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          });
          const c = counts.get(a.id);
          lab.append(box, tile(a.id, true), span("mail-pop-name", a.address), span("mail-pop-count", c && c.inboxUnread ? String(c.inboxUnread) : ""));
-         const bell = iconButton("mail-pop-bell", "bell", `Notify me of new mail in ${a.displayName || a.address}`);
-         bell.dataset.focusId = `bell-${a.id}`;
-         const on = prefs.notify.includes(a.id);
-         bell.classList.toggle("on", on);
-         bell.setAttribute("aria-pressed", on ? "true" : "false");
-         bell.addEventListener("click", () => {
-            prefs.notify = on ? prefs.notify.filter((x) => x !== a.id) : [...prefs.notify, a.id];
-            savePrefs();
-            syncSubscription();
-            renderPopover();
-            renderHead();
-         });
-         row.append(lab, bell);
+         row.append(lab);
+         /* New-mail notifications need the source's live changes: no bell until it has them. */
+         if (source.supportsLiveChanges()) {
+            const bell = iconButton("mail-pop-bell", "bell", `Notify me of new mail in ${a.displayName || a.address}`);
+            bell.dataset.focusId = `bell-${a.id}`;
+            const on = prefs.notify.includes(a.id);
+            bell.classList.toggle("on", on);
+            bell.setAttribute("aria-pressed", on ? "true" : "false");
+            bell.addEventListener("click", () => {
+               prefs.notify = on ? prefs.notify.filter((x) => x !== a.id) : [...prefs.notify, a.id];
+               savePrefs();
+               syncSubscription();
+               renderPopover();
+               renderHead();
+            });
+            row.append(bell);
+         }
          fs.appendChild(row);
       }
       popover.appendChild(fs);
-      if (prefs.notify.length) {
+      if (notifyOn()) {
          const so = document.createElement("label");
          so.className = "mail-pop-row mail-pop-sender";
          const box = document.createElement("input");
@@ -1427,7 +1466,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       notifyState.delete(accountId);
    };
    const queueNotice = (row: EmailRow): void => {
-      if (!prefs.notify.includes(row.accountId) || !row.unread || !vis.isVisible()) return;
+      if (!source.supportsLiveChanges() || !prefs.notify.includes(row.accountId) || !row.unread || !vis.isVisible()) return;
       if (panelEffective()) return; // they're looking at the list: the arrival itself is the signal
       const st = notifyState.get(row.accountId);
       /* The window runs from the LAST arrival, so the card's count and the coalescing agree. */
@@ -1732,17 +1771,28 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       setAvailability: (a) => {
          const was = availability;
          availability = a;
-         if (a === "available" && was !== "available" && panelEffective()) reload();
+         /* Loading waits for the link (the source reports it only once the flags are known); the
+            link-up branch below then loads or catches up. */
+         if (a === "available" && was !== "available" && linked && panelEffective()) reload();
          syncSubscription();
          render();
       },
       setAccounts: (list) => {
+         const same =
+            list.length === accounts.length &&
+            list.every((a, i) => a.id === accounts[i]?.id && a.address === accounts[i].address && a.displayName === accounts[i].displayName && a.readOnly === accounts[i].readOnly);
+         if (same && accountsKnown) return; // a reconnect re-sent the same accounts: keep the list (and its scroll)
+         accountsKnown = true;
          accounts = list.slice();
          computeIdentity();
          rowEls.clear();
          readerSig = "";
          if (panelEffective()) reload();
          else render();
+      },
+      setAccountsError: (message) => {
+         accountsError = message;
+         render();
       },
       setUnreadCounts: setCounts,
       applyChanges,
@@ -1752,7 +1802,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          syncSubscription();
          if (on && !was && availability === "available") {
             refreshCounts();
-            if (panelEffective() && (listStale || rows.length === 0)) reload();
+            /* Before the first account list there is nothing to load yet: setAccounts loads then. */
+            if (!accountsKnown) render();
+            else if (!source.supportsLiveChanges()) {
+               /* No change feed to catch up from: what arrived while down is learned by loading again. */
+               if (panelEffective()) reload();
+               else listStale = true;
+            } else if (panelEffective() && (listStale || rows.length === 0)) reload();
             else catchUp();
          }
          render();

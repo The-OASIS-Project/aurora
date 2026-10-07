@@ -107,6 +107,9 @@ const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after 
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
+/* A connection must stay up this long before the backoff resets: one that dies right after opening
+   (e.g. a frame the browser refuses, which fails the socket) otherwise reconnects every second forever. */
+const MAIN_WS_STABLE_MS = 10_000;
 
 /* Liveness heartbeat. A half-open socket (TCP alive, but DAWN's session is gone or the
    backend was silently dropped by a proxy) leaves readyState OPEN forever, so onclose never
@@ -857,6 +860,7 @@ export class DawnIngest implements Ingest {
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
+   private wsStableTimer = 0; // resets wsFails once the current connection has stayed up
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
    private superseded = false; // another tab took over (WS close 4001); we backed off, awaiting a reclaim() gesture
@@ -1112,7 +1116,7 @@ export class DawnIngest implements Ingest {
    private serverFeatures: Set<string> | null = null;
    private configSeen = false; // this connection's config (protocol + features) has arrived
    /* The email boundary (EmailSource): availability follows `email_client`; see email-wire.ts. */
-   private readonly email = new DawnEmail();
+   private readonly email = new DawnEmail((m) => this.send(m));
    /* DAWN supports per-app logins (`app_logins`, learned from /api/auth/status - on load and again
       at login - never mid-connection, so a socket and its later requests always agree on the
       cookie): then every DAWN URL carries ?app=aurora and login sends "app". Sticky for the page;
@@ -1333,7 +1337,11 @@ export class DawnIngest implements Ingest {
       this.ws = ws;
 
       ws.onopen = (): void => {
-         this.wsFails = 0; // a clean open resets the reconnect backoff
+         /* The backoff resets only once this connection proves stable, not on the open itself. */
+         window.clearTimeout(this.wsStableTimer);
+         this.wsStableTimer = window.setTimeout(() => {
+            if (this.ws === ws) this.wsFails = 0;
+         }, MAIN_WS_STABLE_MS);
          /* Resume the stored session if we have one, else start a fresh session.
             Resuming is what keeps us from burning a session slot on every reload.
             The `audio_codecs` capability is BIDIRECTIONAL on DAWN (one use_opus flag drives
@@ -1461,6 +1469,7 @@ export class DawnIngest implements Ingest {
             it) the cleanup below must still run - so guard on `this.ws && this.ws !== ws`. */
          if (this.ws && this.ws !== ws) return;
          this.ws = null;
+         window.clearTimeout(this.wsStableTimer); // it didn't last: the backoff keeps growing
          this.capsSynced = false; // a new session must re-confirm before Opus is safe again
          this.stopHeartbeat(); // the socket is gone; the session-frame restarts it on reconnect
          /* Drop any in-flight re-anchor: the fresh reconnect issues its own, so a stale
@@ -1869,12 +1878,12 @@ export class DawnIngest implements Ingest {
             this.serverFeatures = Array.isArray(p.features)
                ? new Set((p.features as unknown[]).filter((f): f is string => typeof f === "string"))
                : null;
-            this.email.setServerSupport(this.hasFeature("email_client"));
             if (typeof p.protocol === "number" && p.protocol !== CLIENT_PROTOCOL) {
                this.disconnect(true);
                this.emit("error", protocolMismatchText(p.protocol, this.dawnVersion));
                break;
             }
+            this.email.setServerSupport(this.hasFeature("email_client"));
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -3593,6 +3602,8 @@ export class DawnIngest implements Ingest {
          }
 
          default:
+            /* The mail panel's replies (email_*_response), matched by req in email-wire.ts. */
+            if (this.email.handleFrame(type, p as Record<string, unknown>)) break;
             /* Log each unseen type ONCE — this is our live map of what to wire
                next (attention_alert, scheduler_notification, job_*, music_*, ...). */
             if (!this.seenUnhandled.has(type)) {
@@ -4769,7 +4780,7 @@ export class DawnIngest implements Ingest {
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
-   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[] }): void {
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean }): void {
       /* Don't let a message vanish into a dead/half-open link: tell the user instead of
          silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
       if (!this.isLinkLive()) {
@@ -4802,6 +4813,7 @@ export class DawnIngest implements Ingest {
          images?: OutImage[];
          image_ids?: string[];
          client_ref?: string;
+         from_visual?: boolean;
          attachments?: Array<{ filename: string; size: number; content: string; blob_id?: string }>;
       } = { text };
       /* document_attachments (+ turn_refs): documents as a structured field; DAWN builds the
@@ -4817,6 +4829,9 @@ export class DawnIngest implements Ingest {
       /* turn_refs: tag the turn so its echo and any refusal name it exactly. */
       if (attachments?.turnRef && this.hasFeature("turn_refs")) payload.client_ref = attachments.turnRef;
       if (this.convId > 0) payload.conversation_id = this.convId;
+      /* A rendered visual's prompt, not the person: DAWN lets no confirm count in this turn (a
+         model-written script calling sendPrompt("yes") must not approve a staged action). */
+      if (attachments?.fromVisual) payload.from_visual = true;
       /* Image attachments: the MANDATORY image_ids (the /api/images upload ids, order-matched),
          which the daemon reads, sends to the model, and persists as [IMAGE:<id>] markers. A DAWN
          advertising `image_turns_by_id` takes images ONLY that way (it ignores base64); an older
@@ -5014,6 +5029,7 @@ export class DawnIngest implements Ingest {
    dispose(): void {
       window.removeEventListener("storage", this.onStorage);
       this.disconnect();
+      window.clearTimeout(this.wsStableTimer);
       /* The forget-learned timers: busy re-asks of the count and the forget's no-reply timeout. */
       for (const t of this.learnedRetryTimers) window.clearTimeout(t);
       this.learnedRetryTimers.clear();
@@ -5038,6 +5054,7 @@ export class DawnIngest implements Ingest {
       this.mic.dispose();
       this.ding.dispose();
       this.phone.dispose();
+      this.email.dispose();
       this.alarmChime.dispose();
    }
 
@@ -5057,6 +5074,12 @@ export class DawnIngest implements Ingest {
       config field names are confirmed; the daemon enforces them regardless (ATTACHMENT_INVALID). */
    documentLimits(): { maxDocuments: number; maxContentBytes: number } {
       return { maxDocuments: 5, maxContentBytes: 1024 * 1024 };
+   }
+
+   /* Whether DAWN refuses every confirm in a turn marked from_visual: the `visual_prompt_guard` flag.
+      Without it an older DAWN ignores the mark, so a visual's prompt would count as the person's. */
+   supportsVisualPromptGuard(): boolean {
+      return this.hasFeature("visual_prompt_guard");
    }
 
    /* Whether DAWN echoes a turn reference on the echo and on refusals: the `turn_refs` flag. */
@@ -5091,7 +5114,7 @@ export class DawnIngest implements Ingest {
    private emit(status: LinkStatus, detail?: string): void {
       this.lastStatus = status;
       this.lastDetail = detail ?? "";
-      this.email.setLinked(status === "connected");
+      this.email.setLinked(status === "connected" || status === "stale"); // stale = socket still open
       /* Link down: an unechoed turn's fate can't be learned now; stop holding drafts for them. Not on
          "stale" (one missed heartbeat): the socket is still open and refusals still arrive. */
       if (status !== "connected" && status !== "stale" && this.sinks) this.sinks.conversation.releaseTurns();

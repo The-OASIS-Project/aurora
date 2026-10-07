@@ -315,6 +315,14 @@ export class EmailSim implements EmailSource {
 
    /* --- EmailSource ------------------------------------------------------ */
 
+   supportsMoves(): boolean {
+      return true;
+   }
+
+   supportsLiveChanges(): boolean {
+      return true;
+   }
+
    attach(sink: EmailSink): void {
       this.sink = sink;
       sink.setAvailability("available");
@@ -422,8 +430,7 @@ export class EmailSim implements EmailSource {
 
    async setFlags(accountId: number, messageIds: string[], flags: { unread?: boolean }): Promise<void> {
       await this.wait();
-      const acct = this.account(accountId);
-      if (acct.readOnly) throw new EmailRequestError("READ_ONLY", "This account is read-only");
+      this.account(accountId); // read state changes even on a read-only account (as DAWN allows)
       const updated: EmailRow[] = [];
       for (const id of messageIds) {
          const { list, index } = this.find(accountId, id);

@@ -176,6 +176,36 @@ describe("renderEmailBody", () => {
       expect(shown.querySelectorAll(".mail-img-blocked").length).toBe(1);
    });
 
+   it("keeps each image's intended size, and loads it without the size fragment", () => {
+      const html =
+         '<img src="https://a.example.com/icon.png" width="24" height="24" alt="Nav">' +
+         '<img src="https://a.example.com/hero.jpg#top" style="width: 600px" alt="Hero">' +
+         '<img src="https://a.example.com/bar.png" height="40" alt="Bar">' +
+         '<img src="https://a.example.com/full.png" width="100%" alt="Full">';
+      const imgs = Array.from(render(html, true).querySelectorAll("img"));
+      expect(imgs.map((i) => i.getAttribute("src"))).toEqual([
+         "https://a.example.com/icon.png",
+         "https://a.example.com/hero.jpg",
+         "https://a.example.com/bar.png",
+         "https://a.example.com/full.png"
+      ]);
+      expect(imgs.map((i) => [i.getAttribute("width"), i.getAttribute("height")])).toEqual([
+         ["24", "24"],
+         ["600", null],
+         [null, "40"],
+         [null, null] // a percentage isn't a pixel size: CSS fits it
+      ]);
+      expect(imgs[2].classList.contains("mail-img-h")).toBe(true);
+   });
+
+   it("clamps a size a sender wrote into the fragment themselves", () => {
+      const imgs = Array.from(render('<img src="https://a.example.com/x.png#aurora-size=99999x0" alt="x"><img src="https://a.example.com/y.png#aurora-size=0x9000" alt="y">', true).querySelectorAll("img"));
+      for (const img of imgs) {
+         expect(img.getAttribute("width")).toBeNull();
+         expect(img.getAttribute("height")).toBeNull();
+      }
+   });
+
    it("leaves no URL attribute except safe links and shown https images", () => {
       const html = `<a href="https://ok.example.com">ok</a><a href="/api/auth/logout">same</a>
          <a href="javascript:alert(1)">js</a><div style="background:url(https://t.example.com/bg.png)">bg</div>

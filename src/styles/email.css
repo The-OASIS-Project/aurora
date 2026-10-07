@@ -515,6 +515,9 @@
    font-size: var(--fs-label);
    color: var(--text-faint);
 }
+.mail-row-preview:empty {
+   display: none; /* IMAP rows carry no snippet (yet) */
+}
 .mail-row.unread .mail-row-from,
 .mail-row.unread .mail-row-subject {
    color: var(--text);
@@ -764,9 +767,16 @@
    border: none;
    border-top: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
 }
+/* The sender's width/height attributes size an image; height:auto keeps its shape when the width is
+   capped to the reader. An image given only a height (mail-img-h) keeps that height instead. */
 .mail-reader-body img {
    max-width: 100%;
+}
+.mail-reader-body img:not(.mail-img-h) {
    height: auto;
+}
+.mail-reader-body img.mail-img-h {
+   object-fit: contain; /* a capped width letterboxes it rather than squashing it */
 }
 .mail-reader-body table {
    border-collapse: collapse;

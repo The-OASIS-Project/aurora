@@ -18,7 +18,7 @@
 
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
-import { htmlToMarkdown, safeUrl } from "./html-to-md.ts";
+import { htmlToMarkdown, readSize, safeUrl } from "./html-to-md.ts";
 
 const escapeHtml = (s: string): string =>
    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -64,7 +64,15 @@ purify.addHook("afterSanitizeAttributes", (node) => {
       node.setAttribute("rel", "noopener noreferrer");
       if (!href.startsWith("mailto:")) node.setAttribute("title", new URL(href).hostname);
    } else if (tag === "img") {
-      const src = safeUrl(node.getAttribute("src"), "image");
+      const safe = safeUrl(node.getAttribute("src"), "image");
+      /* The sender's intended size (carried through markdown as a fragment), so an icon drawn from
+         a big file stays icon-sized; CSS still caps the width to the reader. Set on blocked images
+         too, harmlessly (a placeholder replaces them). */
+      const sized = safe ? readSize(safe) : null;
+      if (sized?.w) node.setAttribute("width", String(sized.w));
+      if (sized?.h) node.setAttribute("height", String(sized.h));
+      if (sized?.h && !sized.w) node.classList.add("mail-img-h"); // only a height: honour it (CSS)
+      const src = sized?.src ?? null;
       if (showImagesNow && src && src.startsWith("https:")) {
          node.setAttribute("src", src);
          node.setAttribute("referrerpolicy", "no-referrer");
