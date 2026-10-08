@@ -69,6 +69,9 @@ export interface EmailPanelOptions {
    playChime?(): void;
    /* Hand a message to the assistant: a new private chat, or the current one. */
    onDiscuss(ref: EmailRef, opts: { newChat: boolean }): void;
+   /* Whether a chat turn can carry an email reference (DAWN's `email_refs`): the Discuss controls
+      exist only then (absent = never), so nothing visible waits on DAWN work that isn't there. */
+   canDiscuss?(): boolean;
    /* Raise / clear a new-mail notification card (opt-in per account). */
    notify(notice: Notice): void;
    removeNotice(id: string): void;
@@ -467,6 +470,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* Archive / trash: not on a read-only account, and only once the source can move mail.
       Read/unread works everywhere (only the read state changes). */
    const canMove = (id: number): boolean => !isReadOnly(id) && source.supportsMoves();
+   /* Re-read on every reader render: the link-up after each config frame re-renders, so the controls
+      follow DAWN's features as they change across reconnects. */
+   const canDiscuss = (): boolean => opts.canDiscuss?.() ?? false;
    /* Per action: hidden only when DAWN says the account has no Archive / Trash (unknown = offered,
       and the refusal explains). */
    const canArchive = (id: number): boolean => canMove(id) && account(id)?.canArchive !== false;
@@ -977,7 +983,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       /* The read state is NOT here (the mark toggle flips in place, syncReaderActions): a rebuild
          would throw the reader back to the top. Trust IS, only as far as this message's bar shows it. */
       const stopBar = !!reader.autoImages && !alwaysImages() && !!reader.fromKey && trustedSenders().has(reader.fromKey);
-      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, isReadOnly(id), canArchive(id), canTrash(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
+      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, canDiscuss(), isReadOnly(id), canArchive(id), canTrash(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
    };
 
    const renderReader = (): void => {
@@ -1038,7 +1044,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          bar.append(...acts);
       }
       bar.appendChild(span("mail-spacer"));
-      if (r.state !== "gone") {
+      if (r.state !== "gone" && canDiscuss()) {
          if (compactDiscuss) {
             const wrap = span("mail-discuss-menu");
             const btn = textButton("mail-discuss-btn mail-primary", "Discuss ▾");
@@ -1177,7 +1183,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                chip.appendChild(icon("clip"));
                chip.appendChild(span("mail-attachment-name", a.filename || "attachment"));
                chip.appendChild(span("mail-attachment-size", fmtBytes(a.size)));
-               chip.title = `${a.mime} · downloads come later`;
+               chip.title = a.mime; // listed only (downloads are a later phase, not promised here)
                att.appendChild(chip);
             }
             if (m.attachmentsTruncated) att.appendChild(span("mail-attachment-more", "More attachments than shown"));

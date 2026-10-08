@@ -289,6 +289,8 @@ const emailPanel = mountEmailPanel(stage, {
    playChime: () => ingest.playMailChime(),
    /* "Discuss": the email goes into the composer as a chip (a reference; DAWN fetches and wraps
       the content itself). "Privately" starts a new chat marked private first. */
+   /* Discuss appears only once DAWN takes an email in a chat turn (`email_refs`, P1.4). */
+   canDiscuss: () => dawn.supportsEmailRefs(),
    onDiscuss: (ref, { newChat }) => {
       if (!newChat) {
          conversation.addEmailRef(ref);

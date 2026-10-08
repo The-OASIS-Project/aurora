@@ -316,4 +316,20 @@ describe("Mail options (3.9)", () => {
       panel.destroy();
       prefs.dispose();
    });
+
+   it("shows Discuss only when DAWN can take an email in a chat turn", async () => {
+      for (const can of [false, true]) {
+         const prefs = new LocalUserPrefs();
+         const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
+         const panel = mountEmailPanel(document.body, { source: sim, prefs, canDiscuss: () => can, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+         panel.setVisible(true);
+         await flush();
+         document.querySelector<HTMLElement>(".mail-row")!.click();
+         await flush();
+         expect(document.body.textContent?.includes("Discuss")).toBe(can);
+         panel.destroy();
+         prefs.dispose();
+         document.body.replaceChildren();
+      }
+   });
 });
