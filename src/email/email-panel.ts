@@ -849,6 +849,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (code === "AUTH_REVOKED" || code === "AUTH_FAILED") return `${name} needs reconnecting in DAWN's settings`;
       if (code === "UNREACHABLE" || code === "TIMEOUT") return `Couldn't reach ${name}`;
       if (code === "UNSUPPORTED_QUERY") return `Search for non-English text isn't supported on ${name}`;
+      /* The account listed, but its server refused some rows (too many requests): its other rows stay
+         on screen; Retry reloads from the top, which is the only way back to the refused ones. */
+      if (code === "RATE_LIMITED") return `${name} sent only part of this list (too many requests). Retry in a moment`;
       return `${name} had a problem loading mail`;
    };
 
