@@ -36,6 +36,9 @@ export type EmailErrorCode =
    | "ALREADY_THERE"
    | "LEFT_FLAGGED"
    | "NOT_REMOVED"
+   | "OUTCOME_UNKNOWN" // the server didn't confirm a move: refresh, never retry
+   | "UNDO_EXPIRED"
+   | "IN_TRASH" // Gmail: archiving a message that's in Trash or Spam
    | "UNAVAILABLE";
 
 export type EmailAccountStatus = "ok" | "auth_revoked" | "auth_failed" | "unreachable";
@@ -46,6 +49,10 @@ export interface EmailAccount {
    address: string;
    displayName: string;
    readOnly: boolean;
+   /* Whether the account has a Trash / an Archive to move to (undefined = not known yet: offer the
+      action and let the refusal explain). */
+   canTrash?: boolean;
+   canArchive?: boolean;
 }
 
 /* A list row. A message is identified by the PAIR (accountId, messageId): IMAP ids are
@@ -122,10 +129,13 @@ export interface EmailListResult {
    partial: Array<{ accountId: number } & EmailFailure>;
 }
 
-/* A move the user can take back: the token reverses it server-side for a short while. */
+/* A finished move. `messageId` is the id as the server knows it (it may differ from the one sent,
+   e.g. gaining an IMAP UIDVALIDITY suffix); `undo` reverses it server-side for a short while, or is
+   null when it can't be undone (already there, or the server can't say where it went). */
 export interface EmailUndoable {
    messageId: string;
-   undo: string;
+   undo: string | null;
+   leftFlagged?: boolean; // IMAP without MOVE: copied and marked deleted, removed at the next expunge
 }
 
 export interface EmailMoveResult {
@@ -134,7 +144,7 @@ export interface EmailMoveResult {
 }
 
 export interface EmailUndoResult {
-   restored: Array<{ undo: string; row: EmailRow }>;
+   restored: Array<{ undo: string; row: EmailRow | null }>; // null: back, but unreadable (reload)
    failed: Array<{ undo: string } & EmailFailure>;
 }
 
@@ -147,10 +157,15 @@ export interface EmailUnreadCount {
 /* A delta for one account (JMAP-style): what was created, changed, or removed since `state`. */
 export interface EmailChanges {
    accountId: number;
-   state: string;
+   state: string | null; // null: no change-feed position (a move's own notice, before P1.3)
    created: EmailRow[];
    updated: EmailRow[];
    destroyed: string[];
+   /* A move or undo's notice (not new mail): never a new-mail notification. */
+   kind?: "trash" | "archive";
+   undo?: boolean;
+   /* Reload this account's lists (a row couldn't be read, or a move may have happened unanswered). */
+   refresh?: boolean;
 }
 
 /* A reference the user hands to the assistant ("Discuss"). The panel and the conversation view

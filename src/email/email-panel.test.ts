@@ -242,4 +242,78 @@ describe("Mail options (3.9)", () => {
       panel.destroy();
       prefs.dispose();
    });
+
+   it("groups archives of one account into one Undo that takes them all back", async () => {
+      const prefs = new LocalUserPrefs();
+      const panel = await mountWith(prefs);
+      const before = document.querySelectorAll(".mail-row").length;
+      const archiveFirstOf = (acct: string): void => {
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         row.querySelector<HTMLButtonElement>('[data-act="archive"]')!.click();
+      };
+      archiveFirstOf("1");
+      await flush();
+      await new Promise((r) => setTimeout(r, 450)); // past the reflow lock that guards a row sliding under the pointer
+      archiveFirstOf("1");
+      await flush();
+      expect(document.querySelector(".mail-toast-text")?.textContent).toBe("Archived 2");
+      expect(document.querySelectorAll(".mail-row").length).toBe(before - 2);
+      (document.querySelector(".mail-toast-undo") as HTMLButtonElement).click();
+      await flush();
+      await flush();
+      expect(document.querySelectorAll(".mail-row").length).toBe(before);
+      panel.destroy();
+      prefs.dispose();
+   });
+
+   it("keeps both Undos when the second click comes before the first move has answered", async () => {
+      const prefs = new LocalUserPrefs();
+      const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
+      const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      panel.setVisible(true);
+      await flush();
+      const before = document.querySelectorAll(".mail-row").length;
+      /* A slow DAWN from here on: each move takes 600 ms to answer. */
+      const archive = sim.archive.bind(sim);
+      sim.archive = (a, ids) => new Promise((r) => setTimeout(() => r(archive(a, ids)), 600));
+      const archiveFirstOf = (acct: string): void => {
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         row.querySelector<HTMLButtonElement>('[data-act="archive"]')!.click();
+      };
+      archiveFirstOf("1");
+      await new Promise((r) => setTimeout(r, 450)); // the first is still on its way
+      archiveFirstOf("1");
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(document.querySelector(".mail-toast-text")?.textContent).toBe("Archived 2");
+      (document.querySelector(".mail-toast-undo") as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(document.querySelectorAll(".mail-row").length).toBe(before);
+      panel.destroy();
+      prefs.dispose();
+   });
+
+   it("puts archives and trashes from any account in one group with one Undo", async () => {
+      const prefs = new LocalUserPrefs();
+      const panel = await mountWith(prefs);
+      const before = document.querySelectorAll(".mail-row").length;
+      const act = (acct: string, what: "archive" | "trash"): void => {
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         row.querySelector<HTMLButtonElement>(`[data-act="${what}"]`)!.click();
+      };
+      const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 450)); // past the reflow lock
+      act("1", "archive");
+      await settle();
+      act("2", "trash"); // another account (IMAP: its undo brings it back under a new id)
+      await settle();
+      act("1", "archive");
+      await flush();
+      expect(document.querySelector(".mail-toast-text")?.textContent).toBe("2 archived, 1 moved to Trash");
+      expect(document.querySelectorAll(".mail-row").length).toBe(before - 3);
+      (document.querySelector(".mail-toast-undo") as HTMLButtonElement).click();
+      await flush();
+      await flush();
+      expect(document.querySelectorAll(".mail-row").length).toBe(before);
+      panel.destroy();
+      prefs.dispose();
+   });
 });

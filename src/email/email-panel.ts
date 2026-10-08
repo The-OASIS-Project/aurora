@@ -130,8 +130,15 @@ interface Reader {
 }
 
 interface Toast {
-   accountId: number;
-   tokens: string[];
+   /* Every move in the group that can be undone, from any account (one undo call per account). */
+   tokens: Array<{ accountId: number; token: string }>;
+   move: boolean; // a move's toast (a plain message never groups)
+   archived: number;
+   trashed: number;
+   groupStart: number; // when the group's first move landed (its tokens expire 60 s after their move)
+   baseText: string; // the toast's own text
+   note: string; // a failure shown beside it (kept across joins)
+   expiry: number; // hides a move group before its oldest token expires, paused or not
    remaining: number;
    startedAt: number;
    timer: number;
@@ -460,6 +467,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* Archive / trash: not on a read-only account, and only once the source can move mail.
       Read/unread works everywhere (only the read state changes). */
    const canMove = (id: number): boolean => !isReadOnly(id) && source.supportsMoves();
+   /* Per action: hidden only when DAWN says the account has no Archive / Trash (unknown = offered,
+      and the refusal explains). */
+   const canArchive = (id: number): boolean => canMove(id) && account(id)?.canArchive !== false;
+   const canTrash = (id: number): boolean => canMove(id) && account(id)?.canTrash !== false;
    /* The accounts shown. `filter: null` = all; an empty filter = none (the user unchecked every
       account; the list says so and offers Show all). */
    const selectedIds = (): number[] => {
@@ -712,6 +723,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          k === selectedKey,
          k === focusKey,
          isReadOnly(r.accountId),
+         canArchive(r.accountId),
+         canTrash(r.accountId),
          accountIndex.get(r.accountId),
          monograms.get(r.accountId),
          tz,
@@ -752,12 +765,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const mark = iconButton("mail-act-mark", r.unread ? "read" : "unread", r.unread ? "Mark read" : "Mark unread");
          mark.dataset.act = "mark";
          const btns = [mark];
-         if (canMove(r.accountId)) {
+         if (canArchive(r.accountId)) {
             const arch = iconButton("mail-act-archive", "archive", "Archive");
-            const del = iconButton("mail-act-trash", "trash", "Move to Trash");
             arch.dataset.act = "archive";
+            btns.push(arch); // read/unread, archive, then (set apart) trash
+         }
+         if (canTrash(r.accountId)) {
+            const del = iconButton("mail-act-trash", "trash", "Move to Trash");
             del.dataset.act = "trash";
-            btns.unshift(arch);
             btns.push(del);
          }
          for (const b of btns) {
@@ -959,7 +974,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       /* The read state is NOT here (the mark toggle flips in place, syncReaderActions): a rebuild
          would throw the reader back to the top. Trust IS, only as far as this message's bar shows it. */
       const stopBar = !!reader.autoImages && !alwaysImages() && !!reader.fromKey && trustedSenders().has(reader.fromKey);
-      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, isReadOnly(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
+      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, isReadOnly(id), canArchive(id), canTrash(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
    };
 
    const renderReader = (): void => {
@@ -1001,12 +1016,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             else markUnread(cur);
          });
          const acts = [markBtn];
-         if (!ro && source.supportsMoves()) {
+         if (!ro && canArchive(r.row.accountId)) {
             const arch = iconButton("mail-r-archive", "archive", "Archive");
             arch.addEventListener("click", () => moveRow(r.row, "archive"));
+            acts.push(arch); // read/unread, archive, then (set apart) trash
+         }
+         if (!ro && canTrash(r.row.accountId)) {
             const del = iconButton("mail-r-trash", "trash", "Move to Trash");
             del.addEventListener("click", () => moveRow(r.row, "trash"));
-            acts.unshift(arch);
             acts.push(del);
          }
          /* Not until the open (which marks read) has landed: a Mark unread racing it would lose.
@@ -1331,7 +1348,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (full) {
          const msg = "The trusted senders list is full. Remove one in Mail options first.";
          if (toast && toast.tokens.length) announce(msg); // never take over a live Undo
-         else showToast(msg, reader?.row.accountId ?? 0, []);
+         else showToast(msg);
       }
    };
    const untrustSender = (addr: string): void => {
@@ -1406,8 +1423,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       lockY = pointerY;
    };
 
+   /* Show what's really there now: reload if the list is on screen and connected, else on return. */
+   const refreshList = (): void => {
+      if (panelEffective() && linked) reload();
+      else listStale = true;
+   };
+
    const moveRow = (row: EmailRow, kind: "archive" | "trash"): void => {
-      if (!linked || !canMove(row.accountId)) return;
+      if (!linked || !(kind === "archive" ? canArchive(row.accountId) : canTrash(row.accountId))) return;
       const k = rowKey(row);
       const seq = ++actionSeq;
       const index = rows.findIndex((r) => rowKey(r) === k);
@@ -1444,32 +1467,83 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const verb = kind === "archive" ? "archive" : "move to Trash";
       const restore = (why: string): void => {
          if (destroyed) return;
+         advanceFrom = null; // the move failed: don't open a row in its place
          if (!rows.some((r) => rowKey(r) === k)) {
             rows.splice(Math.min(Math.max(index, 0), rows.length), 0, row);
             lockReflow();
          }
          /* Never let an older action's failure take over a newer action's undo. */
-         reportFailure(seq, `Couldn't ${verb}: ${why}`, row.accountId);
+         reportFailure(seq, `Couldn't ${verb}: ${why}`);
          render();
+      };
+      /* What a refusal means for the row (DAWN's codes, P1.2). */
+      const settle = (code: EmailErrorCode | undefined, message: string): void => {
+         if (destroyed) return;
+         switch (code) {
+            case "NOT_FOUND":
+               /* Gone from here (or an id from before the mailbox was rebuilt): nothing to put back;
+                  look again so a message that does still exist reappears. */
+               refreshList();
+               return;
+            case "TIMEOUT":
+            case "UNREACHABLE":
+            case "NOT_REMOVED":
+            case "OUTCOME_UNKNOWN":
+               /* It may have moved (or been copied without the original going): never retry; reload
+                  so the list shows what's really there (DAWN's email_changed says it too). */
+               /* DAWN counts all of these as "may have moved": never put the row back or retry. */
+               reportFailure(seq, code === "NOT_REMOVED" ? `Couldn't ${verb} cleanly; refreshed the list` : `DAWN didn't confirm it; refreshed the list`);
+               refreshList();
+               return;
+            case "BUSY":
+            case "RATE_LIMITED":
+               return restore("DAWN is busy. Try again in a moment.");
+            case "IN_TRASH":
+               return restore("it's in Trash or Spam. Restore it there first.");
+            case "NO_TRASH":
+               return restore("this account has no Trash folder");
+            case "FOLDER_MISSING":
+               return restore(kind === "archive" ? "this account has no Archive folder" : "its folder is missing");
+            case "READ_ONLY":
+               return restore("this account is read-only");
+            default:
+               return restore(message);
+         }
       };
       const call = kind === "archive" ? source.archive(row.accountId, [row.messageId]) : source.trash(row.accountId, [row.messageId]);
       call
          .then((res) => {
             if (destroyed) return;
-            if (res.failed.length) {
-               const f = res.failed[0];
-               restore(f.code === "NO_TRASH" ? "this account has no Trash folder" : f.message);
-               return;
+            const f = res.failed[0];
+            if (f) return settle(f.code, f.message);
+            if (!res.done.length) return settle("OUTCOME_UNKNOWN", ""); // neither done nor failed
+            const tokens = res.done.flatMap((d) => (d.undo ? [d.undo] : []));
+            /* Quick clicks land in order, each after the next click was made: a success joins the
+               group, or opens one when no other action's Undo is on screen. */
+            /* A newer message (a failure) stays readable beside the Undo this result brings. */
+            const carry = toast && !toast.move && seq !== actionSeq ? toast.baseText : "";
+            if (tokens.length || seq === actionSeq || !toast || !toast.tokens.length) toastMove(kind, row.accountId, tokens);
+            else announce(kind === "archive" ? "Archived" : "Moved to Trash");
+            if (carry && toast && toast.move) {
+               toast.note = carry;
+               paintToast();
+               announce(carry);
             }
-            if (seq === actionSeq) showToast(kind === "archive" ? "Archived" : "Moved to Trash", row.accountId, res.done.map((d) => d.undo));
          })
-         .catch((e: unknown) => restore(errorText(e)));
+         .catch((e: unknown) => settle(errorCode(e), errorText(e)));
    };
 
    /* A failure message for an action: a toast only if no newer action owns the toast (never
       clobber a newer Undo), else announced. */
-   const reportFailure = (seq: number, text: string, accountId: number): void => {
-      if (seq === actionSeq) showToast(text, accountId, []);
+   const reportFailure = (seq: number, text: string): void => {
+      if (toast && toast.tokens.length) {
+         /* A live Undo stays: the failure shows beside it, never instead of it. */
+         toast.note = text;
+         paintToast();
+         announce(text);
+         return;
+      }
+      if (seq === actionSeq) showToast(text);
       else announce(text);
    };
 
@@ -1482,7 +1556,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       source.setFlags(row.accountId, [row.messageId], { unread }).catch((e: unknown) => {
          if (destroyed) return;
          row.unread = prev;
-         reportFailure(seq, `Couldn't mark ${unread ? "unread" : "read"}: ${errorText(e)}`, row.accountId);
+         reportFailure(seq, `Couldn't mark ${unread ? "unread" : "read"}: ${errorText(e)}`);
          render();
       });
    };
@@ -1493,14 +1567,56 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (!split) closeReader(true);
    };
 
+   /* Every archive and trash while the Undo shows joins ONE group, whatever its kind or account
+      ("2 archived, 1 moved to Trash"), and its Undo takes them all back (3.9). A group stays open well
+      inside DAWN's 60 s undo window, so its Undo never sends expired tokens. */
+   const GROUP_MAX_MS = 45_000;
+   const UNDO_LIFE_MS = 55_000; // just inside DAWN's 60 s token life, from the group's first move
+   const groupOpen = (): boolean =>
+      !!toast && toast.move && toast.tokens.length > 0 && performance.now() - toast.groupStart < GROUP_MAX_MS;
+   const groupText = (archived: number, trashed: number): string => {
+      if (!trashed) return archived === 1 ? "Archived" : `Archived ${archived}`;
+      if (!archived) return trashed === 1 ? "Moved to Trash" : `Moved ${trashed} to Trash`;
+      return `${archived} archived, ${trashed} moved to Trash`;
+   };
+   const toastMove = (kind: "archive" | "trash", accountId: number, tokens: string[]): void => {
+      const entries = tokens.map((token) => ({ accountId, token }));
+      if (entries.length && groupOpen()) {
+         const t = toast!;
+         for (const e of entries) if (!t.tokens.some((x) => x.token === e.token)) t.tokens.push(e);
+         if (kind === "archive") t.archived += 1;
+         else t.trashed += 1;
+         t.baseText = groupText(t.archived, t.trashed);
+         paintToast();
+         t.remaining = TOAST_MS; // a fresh window for the whole group
+         toastBar.classList.remove("run");
+         void toastBar.offsetWidth;
+         toastBar.classList.add("run");
+         if (!toastEl.classList.contains("paused")) armToast(); // hovered: resume arms it
+         return;
+      }
+      /* Nothing to undo (already there): never replace a live group's Undo for it. */
+      if (!entries.length && toast && toast.tokens.length) {
+         announce(groupText(kind === "archive" ? 1 : 0, kind === "trash" ? 1 : 0));
+         return;
+      }
+      showToast(groupText(kind === "archive" ? 1 : 0, kind === "trash" ? 1 : 0), entries, kind);
+   };
+
    /* --- undo toast ---------------------------------------------------------- */
    const toastText = span("mail-toast-text");
    const toastUndo = textButton("mail-link mail-toast-undo", "Undo");
    const toastBar = span("mail-toast-bar");
    toastEl.append(toastText, toastUndo, toastBar);
 
+   const paintToast = (): void => {
+      if (toast) toastText.textContent = toast.note ? `${toast.baseText} · ${toast.note}` : toast.baseText;
+   };
    const hideToast = (): void => {
-      if (toast) window.clearTimeout(toast.timer);
+      if (toast) {
+         window.clearTimeout(toast.timer);
+         window.clearTimeout(toast.expiry);
+      }
       toast = null;
       toastEl.hidden = true;
    };
@@ -1510,10 +1626,28 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       toast.startedAt = performance.now();
       toast.timer = window.setTimeout(hideToast, toast.remaining);
    };
-   const showToast = (text: string, accountId: number, tokens: string[]): void => {
+   const showToast = (text: string, tokens: Array<{ accountId: number; token: string }> = [], kind?: "archive" | "trash"): void => {
       if (destroyed) return;
       hideToast(); // one at a time: a new action replaces the older undo
-      toast = { accountId, tokens, remaining: TOAST_MS, startedAt: 0, timer: 0 };
+      toast = {
+         tokens,
+         move: !!kind,
+         archived: kind === "archive" ? 1 : 0,
+         trashed: kind === "trash" ? 1 : 0,
+         remaining: TOAST_MS,
+         startedAt: 0,
+         timer: 0,
+         groupStart: performance.now(),
+         baseText: text,
+         note: "",
+         expiry: 0
+      };
+      /* DAWN's undo tokens last 60 s from their move: a hovered or focused (paused) group still goes
+         before the oldest one would be refused. */
+      if (kind && tokens.length) {
+         const t = toast;
+         t.expiry = window.setTimeout(() => toast === t && hideToast(), UNDO_LIFE_MS);
+      }
       toastText.textContent = text;
       toastUndo.hidden = tokens.length === 0;
       toastEl.hidden = false;
@@ -1539,23 +1673,59 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    toastEl.addEventListener("focusout", resumeToast);
    toastUndo.addEventListener("click", () => {
       if (!toast || !toast.tokens.length) return;
-      const { accountId, tokens } = toast;
+      /* DAWN's undo is per account: one call each, at once, merged into one result. */
+      const byAccount = new Map<number, string[]>();
+      for (const { accountId, token } of toast.tokens) byAccount.set(accountId, [...(byAccount.get(accountId) ?? []), token]);
       const seq = ++actionSeq;
       hideToast();
-      source
-         .undo(accountId, tokens)
-         .then((res) => {
-            if (destroyed) return;
-            for (const r of res.restored) {
+      void Promise.allSettled([...byAccount].map(([acct, toks]) => source.undo(acct, toks))).then((results) => {
+         if (destroyed) return;
+         let unreadable = false;
+         let restored = 0;
+         let unknown = false;
+         let firstWhy = "";
+         let failed = 0;
+         const why = (code: string, message: string): string =>
+            code === "UNDO_EXPIRED"
+               ? "it's too late"
+               : code === "NOT_FOUND"
+                 ? "it's no longer in Trash or Archive"
+                 : code === "FOLDER_MISSING"
+                   ? "the folder it came from is gone"
+                   : message;
+         results.forEach((r, i) => {
+            if (r.status === "rejected") {
+               if (errorCode(r.reason) === "OUTCOME_UNKNOWN") unknown = true;
+               else {
+                  failed += [...byAccount][i][1].length;
+                  firstWhy ||= errorText(r.reason);
+               }
+               return;
+            }
+            for (const x of r.value.restored) {
+               restored++;
+               if (!x.row) {
+                  unreadable = true; // back, but DAWN couldn't read it: reload shows it
+                  continue;
+               }
+               const row = x.row;
                /* The restore's own `created` echo may have queued it behind the pill: drop it
                   there, and only put it in the list if it fits the current view. */
-               pendingNew = pendingNew.filter((p) => rowKey(p) !== rowKey(r.row));
-               if (matchesView(r.row)) insertSorted(r.row);
+               pendingNew = pendingNew.filter((p) => rowKey(p) !== rowKey(row));
+               if (matchesView(row)) insertSorted(row);
             }
-            if (res.failed.length) reportFailure(seq, `Couldn't undo: ${res.failed[0].message}`, accountId);
-            render();
-         })
-         .catch((e: unknown) => !destroyed && reportFailure(seq, `Couldn't undo: ${errorText(e)}`, accountId));
+            for (const f of r.value.failed) {
+               failed++;
+               firstWhy ||= why(f.code, f.message);
+            }
+            /* A token in neither list: DAWN didn't say what became of it. */
+            if (r.value.restored.length + r.value.failed.length < [...byAccount][i][1].length) unknown = true;
+         });
+         if (unreadable || unknown) refreshList();
+         if (unknown) reportFailure(seq, `DAWN didn't confirm all of the undo; refreshed the list${failed ? ` (${failed} couldn't be: ${firstWhy})` : ""}`);
+         else if (failed) reportFailure(seq, restored ? `Restored ${restored}; ${failed} couldn't be: ${firstWhy}` : `Couldn't undo: ${firstWhy}`);
+         render();
+      });
    });
 
    /* --- popover: Mail options, two levels (3.9) ------------------------------ */
@@ -2152,8 +2322,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    const applyChanges = (ch: EmailChanges): void => {
       if (destroyed || !accounts.some((a) => a.id === ch.accountId)) return;
-      states.set(ch.accountId, ch.state);
-      for (const c of ch.created) queueNotice(c);
+      if (ch.state !== null) states.set(ch.accountId, ch.state);
+      /* A move or undo's notice is not new mail: no notification for its rows. */
+      if (!ch.kind) for (const c of ch.created) queueNotice(c);
       if (reader && ch.destroyed.some((id) => keyOf(ch.accountId, id) === reader!.key)) {
          reader.state = "gone";
          cancelMark();
@@ -2176,6 +2347,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       let arrived = 0;
       for (const c of ch.created) {
+         if (c.accountId !== ch.accountId) continue; // a notice speaks for its own account only
+         if (ch.kind) {
+            /* An undo putting mail back (from any tab or Friday): it replaces a row with the same id
+               (a Gmail id is the same in every folder), else goes straight in if it fits this view;
+               never the "new mail" pill. */
+            const i = rows.findIndex((r) => rowKey(r) === rowKey(c));
+            if (i >= 0) rows[i] = c;
+            else if (matchesView(c)) insertSorted(c);
+            continue;
+         }
          if (!selectedIds().includes(c.accountId) || (unreadOnly && !c.unread)) continue;
          const k = rowKey(c);
          if (rows.some((r) => rowKey(r) === k) || pendingNew.some((r) => rowKey(r) === k)) continue;
@@ -2195,6 +2376,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       if (shifted) lockReflow();
       if (arrived) announce(`${arrived} new message${arrived === 1 ? "" : "s"}`);
+      if (ch.refresh) {
+         /* A row couldn't be read, or a move happened without its answer: reload what's on screen
+            (the early return above already marked a hidden list stale). */
+         reload();
+         return;
+      }
       render();
    };
 
@@ -2226,10 +2413,25 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          render();
       },
       setAccounts: (list) => {
-         const same =
+         const sameIdentity =
             list.length === accounts.length &&
-            list.every((a, i) => a.id === accounts[i]?.id && a.address === accounts[i].address && a.displayName === accounts[i].displayName && a.readOnly === accounts[i].readOnly);
-         if (same && accountsKnown) return; // a reconnect re-sent the same accounts: keep the list (and its scroll)
+            list.every(
+               (a, i) =>
+                  a.id === accounts[i]?.id &&
+                  a.address === accounts[i].address &&
+                  a.displayName === accounts[i].displayName &&
+                  a.readOnly === accounts[i].readOnly
+            );
+         const sameCaps = sameIdentity && list.every((a, i) => a.canTrash === accounts[i].canTrash && a.canArchive === accounts[i].canArchive);
+         if (sameCaps && accountsKnown) return; // a reconnect re-sent the same accounts: keep the list (and its scroll)
+         if (sameIdentity && accountsKnown) {
+            /* Only what they can move to changed (learned from a list page): redraw the actions. */
+            accounts = list.slice();
+            rowEls.clear();
+            readerSig = "";
+            render();
+            return;
+         }
          accountsKnown = true;
          accounts = list.slice();
          computeIdentity();

@@ -54,6 +54,7 @@ interface Held {
    accountId: number;
    msg: SimMessage;
    expires: number;
+   kind: "trash" | "archive";
 }
 
 const DAY = 86400;
@@ -441,7 +442,7 @@ export class EmailSim implements EmailSource {
       if (updated.length) this.emit({ accountId, state: this.bump(accountId), created: [], updated, destroyed: [] });
    }
 
-   private async move(accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
+   private async move(accountId: number, messageIds: string[], kind: "trash" | "archive"): Promise<EmailMoveResult> {
       await this.wait();
       const acct = this.account(accountId);
       const result: EmailMoveResult = { done: [], failed: [] };
@@ -457,33 +458,39 @@ export class EmailSim implements EmailSource {
          }
          const [msg] = list.splice(index, 1);
          const undo = `u${++this.holdSeq}.${Math.floor(this.rand() * 1e9).toString(36)}`;
-         this.held.set(undo, { accountId, msg, expires: Date.now() + UNDO_TTL_MS });
+         this.held.set(undo, { accountId, msg, expires: Date.now() + UNDO_TTL_MS, kind });
          result.done.push({ messageId: id, undo });
       }
       if (result.done.length) {
-         this.emit({ accountId, state: this.bump(accountId), created: [], updated: [], destroyed: result.done.map((d) => d.messageId) });
+         this.emit({ accountId, state: this.bump(accountId), created: [], updated: [], destroyed: result.done.map((d) => d.messageId), kind, undo: false });
       }
       return result;
    }
 
    archive(accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
-      return this.move(accountId, messageIds);
+      return this.move(accountId, messageIds, "archive");
    }
 
    trash(accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
-      return this.move(accountId, messageIds);
+      return this.move(accountId, messageIds, "trash");
    }
 
    async undo(accountId: number, tokens: string[]): Promise<EmailUndoResult> {
       await this.wait();
       const result: EmailUndoResult = { restored: [], failed: [] };
+      let kind: "trash" | "archive" = "archive";
       for (const t of tokens) {
          const h = this.held.get(t);
          this.held.delete(t); // single use
-         if (!h || h.accountId !== accountId || h.expires < Date.now()) {
-            result.failed.push({ undo: t, code: "NOT_FOUND", message: "It's too late to undo that" });
+         if (!h || h.accountId !== accountId) {
+            result.failed.push({ undo: t, code: "NOT_FOUND", message: "It's no longer in Trash or Archive" });
             continue;
          }
+         if (h.expires < Date.now()) {
+            result.failed.push({ undo: t, code: "UNDO_EXPIRED", message: "It's too late to undo that" });
+            continue;
+         }
+         kind = h.kind;
          /* IMAP: the move back gives the message a new UID, so a new id. */
          if (accountId === IMAP_ACCOUNT) h.msg.row.messageId = this.newId(accountId);
          const list = this.inbox.get(accountId)!;
@@ -492,7 +499,8 @@ export class EmailSim implements EmailSource {
          result.restored.push({ undo: t, row: { ...h.msg.row } });
       }
       if (result.restored.length) {
-         this.emit({ accountId, state: this.bump(accountId), created: result.restored.map((r) => r.row), updated: [], destroyed: [] });
+         const created = result.restored.flatMap((r) => (r.row ? [r.row] : []));
+         this.emit({ accountId, state: this.bump(accountId), created, updated: [], destroyed: [], kind, undo: true });
       }
       return result;
    }

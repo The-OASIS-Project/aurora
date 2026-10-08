@@ -219,4 +219,77 @@ describe("DawnEmail", () => {
       t.wire.setLinked(false);
       await expect(q).rejects.toMatchObject({ code: "UNREACHABLE" });
    });
+
+   it("batches quick moves into one call, gives each click its own result, and adopts pinned ids", async () => {
+      const t = setup();
+      t.wire.attach(t.sink);
+      t.wire.setLinked(true);
+      t.wire.setServerSupport(true);
+      expect(t.wire.supportsMoves()).toBe(true);
+      const a = t.wire.archive(3, ["INBOX:1"]);
+      const b = t.wire.archive(3, ["INBOX:2.7"]);
+      vi.advanceTimersByTime(260);
+      const sent = t.sent.filter((m) => m.type === "email_archive");
+      expect(sent.length).toBe(1);
+      expect(sent[0].payload).toMatchObject({ account_id: 3, message_ids: ["INBOX:1", "INBOX:2.7"] });
+      t.wire.handleFrame("email_archive_response", {
+         success: true,
+         req: sent[0].payload!.req,
+         done: [{ message_id: "INBOX:1.7", undo: "a".repeat(32) }],
+         failed: [{ message_id: "INBOX:2.7", error_code: "IN_TRASH", error: "in trash" }]
+      });
+      await expect(a).resolves.toEqual({ done: [{ messageId: "INBOX:1.7", undo: "a".repeat(32), leftFlagged: undefined }], failed: [] });
+      await expect(b).resolves.toMatchObject({ done: [], failed: [{ messageId: "INBOX:2.7", code: "IN_TRASH" }] });
+   });
+
+   it("never re-sends a move: a lost reply is outcome-unknown, a whole-call refusal fails every click", async () => {
+      const t = setup();
+      t.wire.attach(t.sink);
+      t.wire.setLinked(true);
+      t.wire.setServerSupport(true);
+      const lost = t.wire.trash(3, ["INBOX:1"]);
+      vi.advanceTimersByTime(260 + 30_001);
+      expect(t.sent.filter((m) => m.type === "email_trash").length).toBe(1);
+      await expect(lost).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      const x = t.wire.trash(3, ["INBOX:2"]);
+      const y = t.wire.trash(3, ["INBOX:3"]);
+      vi.advanceTimersByTime(260);
+      t.reply("email_trash_response", { success: false, error_code: "NO_TRASH", error: "no trash" });
+      await expect(x).rejects.toMatchObject({ code: "NO_TRASH" });
+      await expect(y).rejects.toMatchObject({ code: "NO_TRASH" });
+   });
+
+   it("maps undo (a null row means reload) and the email_changed notice", async () => {
+      const t = setup();
+      const changes: unknown[] = [];
+      t.sink.applyChanges = (c) => changes.push(c);
+      t.wire.attach(t.sink);
+      t.wire.setLinked(true);
+      t.wire.setServerSupport(true);
+      const u = t.wire.undo(3, ["b".repeat(32), "c".repeat(32)]);
+      t.reply("email_undo_response", {
+         success: true,
+         restored: [{ undo: "b".repeat(32), row: { account_id: 3, message_id: "INBOX:9.7", subject: "Back" } }, { undo: "c".repeat(32), row: null }],
+         failed: []
+      });
+      const r = await u;
+      expect(r.restored[0].row).toMatchObject({ messageId: "INBOX:9.7", subject: "Back" });
+      expect(r.restored[1].row).toBeNull();
+      expect(t.wire.handleFrame("email_changed", { account_id: 3, state: null, kind: "trash", undo: false, created: [], updated: [], destroyed: ["INBOX:4.7"], refresh: true })).toBe(true);
+      expect(changes).toEqual([{ accountId: 3, state: null, created: [], updated: [], destroyed: ["INBOX:4.7"], kind: "trash", undo: false, refresh: true }]);
+   });
+
+   it("learns whether an account has a Trash / Archive from the list's first page", async () => {
+      const t = setup();
+      t.wire.attach(t.sink);
+      t.wire.setLinked(true);
+      t.wire.setServerSupport(true);
+      t.wire.handleFrame("email_list_accounts_response", { success: true, accounts: [{ id: 3, name: "Work", username: "me@example.org", enabled: true }] });
+      await Promise.resolve();
+      expect(t.seen.accounts[0].canTrash).toBeUndefined();
+      const p = t.wire.list({});
+      t.reply("email_list_response", { success: true, rows: [], cursor: null, accounts: [{ account_id: 3, inbox_unread: 0, status: "ok", can_trash: false, can_archive: true }] });
+      await p;
+      expect(t.seen.accounts[0]).toMatchObject({ id: 3, canTrash: false, canArchive: true });
+   });
 });

@@ -75,9 +75,10 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     `phone_status` read on connect; DAWN allows only the modem owner; the call audio stays on the
     daemon's hardware), plus the **Mail panel** (`src/email/`, DAWN's `email_client` verbs: the
     reads `email_list` / `email_search` / `email_read` / `email_unread_counts` / `email_list_accounts`,
-    and `email_set_flags` read/unread on the user's own mailbox; opening a message marks it read;
-    archive / trash / undo arrive with DAWN P1.2 and stay one-click with server-side undo, never a
-    permanent delete; account setup stays in DAWN's WebUI).
+    and `email_set_flags` read/unread on the user's own mailbox; opening a message marks it read (or
+    later / never, per Mail options); `email_archive` / `email_trash` (batched, never re-sent) +
+    `email_undo`, one-click with server-side undo, never a permanent delete, with DAWN's `email_changed`
+    notice applied from any tab; account setup stays in DAWN's WebUI).
   - **Destructive writes are gated.** Any write that permanently destroys DAWN-side data -
     `delete_conversation` (cascade-deletes the conversation's images + child background jobs and
     refuses on a running job), `watch_remove`, `delete_memory_*`, `forget_conversation_memories` -

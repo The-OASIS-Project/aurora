@@ -86,12 +86,13 @@ describe("EmailSim triage", () => {
       expect(sink.changes.at(-1)?.destroyed).toEqual([row.messageId]);
       await expect(sim.read(2, row.messageId, false)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-      const u = await sim.undo(2, [t.done[0].undo]);
+      const u = await sim.undo(2, [t.done[0].undo!]);
       expect(u.restored).toHaveLength(1);
-      expect(u.restored[0].row.messageId).not.toBe(row.messageId); // new UID after the move back
-      expect(sink.changes.at(-1)?.created[0].messageId).toBe(u.restored[0].row.messageId);
+      expect(u.restored[0].row!.messageId).not.toBe(row.messageId); // new UID after the move back
+      expect(sink.changes.at(-1)?.created[0].messageId).toBe(u.restored[0].row!.messageId);
+      expect(sink.changes.at(-1)).toMatchObject({ kind: "trash", undo: true });
 
-      const again = await sim.undo(2, [t.done[0].undo]);
+      const again = await sim.undo(2, [t.done[0].undo!]);
       expect(again.failed).toHaveLength(1); // single use
    });
 

@@ -12,9 +12,13 @@
  *    either settles it, and a SUPERSEDED answer to one that has a newer twin is just dropped. (A
  *    retried list replaces the still-running first one on DAWN's side; a retried read waits behind
  *    it.) A real link loss fails everything in flight; a missed heartbeat ("stale") doesn't.
- *  - P1.1 has list / search / read / set_flags / unread_counts. Archive, trash, and undo (P1.2)
- *    and live changes (P1.3) aren't on the wire yet: supportsMoves() and supportsLiveChanges() are
- *    false, so the panel hides those actions (and the new-mail bells) and refreshes by hand.
+ *  - P1.1 list / search / read / set_flags / unread_counts; P1.2 archive / trash / undo plus the
+ *    `email_changed` notice after every move or undo (from any tab, or Friday). Live changes (P1.3)
+ *    aren't on the wire yet: supportsLiveChanges() is false (no new-mail bells; refresh by hand).
+ *  - Moves are batched (clicks within a short window per account and kind, and while that key's
+ *    previous call is still running, at most 50 ids per call, as DAWN asks; one call per key in
+ *    flight keeps inside DAWN's per-session queue) and NEVER re-sent: DAWN queues them and may already have done one, so a lost reply is
+ *    "outcome unknown" and the panel reloads (DAWN's email_changed says what really moved).
  *  - Every string from DAWN is untrusted mail data; this module only maps shapes.
  */
 
@@ -42,6 +46,8 @@ type Json = Record<string, unknown>;
 const ATTEMPT_MS = 30_000; // IMAP logins + fetches run through DAWN's per-account queue
 const ACCOUNTS_RETRY_MS = 10_000; // a failed account list is asked for again after this
 const SEND_RETRIES = 1;
+const MOVE_BATCH_MS = 250; // rapid clicks within this become one call
+const MOVE_MAX = 50; // DAWN's per-call limit for archive / trash / undo
 
 interface Pending {
    type: string;
@@ -51,7 +57,28 @@ interface Pending {
    timer: number;
    retries: number;
    reqs: string[]; // every tag this request was sent under (still live until it settles)
+   /* The code a final timeout rejects with: a move that may have run is OUTCOME_UNKNOWN. */
+   timeoutCode: EmailErrorCode;
 }
+
+type MoveKind = "archive" | "trash";
+interface MoveWaiter {
+   ids: string[];
+   resolve: (r: EmailMoveResult) => void;
+   reject: (e: EmailRequestError) => void;
+}
+interface MoveBatch {
+   accountId: number;
+   kind: MoveKind;
+   ids: string[];
+   waiters: MoveWaiter[];
+   timer: number;
+   due: boolean; // its window closed while the key's previous call was still running
+}
+
+/* An IMAP id without its UIDVALIDITY suffix ("INBOX:4211.7" -> "INBOX:4211"), so a reply's pinned
+   id matches the one sent. Gmail ids have no suffix and are unchanged. */
+const baseId = (id: string): string => id.replace(/(:\d+)\.\d+$/, "$1");
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const num = (v: unknown, d = 0): number => (typeof v === "number" && Number.isFinite(v) ? v : d);
@@ -111,6 +138,17 @@ function toMessage(m: Json): EmailMessage {
    };
 }
 
+function toAccount(a: Json): EmailAccount {
+   return {
+      id: num(a.id),
+      address: str(a.username) || str(a.display_name) || str(a.name),
+      displayName: str(a.name) || str(a.display_name),
+      readOnly: a.read_only === true,
+      canTrash: typeof a.can_trash === "boolean" ? a.can_trash : undefined,
+      canArchive: typeof a.can_archive === "boolean" ? a.can_archive : undefined
+   };
+}
+
 function toCounts(v: unknown): EmailUnreadCount[] {
    if (!Array.isArray(v)) return [];
    const statuses: EmailAccountStatus[] = ["ok", "auth_revoked", "auth_failed", "unreachable"];
@@ -131,6 +169,9 @@ export class DawnEmail implements EmailSource {
    private wanted = false;
    private readonly pending = new Map<string, Pending>(); // by req (a retried request has two)
    private accountsInFlight = false;
+   private accounts: EmailAccount[] = []; // the last list sent to the panel (capabilities merge in)
+   private readonly batches = new Map<string, MoveBatch>();
+   private readonly inFlight = new Set<string>(); // keys whose move call hasn't answered yet
    private accountsRetry = 0;
    private readonly pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)).replace(/-/g, "").slice(0, 8);
    private seq = 0;
@@ -157,6 +198,7 @@ export class DawnEmail implements EmailSource {
       if (on === this.linked) return;
       this.linked = on;
       if (!on) {
+         this.failBatches("UNREACHABLE", "Lost the connection to DAWN");
          this.failAll("UNREACHABLE", "Lost the connection to DAWN");
          window.clearTimeout(this.accountsRetry); // the next connection loads the list afresh
          this.configSeen = false; // the flag is re-learned from the next connection's config
@@ -187,15 +229,9 @@ export class DawnEmail implements EmailSource {
       this.request("email_list_accounts", {})
          .then((p) => {
             const rows = Array.isArray(p.accounts) ? (p.accounts as Json[]) : [];
-            const accounts: EmailAccount[] = rows
-               .filter((a) => a.enabled === true)
-               .map((a) => ({
-                  id: num(a.id),
-                  address: str(a.username) || str(a.display_name) || str(a.name),
-                  displayName: str(a.name) || str(a.display_name),
-                  readOnly: a.read_only === true
-               }));
+            const accounts: EmailAccount[] = rows.filter((a) => a.enabled === true).map(toAccount);
             window.clearTimeout(this.accountsRetry);
+            this.accounts = accounts;
             this.sink?.setAccountsError(null);
             this.sink?.setAccounts(accounts);
          })
@@ -228,8 +264,13 @@ export class DawnEmail implements EmailSource {
 
    /* ---- request/response ---------------------------------------------------- */
 
-   /* An email_*_response frame from DawnIngest. Returns whether it was one of ours. */
+   /* An email_* frame from DawnIngest (a reply, or the email_changed notice). Returns whether it
+      was one of ours. */
    handleFrame(type: string, p: Json): boolean {
+      if (type === "email_changed") {
+         this.onChanged(p);
+         return true;
+      }
       if (!type.startsWith("email_") || !type.endsWith("_response")) return false;
       let req = str(p.req);
       /* DAWN's account-settings verbs don't echo req (email_list_accounts takes no payload): match
@@ -257,12 +298,23 @@ export class DawnEmail implements EmailSource {
       return true;
    }
 
-   private request(type: string, payload: Json): Promise<Json> {
+   /* `once`: never re-sent (a move or undo that may already have run); a lost reply rejects as
+      OUTCOME_UNKNOWN instead of TIMEOUT. */
+   private request(type: string, payload: Json, once = false): Promise<Json> {
       if (!this.linked) return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
       if (!this.configSeen) return Promise.reject(new EmailRequestError("UNREACHABLE", "Connecting to DAWN…"));
       if (!this.advertised) return Promise.reject(new EmailRequestError("UNAVAILABLE", "Mail isn't available on this DAWN"));
       return new Promise((resolve, reject) =>
-         this.dispatch({ type, payload, resolve, reject, timer: 0, retries: SEND_RETRIES, reqs: [] })
+         this.dispatch({
+            type,
+            payload,
+            resolve,
+            reject,
+            timer: 0,
+            retries: once ? 0 : SEND_RETRIES,
+            reqs: [],
+            timeoutCode: once ? "OUTCOME_UNKNOWN" : "TIMEOUT"
+         })
       );
    }
 
@@ -278,10 +330,24 @@ export class DawnEmail implements EmailSource {
             this.dispatch(entry); // the frame may have been dropped under load: ask again
          } else {
             for (const r of entry.reqs) this.pending.delete(r);
-            entry.reject(new EmailRequestError("TIMEOUT", "DAWN didn't answer in time"));
+            entry.reject(
+               new EmailRequestError(
+                  entry.timeoutCode,
+                  entry.timeoutCode === "OUTCOME_UNKNOWN" ? "DAWN didn't confirm it" : "DAWN didn't answer in time"
+               )
+            );
          }
       }, ATTEMPT_MS);
       this.send({ type: entry.type, payload: { ...entry.payload, req } });
+   }
+
+   /* Queued (not yet sent) moves: nothing ran, so they simply fail. */
+   private failBatches(code: EmailErrorCode, message: string): void {
+      for (const b of this.batches.values()) {
+         window.clearTimeout(b.timer);
+         for (const w of b.waiters) w.reject(new EmailRequestError(code, message));
+      }
+      this.batches.clear();
    }
 
    private failAll(code: EmailErrorCode, message: string): void {
@@ -289,14 +355,16 @@ export class DawnEmail implements EmailSource {
       this.pending.clear();
       for (const e of entries) {
          window.clearTimeout(e.timer);
-         e.reject(new EmailRequestError(code, message));
+         /* A sent move or undo may already have run: its outcome is unknown, not refused. */
+         const unknown = e.timeoutCode === "OUTCOME_UNKNOWN" && code !== "CANCELLED";
+         e.reject(new EmailRequestError(unknown ? "OUTCOME_UNKNOWN" : code, unknown ? "The connection dropped before DAWN confirmed it" : message));
       }
    }
 
    /* ---- EmailSource --------------------------------------------------------- */
 
    supportsMoves(): boolean {
-      return false; // archive / trash / undo arrive with DAWN's P1.2
+      return this.advertised; // archive / trash / undo ride the same email_client flag (P1.2)
    }
 
    supportsLiveChanges(): boolean {
@@ -312,7 +380,10 @@ export class DawnEmail implements EmailSource {
          : await this.request("email_list", { ...base, folder: "inbox" });
       /* The first inbox page carries the unread counts on the same login, but only for the accounts
          it covered: forward them only when it covered every account (else they'd wipe the rest). */
-      if (Array.isArray(p.accounts) && !q.accountIds?.length) this.sink?.setUnreadCounts(toCounts(p.accounts));
+      if (Array.isArray(p.accounts)) {
+         if (!q.accountIds?.length) this.sink?.setUnreadCounts(toCounts(p.accounts));
+         this.mergeCaps(p.accounts as Json[]);
+      }
       return {
          rows: Array.isArray(p.rows) ? (p.rows as Json[]).map(toRow) : [],
          cursor: typeof p.cursor === "string" && p.cursor ? p.cursor : null,
@@ -342,14 +413,142 @@ export class DawnEmail implements EmailSource {
       }
    }
 
-   archive(_accountId: number, _messageIds: string[]): Promise<EmailMoveResult> {
-      return Promise.reject(new EmailRequestError("UNAVAILABLE", "Archive comes with a later DAWN update"));
+   archive(accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
+      return this.move("archive", accountId, messageIds);
    }
-   trash(_accountId: number, _messageIds: string[]): Promise<EmailMoveResult> {
-      return Promise.reject(new EmailRequestError("UNAVAILABLE", "Trash comes with a later DAWN update"));
+   trash(accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
+      return this.move("trash", accountId, messageIds);
    }
-   undo(_accountId: number, _tokens: string[]): Promise<EmailUndoResult> {
-      return Promise.reject(new EmailRequestError("UNAVAILABLE", "Undo comes with a later DAWN update"));
+
+   async undo(accountId: number, tokens: string[]): Promise<EmailUndoResult> {
+      const restored: EmailUndoResult["restored"] = [];
+      const failed: EmailUndoResult["failed"] = [];
+      for (let i = 0; i < tokens.length; i += MOVE_MAX) {
+         const chunk = tokens.slice(i, i + MOVE_MAX);
+         let p: Json;
+         try {
+            p = await this.request("email_undo", { account_id: accountId, undo: chunk }, true);
+         } catch (e) {
+            /* Keep what earlier parts restored; this part's tokens failed with the reason. A lost
+               reply (outcome unknown) still rejects, so the caller reloads. */
+            if (i === 0 || (e instanceof EmailRequestError && e.code === "OUTCOME_UNKNOWN")) throw e;
+            const err = e instanceof EmailRequestError ? e : new EmailRequestError("FAILED", "Something went wrong");
+            for (const t of chunk) failed.push({ undo: t, code: err.code, message: err.message });
+            continue;
+         }
+         for (const r of Array.isArray(p.restored) ? (p.restored as Json[]) : []) {
+            restored.push({ undo: str(r.undo), row: r.row && typeof r.row === "object" ? toRow(r.row as Json) : null });
+         }
+         for (const f of Array.isArray(p.failed) ? (p.failed as Json[]) : []) {
+            failed.push({ undo: str(f.undo), code: (str(f.error_code) || "FAILED") as EmailErrorCode, message: str(f.error) });
+         }
+      }
+      return { restored, failed };
+   }
+
+   /* ---- moves: batched, never re-sent ---------------------------------------- */
+
+   private move(kind: MoveKind, accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
+      if (!this.linked) return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
+      /* More than one call's worth: split it (each part batches on its own), then join the results. */
+      if (messageIds.length > MOVE_MAX) {
+         const parts: Promise<EmailMoveResult>[] = [];
+         for (let i = 0; i < messageIds.length; i += MOVE_MAX) parts.push(this.move(kind, accountId, messageIds.slice(i, i + MOVE_MAX)));
+         return Promise.all(parts).then((rs) => ({ done: rs.flatMap((r) => r.done), failed: rs.flatMap((r) => r.failed) }));
+      }
+      return new Promise((resolve, reject) => {
+         const key = `${kind}:${accountId}`;
+         let b = this.batches.get(key);
+         if (b && b.ids.length + messageIds.length > MOVE_MAX) {
+            this.flushMove(key); // full: send what's queued, start a new batch
+            b = undefined;
+         }
+         if (!b) {
+            b = { accountId, kind, ids: [], waiters: [], timer: 0, due: false };
+            this.batches.set(key, b);
+            const bb = b;
+            b.timer = window.setTimeout(() => {
+               if (this.batches.get(key) !== bb) return;
+               if (this.inFlight.has(key)) bb.due = true; // goes when the running call answers
+               else this.flushMove(key);
+            }, MOVE_BATCH_MS);
+         }
+         for (const id of messageIds) if (!b.ids.includes(id)) b.ids.push(id); // one id once per call
+         b.waiters.push({ ids: messageIds, resolve, reject });
+         if (b.ids.length >= MOVE_MAX) this.flushMove(key);
+      });
+   }
+
+   private flushMove(key: string): void {
+      const b = this.batches.get(key);
+      if (!b) return;
+      this.batches.delete(key);
+      window.clearTimeout(b.timer);
+      this.inFlight.add(key);
+      this.request(`email_${b.kind}`, { account_id: b.accountId, message_ids: b.ids }, true)
+         .then((p) => {
+            const done = (Array.isArray(p.done) ? (p.done as Json[]) : []).map((d) => ({
+               messageId: str(d.message_id),
+               undo: typeof d.undo === "string" && d.undo ? d.undo : null,
+               leftFlagged: d.left_flagged === true ? true : undefined
+            }));
+            const failed = (Array.isArray(p.failed) ? (p.failed as Json[]) : []).map((f) => ({
+               messageId: str(f.message_id),
+               code: (str(f.error_code) || "FAILED") as EmailErrorCode,
+               message: str(f.error)
+            }));
+            /* Each click gets its own slice: done ids may come back pinned (a new suffix), so match
+               on the id without it; failed ids come back as sent. */
+            for (const w of b.waiters) {
+               const mine = new Set(w.ids.map(baseId));
+               w.resolve({
+                  done: done.filter((d) => mine.has(baseId(d.messageId))),
+                  failed: failed.filter((f) => mine.has(baseId(f.messageId)))
+               });
+            }
+         })
+         .catch((e: unknown) => {
+            const err = e instanceof EmailRequestError ? e : new EmailRequestError("FAILED", "Something went wrong");
+            for (const w of b.waiters) w.reject(err);
+         })
+         .finally(() => {
+            this.inFlight.delete(key);
+            if (this.batches.get(key)?.due) this.flushMove(key);
+         });
+   }
+
+   /* email_changed: what a move or undo did, sent to every tab (and after Friday's moves too). */
+   private onChanged(p: Json): void {
+      const rows = (v: unknown): EmailRow[] => (Array.isArray(v) ? (v as Json[]).map(toRow) : []);
+      const kind = p.kind === "trash" || p.kind === "archive" ? p.kind : undefined;
+      this.sink?.applyChanges({
+         accountId: num(p.account_id),
+         state: typeof p.state === "string" ? p.state : null,
+         created: rows(p.created),
+         updated: rows(p.updated),
+         destroyed: Array.isArray(p.destroyed) ? (p.destroyed as unknown[]).filter((x): x is string => typeof x === "string") : [],
+         kind,
+         undo: p.undo === true,
+         refresh: p.refresh === true
+      });
+   }
+
+   /* can_trash / can_archive also ride the first page's accounts[]: fold them into the account list. */
+   private mergeCaps(list: Json[]): void {
+      let changed = false;
+      const next = this.accounts.map((a) => {
+         const c = list.find((x) => num(x.account_id) === a.id);
+         if (!c) return a;
+         const canTrash = typeof c.can_trash === "boolean" ? c.can_trash : a.canTrash;
+         const canArchive = typeof c.can_archive === "boolean" ? c.can_archive : a.canArchive;
+         if (canTrash === a.canTrash && canArchive === a.canArchive) return a;
+         changed = true;
+         return { ...a, canTrash, canArchive };
+      });
+      if (changed) {
+         this.accounts = next;
+         this.sink?.setAccounts(next);
+      }
    }
 
    async unreadCounts(): Promise<EmailUnreadCount[]> {
@@ -373,6 +572,7 @@ export class DawnEmail implements EmailSource {
 
    dispose(): void {
       window.clearTimeout(this.accountsRetry);
+      this.failBatches("CANCELLED", "Closed");
       this.failAll("CANCELLED", "Closed");
    }
 }
