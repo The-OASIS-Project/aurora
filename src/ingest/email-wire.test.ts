@@ -292,4 +292,26 @@ describe("DawnEmail", () => {
       await p;
       expect(t.seen.accounts[0]).toMatchObject({ id: 3, canTrash: false, canArchive: true });
    });
+
+   it("fails a request at once when DAWN says it doesn't handle that type", async () => {
+      const t = setup();
+      t.wire.attach(t.sink);
+      t.wire.setLinked(true);
+      t.wire.setServerSupport(true);
+      const p = t.wire.archive(3, ["INBOX:1"]);
+      vi.advanceTimersByTime(260);
+      const req = t.sent.find((m) => m.type === "email_archive")!.payload!.req as string;
+      t.wire.failUnsupported(req);
+      await expect(p).rejects.toMatchObject({ code: "UNAVAILABLE" });
+      t.wire.failUnsupported("not-ours"); // an unknown req is ignored
+   });
+
+   it("fails a repeat of a type DAWN said it doesn't handle without sending it", async () => {
+      const sent: Array<{ type: string }> = [];
+      const wire = new DawnEmail((m) => sent.push(m), (type) => type === "email_read");
+      wire.setLinked(true);
+      wire.setServerSupport(true);
+      await expect(wire.read(3, "INBOX:1", true)).rejects.toMatchObject({ code: "UNAVAILABLE" });
+      expect(sent.some((m) => m.type === "email_read")).toBe(false);
+   });
 });

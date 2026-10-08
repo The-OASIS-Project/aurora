@@ -176,7 +176,12 @@ export class DawnEmail implements EmailSource {
    private readonly pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)).replace(/-/g, "").slice(0, 8);
    private seq = 0;
 
-   constructor(private readonly send: Send) {}
+   constructor(
+      private readonly send: Send,
+      /* Whether this connection's DAWN said it doesn't handle a type (UNKNOWN_TYPE): such a request
+         fails at once instead of being swallowed and waiting out its timeout. */
+      private readonly unsupported: (type: string) => boolean = () => false
+   ) {}
 
    /* From each config frame (the one place the flags are known for this connection): availability
       is decided here, the panel sees the link come up only now (so its link-up catch-up runs with the
@@ -304,6 +309,7 @@ export class DawnEmail implements EmailSource {
       if (!this.linked) return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
       if (!this.configSeen) return Promise.reject(new EmailRequestError("UNREACHABLE", "Connecting to DAWN…"));
       if (!this.advertised) return Promise.reject(new EmailRequestError("UNAVAILABLE", "Mail isn't available on this DAWN"));
+      if (this.unsupported(type)) return Promise.reject(new EmailRequestError("UNAVAILABLE", "This DAWN doesn't support that yet"));
       return new Promise((resolve, reject) =>
          this.dispatch({
             type,
@@ -339,6 +345,16 @@ export class DawnEmail implements EmailSource {
          }
       }, ATTEMPT_MS);
       this.send({ type: entry.type, payload: { ...entry.payload, req } });
+   }
+
+   /* DAWN answered one of our requests with UNKNOWN_TYPE (it doesn't handle that verb): nothing
+      ran, so the request fails now instead of waiting out its timeout. */
+   failUnsupported(req: string): void {
+      const entry = this.pending.get(req);
+      if (!entry) return;
+      for (const r of entry.reqs) this.pending.delete(r);
+      window.clearTimeout(entry.timer);
+      entry.reject(new EmailRequestError("UNAVAILABLE", "This DAWN doesn't support that yet"));
    }
 
    /* Queued (not yet sent) moves: nothing ran, so they simply fail. */

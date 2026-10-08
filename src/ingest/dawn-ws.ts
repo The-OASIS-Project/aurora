@@ -111,6 +111,9 @@ const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retri
 /* A connection must stay up this long before the backoff resets: one that dies right after opening
    (e.g. a frame the browser refuses, which fails the socket) otherwise reconnects every second forever. */
 const MAIN_WS_STABLE_MS = 10_000;
+/* Message-type prefixes of OPTIONAL subsystems (built out of some DAWNs): an UNKNOWN_TYPE for one of
+   these is quiet (the request fails fast and that type stops being sent for the connection). */
+const OPTIONAL_PREFIXES = ["ha_", "calendar_", "stocks_", "email_", "phone_", "watch_", "doc_library_"];
 
 /* Liveness heartbeat. A half-open socket (TCP alive, but DAWN's session is gone or the
    backend was silently dropped by a proxy) leaves readyState OPEN forever, so onclose never
@@ -1117,8 +1120,12 @@ export class DawnIngest implements Ingest {
    private serverFeatures: Set<string> | null = null;
    private configSeen = false; // this connection's config (protocol + features) has arrived
    /* The email boundary (EmailSource): availability follows `email_client`; see email-wire.ts. */
-   private readonly email = new DawnEmail((m) => this.send(m));
+   private readonly email = new DawnEmail(
+      (m) => this.send(m),
+      (type) => this.unsupportedTypes.has(type)
+   );
    private readonly prefs = new LocalUserPrefs();
+   private readonly unsupportedTypes = new Set<string>(); // types this connection's DAWN said it doesn't handle
    /* DAWN supports per-app logins (`app_logins`, learned from /api/auth/status - on load and again
       at login - never mid-connection, so a socket and its later requests always agree on the
       cookie): then every DAWN URL carries ?app=aurora and login sends "app". Sticky for the page;
@@ -1339,6 +1346,7 @@ export class DawnIngest implements Ingest {
       this.ws = ws;
 
       ws.onopen = (): void => {
+         this.unsupportedTypes.clear(); // a new connection may be a different (upgraded) daemon
          /* The backoff resets only once this connection proves stable, not on the open itself. */
          window.clearTimeout(this.wsStableTimer);
          this.wsStableTimer = window.setTimeout(() => {
@@ -2644,6 +2652,14 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
+            /* This DAWN doesn't handle a message type we sent (an older daemon, or a subsystem
+               like Home Assistant or the calendar not built in). Never a visible error: fail the
+               matching request fast, stop sending that type on this connection, and note it. It
+               can arrive before replies to earlier requests, so it's matched by `req`, not order. */
+            if (code === "UNKNOWN_TYPE") {
+               this.onUnknownType(typeof p.request_type === "string" ? p.request_type : "", typeof p.req === "string" ? p.req : "");
+               break;
+            }
             /* The session was revoked/expired server-side (DAWN re-validates the token
                against the DB on every authed verb, including our heartbeat ping, and
                answers a dead session with UNAUTHORIZED instead of a pong). Treat it like
@@ -5148,7 +5164,37 @@ export class DawnIngest implements Ingest {
    }
 
    private send(msg: object): void {
+      /* A type this DAWN said it doesn't handle isn't sent again on this connection (polls stop).
+      Never `text`: a chat message is always attempted, and a refusal says so. */
+      const type = (msg as { type?: unknown }).type;
+      if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+   }
+
+   /* UNKNOWN_TYPE (DAWN bcb0bdc1+; older daemons send nothing): see the error case. Only an
+      OPTIONAL subsystem's verbs (built out of some DAWNs) are quietly stopped; a core verb DAWN doesn't
+      know means this DAWN is older than this Aurora, which the user is told, never silently blocked. */
+   private onUnknownType(requestType: string, req: string): void {
+      if (req) this.email.failUnsupported(req);
+      if (!OPTIONAL_PREFIXES.some((p) => requestType.startsWith(p))) {
+         if (requestType === "text") {
+            /* A typed turn that never ran: its draft comes back (UNKNOWN_TYPE names no client_ref). */
+            this.dropTypedEcho(this.sinks.conversation.rejectTurn("newest", false));
+            this.sinks.conversation.noteRefusal("Message not sent: this DAWN doesn't accept it (it may be older than this Aurora).");
+         } else if (requestType && !this.unsupportedTypes.has(requestType)) {
+            this.notifyUser(`This DAWN doesn't handle "${requestType}" (it may be older than this Aurora).`);
+         }
+         if (requestType && requestType !== "text") this.unsupportedTypes.add(requestType); // say it once
+         console.warn(`[dawn] this DAWN doesn't handle "${requestType || "a message"}"`);
+         return;
+      }
+      this.unsupportedTypes.add(requestType);
+      /* Home Assistant isn't part of this DAWN (e.g. a SmartThings build): the board says so
+         instead of waiting for a status that will never come. */
+      if (requestType === "ha_status") this.sinks.ha.setStatus({ configured: false, connected: false, error: "Home Assistant isn't available on this DAWN" });
+      if (requestType.startsWith("ha_")) window.clearInterval(this.haTimer);
+      if (requestType.startsWith("calendar_")) window.clearInterval(this.calendarTimer);
+      console.warn(`[dawn] this DAWN doesn't handle "${requestType || "a message"}"; not sending it again on this connection`);
    }
 
    /* Raw binary to the main socket (mic audio). The opcode is prepended by the caller;

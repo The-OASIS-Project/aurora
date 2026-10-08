@@ -86,7 +86,7 @@ The center visualization and the conversation console live on these.
 | `thinking_start` / `thinking_delta` / `thinking_end` | `stream_id`, `delta`, `provider`, `has_content` | Extended-thinking (reasoning) stream, when the model exposes it. |
 | `reasoning_summary` | `stream_id`, `reasoning_tokens` | OpenAI o-series: count only, content withheld. |
 | `llm_state_update` | `type`, `provider`, `model`, `*_available` flags | Session LLM config changed. Feeds a "brain" status readout. |
-| `error` | `code`, `message`, `recoverable` | Something failed. Drives the reactor error state. |
+| `error` | `code`, `message`, `recoverable` | Something failed. Drives the reactor error state. **`UNKNOWN_TYPE`** (DAWN bcb0bdc1+, no flag; older daemons send nothing) means this DAWN doesn't handle a type we sent (an older build, or a subsystem like Home Assistant or the calendar not built in): it carries `request_type` + `req` (each only when <=64 bytes, clean UTF-8) and can arrive before replies to earlier requests, so match by `req`. Aurora never shows it: it fails the matching request at once, stops sending that type for the connection (polls stop), and an unsupported `ha_status` reads "Home Assistant isn't available on this DAWN". |
 
 > **Note on `metrics_update`:** it is sent to the session that is generating, not
 > broadcast to every tab. A dashboard that is its own session sees the metrics for
