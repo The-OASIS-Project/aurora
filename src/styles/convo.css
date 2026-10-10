@@ -768,6 +768,14 @@
    outline: none;
    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
+/* The email a user turn asked about (P1.4): a document-style chip under the words; opens in Mail. */
+.convo-email-chip {
+   display: flex;
+   margin-top: 0.4rem;
+}
+.convo-email-chip:disabled {
+   cursor: default;
+}
 .convo-doc-type {
    font-family: var(--font-mono);
    font-size: var(--fs-nano);
@@ -1023,4 +1031,13 @@
    opacity: 0.35;
    cursor: default;
    color: var(--text-faint); /* no hover highlight on the disabled control */
+}
+
+/* A visual that navigated its own frame was closed (visual.ts). */
+.convo-visual-blocked {
+   padding: 0.5rem 0.7rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text-faint);
+   border: 1px dashed color-mix(in srgb, var(--text) 20%, transparent);
 }

@@ -66,7 +66,7 @@ import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.
 import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
-import type { EmailSource } from "./email.ts";
+import type { EmailRef, EmailSource } from "./email.ts";
 import { formatCacheState } from "../util/cache-state.ts";
 import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
@@ -350,6 +350,32 @@ function todayWindow(tz: string): { start: number; end: number } {
    if (offMidnight !== off) startMs = midnightAsUTC - offMidnight * 1000;
    const start = Math.floor(startMs / 1000);
    return { start, end: start + 86400 };
+}
+
+/* DAWN's cut for an email ref's display strings (160 bytes on a character boundary, control
+   characters as spaces), done before sending so the bubble shows what a reload will. */
+function displayCut(s: string): string {
+   let out = s.replace(/\p{Cc}/gu, " ");
+   const enc = new TextEncoder();
+   while (enc.encode(out).length > 160) out = Array.from(out).slice(0, -1).join("");
+   return out;
+}
+
+/* A row's `email_ref` (P1.4) -> our EmailRef, or undefined. Its strings are display-only and
+   attacker-influenced (a sender's own From and Subject): the view binds them as text. */
+function toEmailRef(v: unknown): EmailRef | undefined {
+   if (!v || typeof v !== "object") return undefined;
+   const o = v as Record<string, unknown>;
+   const accountId = typeof o.account_id === "number" && Number.isInteger(o.account_id) && o.account_id > 0 ? o.account_id : 0;
+   const messageId = typeof o.message_id === "string" ? o.message_id : "";
+   /* DAWN's id rule: 1-191 bytes, no control characters (it is sent back in email_read). */
+   if (!accountId || !messageId.trim() || new TextEncoder().encode(messageId).length > 191 || /\p{Cc}/u.test(messageId)) return undefined;
+   return {
+      accountId,
+      messageId,
+      sender: typeof o.from === "string" ? o.from : "",
+      subject: typeof o.subject === "string" ? o.subject : ""
+   };
 }
 
 /* A calendar_upcoming_events event -> our CalendarEvent. */
@@ -2275,7 +2301,7 @@ export class DawnIngest implements Ingest {
                if (!info && !tools) continue;
                /* Stamp the DB id so a late message_appended for a reloaded row can't
                   re-double it (Phase-0 dedup prereq). */
-               items.push({ role: m.role as "user" | "assistant", text: info?.text, tools, id });
+               items.push({ role: m.role as "user" | "assistant", text: info?.text, tools, id, email: m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined });
             }
             this.sinks.conversation.loadHistory(items);
             for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
@@ -2681,7 +2707,9 @@ export class DawnIngest implements Ingest {
                code === "IMAGE_ERROR" ||
                code === "EMPTY_MESSAGE" ||
                code === "TURN_QUEUE_FULL" ||
-               code === "ATTACHMENT_INVALID";
+               code === "ATTACHMENT_INVALID" ||
+               code === "EMAIL_REF_LIMIT" ||
+               code === "EMAIL_UNAVAILABLE";
             const refusalText = (): string =>
                typeof p.message === "string" && p.message ? p.message : code === "TURN_QUEUE_FULL" ? "DAWN is busy. Try again in a moment." : "it couldn't be sent.";
             if (errRef && errSeverity === "error") {
@@ -3527,6 +3555,13 @@ export class DawnIngest implements Ingest {
                );
                break;
             }
+            /* A visual the render_visual tool just drew (DAWN sends the tool's whole result live; the
+               saved reply carries it too, which is how a reload shows it). Keyed on the role DAWN
+               sets for that tool only, never on content. Replays come back with the saved rows. */
+            if (p.role === "visual" && typeof p.text === "string") {
+               if (p.replay !== true) this.sinks.conversation.addVisual(p.text);
+               break;
+            }
             /* A complete (non-streamed or replayed) assistant message. DAWN persists it itself
                (server-authoritative); the client only renders it, stamping the row's message_id
                so the fanned message_appended dedups against this bubble. A live non-streamed reply
@@ -3572,7 +3607,7 @@ export class DawnIngest implements Ingest {
                   structured-attachments turn whose echo was lost, since its server-built text can't
                   match what we sent. */
                const fanRef = typeof (p as { client_ref?: unknown }).client_ref === "string" ? (p as { client_ref: string }).client_ref : undefined;
-               this.handleIncomingUser(String((p as { text?: string }).text ?? "").trim(), messageId, false, fanRef);
+               this.handleIncomingUser(String((p as { text?: string }).text ?? "").trim(), messageId, false, fanRef, toEmailRef((p as { email_ref?: unknown }).email_ref));
                break;
             }
             const info = interpretMessage(String((p as { text?: string }).text ?? ""));
@@ -4798,7 +4833,7 @@ export class DawnIngest implements Ingest {
 
    /* User typed a message. This DOES drive a real DAWN turn (costs budget); it is
       the one intentional user-initiated action on an otherwise read-only client. */
-   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean }): void {
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean; emailRefs?: EmailRef[] }): void {
       /* Don't let a message vanish into a dead/half-open link: tell the user instead of
          silently dropping it (the old `readyState !== OPEN` guard swallowed it). */
       if (!this.isLinkLive()) {
@@ -4832,6 +4867,7 @@ export class DawnIngest implements Ingest {
          image_ids?: string[];
          client_ref?: string;
          from_visual?: boolean;
+         email_refs?: Array<{ account_id: number; message_id: string; from: string; subject: string }>;
          attachments?: Array<{ filename: string; size: number; content: string; blob_id?: string }>;
       } = { text };
       /* document_attachments (+ turn_refs): documents as a structured field; DAWN builds the
@@ -4850,6 +4886,17 @@ export class DawnIngest implements Ingest {
       /* A rendered visual's prompt, not the person: DAWN lets no confirm count in this turn (a
          model-written script calling sendPrompt("yes") must not approve a staged action). */
       if (attachments?.fromVisual) payload.from_visual = true;
+      /* P1.4: the email the turn asks about. The model reads it itself through the email tool; `from`
+         and `subject` are the chip's display strings, stored for display only (never sent to the
+         model). The id goes back exactly as the mail panel received it. */
+      if (attachments?.emailRefs?.length && this.supportsEmailRefs()) {
+         payload.email_refs = attachments.emailRefs.slice(0, 1).map((r) => ({
+            account_id: r.accountId,
+            message_id: r.messageId,
+            from: displayCut(r.sender),
+            subject: displayCut(r.subject)
+         }));
+      }
       /* Image attachments: the MANDATORY image_ids (the /api/images upload ids, order-matched),
          which the daemon reads, sends to the model, and persists as [IMAGE:<id>] markers. A DAWN
          advertising `image_turns_by_id` takes images ONLY that way (it ignores base64); an older
@@ -5126,13 +5173,12 @@ export class DawnIngest implements Ingest {
       return this.prefs;
    }
 
-   /* Whether a chat turn can carry an email reference (DAWN's `email_refs` flag; the turn field
-      lands with DAWN P1.4, so this stays false until this client sends it). Prerequisites before
-      it may return true (docs/EMAIL_PANEL_DESIGN.md 4): the turn sends `email_refs`, private-first
-      creation (newConversation({private:true}), done), and off-origin images in assistant replies
-      no longer auto-load (4.7, not built yet). */
+   /* Whether a chat turn can carry an email reference: DAWN's `email_refs` flag (P1.4). Its
+      prerequisites are all in (docs/EMAIL_PANEL_DESIGN.md 4): submit() sends `email_refs`,
+      private-first creation (newConversation({private:true})), and off-origin images in rendered
+      replies wait for a click (format.ts, 4.7). */
    supportsEmailRefs(): boolean {
-      return false;
+      return this.hasFeature("email_refs");
    }
 
    /* The login panel subscribes to reflect connection state. */
@@ -5315,7 +5361,7 @@ export class DawnIngest implements Ingest {
       a 0/absent id on either would double the user's own message. DAWN guards the fan-out on
       message_id > 0 on BOTH the text and voice paths (verified), so a save-failure/id-0 turn
       emits only the echo (single frame - the splice handles it), never a doubling second frame. */
-   private handleIncomingUser(text: string, messageId: number, replay: boolean, ref?: string): void {
+   private handleIncomingUser(text: string, messageId: number, replay: boolean, ref?: string, email?: EmailRef): void {
       if (this.sinks.conversation.hasMessage(messageId)) return;
       /* turn_refs: our own echo names its turn, so dedup by the ref (a structured-attachments
          turn's echo carries server-built text that can't match what we showed). */
@@ -5344,6 +5390,6 @@ export class DawnIngest implements Ingest {
          this.sinks.conversation.noteMessageId(messageId);
          return;
       }
-      if (!replay) this.sinks.conversation.showUser(text, messageId);
+      if (!replay) this.sinks.conversation.showUser(text, messageId, email);
    }
 }

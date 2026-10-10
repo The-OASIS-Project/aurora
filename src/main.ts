@@ -702,6 +702,9 @@ const conversation = mountConversation(stage, {
    /* An email chip rides the turn only once DAWN can take the reference (`email_refs`). */
    emailRefsSupported: () => dawn.supportsEmailRefs(),
    onEmailRefBlocked: () => dawn.notifyUser("This DAWN can't take an email in chat yet - message not sent."),
+   /* A chat bubble's email chip opens that message in the Mail panel (it shows + expands the panel;
+      a message since moved reads "moved or deleted" there). */
+   onOpenEmail: (ref) => emailPanel.openMessage(ref.accountId, ref.messageId),
    /* One image message in flight at a time (so a refusal can only mean that one): hold the next. */
    onImageTurnBusy: () => dawn.notifyUser("Your last image message is still sending - try again in a moment."),
    onImageNeedsText: () => dawn.notifyUser("Add a message to send with the image."),

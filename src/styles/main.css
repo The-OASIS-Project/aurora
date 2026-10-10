@@ -922,3 +922,27 @@ body.engaged #docks {
       --reduced-motion: 1;
    }
 }
+
+/* An image from another site in rendered markdown (a reply, a document): it waits for a click
+   (format.ts, EMAIL_PANEL_DESIGN 4.7). */
+.md-img-blocked {
+   display: inline-flex;
+   align-items: center;
+   max-width: 100%;
+   margin: 0.15em 0;
+   padding: 0.2em 0.6em;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   color: var(--text-dim);
+   background: none;
+   border: 1px dashed color-mix(in srgb, var(--text) 25%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+   overflow-wrap: anywhere;
+   text-align: left;
+}
+.md-img-blocked:hover,
+.md-img-blocked:focus-visible {
+   color: var(--accent-glow);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}

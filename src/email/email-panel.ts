@@ -325,7 +325,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let movable: MovableHandle | null = null;
    const resizable = makeResizable(el, {
       storageKey: SIZE_KEY,
-      minWidth: 300,
+      minWidth: 340, // matches the CSS min-width: the narrowest the reader bar still fits
       minHeight: 360,
       defaultWidth: 340,
       defaultHeight: 520,
@@ -427,6 +427,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let savedListScroll = 0;
    let split = false;
    let compactDiscuss = false;
+   let fullDiscussNeeds = 0; // the reader width the full Discuss buttons were measured to need
    let lockUntil = 0;
    let lockX = 0;
    let lockY = 0;
@@ -937,11 +938,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       live.textContent = text;
    };
 
+   const senderLabel = (name: string, addr: string): string => (name && addr && name !== addr ? `${name} <${addr}>` : addr || name);
+
    /* --- reader ------------------------------------------------------------- */
    const discussRef = (r: Reader): EmailRef => ({
       accountId: r.row.accountId,
       messageId: r.row.messageId,
-      sender: r.message?.fromName || r.message?.fromAddr || r.row.fromName || r.row.fromAddr,
+      /* "Name <addr>": the chip (stored with the chat message) never shows a display name alone. */
+      sender: senderLabel(r.message?.fromName ?? r.row.fromName, r.message?.fromAddr ?? r.row.fromAddr),
       subject: r.message?.subject ?? r.row.subject
    });
 
@@ -1078,6 +1082,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          }
       }
       readerCol.appendChild(bar);
+      /* The full Discuss buttons are used only while the bar really fits them: measured, not guessed
+         (the actions it holds vary by account and by what DAWN supports). Remember the width they
+         needed, so widening the panel brings them back only once they'd fit again. */
+      if (!compactDiscuss && bar.scrollWidth > bar.clientWidth + 1 && bar.querySelector(".mail-discuss-private")) {
+         fullDiscussNeeds = bar.scrollWidth + 8;
+         compactDiscuss = true;
+         readerSig = "";
+         renderReader();
+         return;
+      }
 
       const scroll = div("mail-reader-scroll");
       const headBlock = div("mail-reader-head");
@@ -2135,7 +2149,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (w === 0) return;
       const nextSplit = split ? w >= SPLIT_OFF : w >= SPLIT_ON;
       const readerW = nextSplit ? w - Math.min(380, Math.max(280, w * 0.38)) : w;
-      const nextCompact = readerW < COMPACT_DISCUSS;
+      /* Compact once the reader is narrower than the full bar was measured to need (renderReader
+         measures it; COMPACT_DISCUSS is only the floor before any measurement). */
+      let nextCompact = readerW < Math.max(COMPACT_DISCUSS, fullDiscussNeeds);
+      /* Narrowing while the full buttons show: if the bar on screen now overflows, go compact. */
+      const bar = readerCol.querySelector<HTMLElement>(".mail-reader-bar");
+      if (!compactDiscuss && bar && bar.querySelector(".mail-discuss-private") && bar.scrollWidth > bar.clientWidth + 1) {
+         fullDiscussNeeds = bar.scrollWidth + 8;
+         nextCompact = true;
+      }
       if (nextSplit === split && nextCompact === compactDiscuss) return;
       const toSplit = nextSplit !== split;
       split = nextSplit;

@@ -19,7 +19,7 @@ import type { ActivityStatus, ConversationItem, OutDocument, OutImage, ToolCall,
 import type { EmailRef } from "../ingest/email.ts";
 import { addCorners } from "../render/corners.ts";
 import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
-import { renderMarkdown } from "./format.ts";
+import { renderMarkdown, wireImageGate } from "./format.ts";
 import { hasVisual, splitVisualSegments, stripVisualsForStreaming, createVisualFrame, initVisuals, VISUAL_PROMPT_GAP_MS } from "./visual.ts";
 import { emojify } from "../util/emoji.ts";
 import { compressImage } from "../util/image.ts";
@@ -43,7 +43,8 @@ export interface ConversationController {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string, messageId?: number): void;
-   showUser(text: string, messageId?: number): void;
+   showUser(text: string, messageId?: number, email?: EmailRef): void;
+   addVisual(markup: string): void;
    noteMessageId(messageId: number): void;
    hasMessage(messageId: number): boolean;
    showError(text: string): void;
@@ -60,7 +61,7 @@ export interface ConversationController {
       stream (another viewer's turn) as a fresh bubble, deduped on message id. */
    linkStream(convId: number, streamId: number): void;
    adoptId(convId: number, streamId: number, messageId: number): boolean;
-   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number }): void;
+   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void;
    confirmTurn(text: string, ref?: string): void;
    noteRefusal(text: string): void;
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
@@ -81,7 +82,7 @@ export interface ConversationOptions {
          documents?: OutDocument[];
          images?: OutImage[];
          imageIds?: string[];
-         emailRefs?: Array<{ accountId: number; messageId: string }>;
+         emailRefs?: EmailRef[];
          /* The text came from a rendered visual's prompt, not the person (sent as from_visual). */
          fromVisual?: boolean;
       }
@@ -100,6 +101,8 @@ export interface ConversationOptions {
       with an email chip is held (draft kept) and onEmailRefBlocked says why. */
    emailRefsSupported?: () => boolean;
    onEmailRefBlocked?: () => void;
+   /* A user turn's email chip was clicked: open that message in the Mail panel. */
+   onOpenEmail?: (ref: EmailRef) => void;
    /* A second image message while the first is still unconfirmed: the draft is kept (only one
       image turn is held at a time, so a refusal always names exactly one). */
    onImageTurnBusy?: () => void;
@@ -483,7 +486,31 @@ export function mountConversation(
       }
    };
 
-   const appendMsg = (role: "user" | "assistant", rawText: string): Msg => {
+   /* The email a user turn asked about, under its words: sender + subject (display strings, bound as
+      text). A click opens it in the Mail panel (opts.onOpenEmail); a message since moved shows there
+      as "moved or deleted". */
+   const emailChip = (ref: EmailRef): HTMLElement => {
+      const c = document.createElement("button");
+      c.type = "button";
+      c.className = "convo-doc-chip convo-email-chip";
+      const badge = document.createElement("span");
+      badge.className = "convo-doc-type";
+      badge.textContent = "MAIL";
+      const name = document.createElement("span");
+      name.className = "convo-doc-name";
+      name.textContent = `${ref.sender || "Email"}: ${ref.subject || "(no subject)"}`;
+      c.title = opts.onOpenEmail ? `Open in Mail · ${name.textContent}` : name.textContent;
+      c.append(badge, name);
+      if (opts.onOpenEmail) {
+         const open = opts.onOpenEmail;
+         c.addEventListener("click", () => open(ref));
+      } else {
+         c.disabled = true;
+      }
+      return c;
+   };
+
+   const appendMsg = (role: "user" | "assistant", rawText: string, email?: EmailRef): Msg => {
       closeToolGroup(); // a text turn ends the current tool run; the next tools open a fresh group
       win.classList.remove("empty");
       const el = document.createElement("div");
@@ -504,6 +531,7 @@ export function mountConversation(
       else renderAssistantBody(body, text);
       const attach = renderAttachments(images, docs);
       if (attach) body.appendChild(attach);
+      if (email && role === "user") body.appendChild(emailChip(email));
 
       el.append(roleEl, body);
       scroll.appendChild(el);
@@ -761,9 +789,32 @@ export function mountConversation(
       else armIdle();
    };
 
+   /* A visual DAWN's render_visual tool drew this turn (a `transcript` with role "visual", sent when
+      the tool finishes; the saved reply only carries it at the end, which is why it used to appear
+      only after a reload). It joins the reply where it happened: appended to the streaming text (the
+      stream shows its placeholder and endReply builds the frame), or held for the reply that starts
+      next. A turn that never streams gets it from its saved row (message_appended) instead. */
+   let pendingVisuals: string[] = [];
+   const addVisual = (markup: string): void => {
+      if (!hasVisual(markup)) return;
+      if (streaming) {
+         streaming.text += `\n${markup}\n`;
+         scheduleRender();
+         summon();
+      } else {
+         pendingVisuals.push(markup);
+      }
+   };
+   const takePendingVisuals = (): string => {
+      const v = pendingVisuals.length ? `${pendingVisuals.join("\n")}\n` : "";
+      pendingVisuals = [];
+      return v;
+   };
+
    const startReply = (): void => {
       summon();
       streaming = appendMsg("assistant", "");
+      streaming.text = takePendingVisuals();
       win.classList.remove("thinking");
    };
 
@@ -824,16 +875,17 @@ export function mountConversation(
    /* Non-origin render: a message_appended for the active conversation that we did NOT stream
       (another viewer's turn, or a server-side turn with no live stream here). Render a fresh
       bubble, deduped on message id (also guards against a reload + a late echo doubling). */
-   const renderAppended = (item: { role: "user" | "assistant"; text: string; messageId: number }): void => {
+   const renderAppended = (item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void => {
       if (item.messageId > 0 && renderedIds.has(item.messageId)) return; // already in the transcript
-      const msg = appendMsg(item.role, item.text);
+      if (item.role === "assistant" && hasVisual(item.text)) pendingVisuals = []; // that saved reply carries them
+      const msg = appendMsg(item.role, item.text, item.email);
       stampId(msg, item.messageId);
       summon();
    };
 
    const showReply = (text: string, messageId = 0): void => {
       streaming = null;
-      const msg = appendMsg("assistant", text);
+      const msg = appendMsg("assistant", takePendingVisuals() + text);
       /* Stamp the DB id so the fanned message_appended for this same row dedups against this
          bubble (DAWN persists the reply; the client only renders it). */
       if (messageId > 0) stampId(msg, messageId);
@@ -844,8 +896,9 @@ export function mountConversation(
    /* A user turn that did NOT originate from the composer here - i.e. a voice
       transcript DAWN sent back. Typed turns are appended locally on submit and deduped
       upstream, so this only carries spoken input. */
-   const showUser = (text: string, messageId = 0): void => {
-      const msg = appendMsg("user", text);
+   const showUser = (text: string, messageId = 0, email?: EmailRef): void => {
+      pendingVisuals = []; // a new (voice or other-viewer) turn: same rule as a typed one
+      const msg = appendMsg("user", text, email);
       if (messageId > 0) stampId(msg, messageId); // Phase-0: dedup the user fan-out echo
       summon();
    };
@@ -904,6 +957,7 @@ export function mountConversation(
 
    /* Empty the surface (a tool reset the conversation). */
    const clear = (): void => {
+      pendingVisuals = []; // a visual belongs to the transcript it arrived in
       if (raf) {
          cancelAnimationFrame(raf);
          raf = 0;
@@ -932,6 +986,7 @@ export function mountConversation(
    /* Replace the transcript with a loaded conversation, then show it briefly so
       there is somewhere to start; it recedes on its own after the idle interval. */
    const loadHistory = (items: ConversationItem[]): void => {
+      pendingVisuals = []; // a visual belongs to the transcript it arrived in
       dropEmailRef(); // switching conversations: never carry an email chip into another one
       releaseAllTurns();
       clearRefusal();
@@ -960,7 +1015,7 @@ export function mountConversation(
          for (const it of items) {
             closeToolGroup();
             if (it.text) {
-               const msg = appendMsg(it.role, it.text);
+               const msg = appendMsg(it.role, it.text, it.email);
                if (typeof it.id === "number") stampId(msg, it.id);
             }
             if (it.tools?.length) for (const call of it.tools) toolCall(call);
@@ -1058,6 +1113,7 @@ export function mountConversation(
    const releaseAllTurns = (): void => {
       for (const t of held) for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
       held = [];
+      pendingVisuals = []; // a link loss or switch: a visual waiting for its reply won't get one now
    };
 
    const renderPending = (): void => {
@@ -1287,14 +1343,21 @@ export function mountConversation(
          text DAWN receives both carry the real glyph. */
       const typed = emojify(input.value.trim());
       if (!typed && pendingDocs.length === 0 && pendingImages.length === 0 && !pendingEmail) return;
+      /* An email needs a question with it (DAWN refuses an email alone): keep the draft and say so. */
+      if (pendingEmail && !typed) {
+         noteRefusal("Add a question about this email.");
+         input.focus();
+         return;
+      }
+      /* Not connected: keep the draft (and its attachments) untouched; nothing is drawn. (First: a
+         reconnecting DAWN's features aren't known yet, so the email check below would misreport.) */
+      if (opts.canSubmit && !opts.canSubmit()) {
+         opts.onSubmitBlocked?.();
+         return;
+      }
       /* An email chip needs a DAWN that can take the reference: hold the whole draft until then. */
       if (pendingEmail && !(opts.emailRefsSupported?.() ?? false)) {
          opts.onEmailRefBlocked?.();
-         return;
-      }
-      /* Not connected: keep the draft (and its attachments) untouched; nothing is drawn. */
-      if (opts.canSubmit && !opts.canSubmit()) {
-         opts.onSubmitBlocked?.();
          return;
       }
       /* An image with no message runs only on a DAWN that takes image-only turns
@@ -1349,7 +1412,7 @@ export function mountConversation(
       const displayedText = inlined + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
       const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
       const imageIds = pendingImages.map((im) => im.id);
-      const emailRefs = pendingEmail ? [{ accountId: pendingEmail.accountId, messageId: pendingEmail.messageId }] : [];
+      const emailRefs: EmailRef[] = pendingEmail ? [pendingEmail] : [];
       const ref = `${pageTag}-${++turnSeq}`;
       const snapshot = { ref, sentText, typed: input.value, docs: pendingDocs, images: pendingImages, email: pendingEmail };
       input.value = "";
@@ -1359,7 +1422,11 @@ export function mountConversation(
       pendingImages = [];
       pendingEmail = null;
       renderPending();
-      held.push({ ...snapshot, msg: appendMsg("user", displayedText) });
+      /* A new turn: a visual still waiting from the last one never got its reply (it failed or came
+         back empty) and must not land in this one. */
+      pendingVisuals = [];
+      /* The chip shows from the draft: DAWN's echo of our own turn doesn't carry it (P1.4). */
+      held.push({ ...snapshot, msg: appendMsg("user", displayedText, snapshot.email ?? undefined) });
       clearRefusal();
       summon();
       opts.onSubmit?.(sentText, {
@@ -1487,6 +1554,8 @@ export function mountConversation(
       never touches the person's draft or pending attachments. */
    let lastVisualSend = -Infinity;
    let lastVisualNotice = -Infinity;
+   /* Off-origin images in replies wait for a click (format.ts gateImages / 4.7). */
+   const disposeImageGate = wireImageGate(scroll);
    const disposeVisuals = initVisuals((text) => {
       const now = performance.now();
       /* A refusal says why once per gesture window (a looping script can't stack notices). */
@@ -1518,6 +1587,7 @@ export function mountConversation(
       endReply,
       showReply,
       showUser,
+      addVisual,
       showError,
       toolCall,
       toolResult,
@@ -1556,7 +1626,14 @@ export function mountConversation(
             const draft = input.value.trim();
             input.value = draft && t.typed.trim() ? `${t.typed.trim()}\n\n${draft}` : t.typed.trim() || draft;
             pendingDocs = [...t.docs, ...pendingDocs];
-            if (t.email && !pendingEmail) pendingEmail = t.email;
+            /* The words asked about THIS email: it comes back with them, even over a chip attached
+               since (only one email rides a message; the newer one is dropped with a note). */
+            if (t.email) {
+               if (pendingEmail && pendingEmail.messageId !== t.email.messageId) {
+                  opts.notify?.("The returned message's email replaced the one you attached since.");
+               }
+               pendingEmail = t.email;
+            }
             pendingImages = [...imgs, ...pendingImages];
             renderPending();
             autoGrow();
@@ -1603,6 +1680,7 @@ export function mountConversation(
          input.removeEventListener("blur", disengage);
          window.removeEventListener("pointermove", onMove);
          disposeVisuals();
+         disposeImageGate();
          attachBtn?.removeEventListener("click", onAttachClick);
          fileInput?.removeEventListener("change", onFileChange);
          input.removeEventListener("paste", onPaste);

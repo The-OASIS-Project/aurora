@@ -167,6 +167,24 @@ const BRIDGE_SCRIPT =
    "</scr" +
    "ipt>\n";
 
+/* First in every visual's <head>: the model-written code runs scripts (sandboxed, opaque origin)
+   but must never reach the network, or an injected instruction could beacon data out (a remote
+   image, fetch(), new Image()). Vendor code is inlined, so nothing legitimate needs a remote load.
+   CSP only ever tightens: a meta the model writes later can't loosen this one. */
+const VISUAL_CSP =
+   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; ' +
+   "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\">";
+
+/* Runs before the model's code: WebRTC isn't governed by CSP, and a STUN server name can carry data
+   out in a DNS lookup, so the constructors are removed (charts and drawings never need them). This
+   narrows the channel (a nested srcdoc frame could still bring a fresh copy: a residual risk, noted in
+   EMAIL_PANEL_DESIGN 4.7). */
+const VISUAL_PRELUDE =
+   "<scr" +
+   "ipt>try{delete window.RTCPeerConnection;delete window.webkitRTCPeerConnection;" +
+   "window.RTCPeerConnection=undefined;window.webkitRTCPeerConnection=undefined}catch(e){}</scr" +
+   "ipt>";
+
 /* Replace <script src="/js/vendor/X"> with the inlined vendor code (a sandboxed srcdoc
    iframe has no base URL, so it can't load external scripts). Fetched once, cached, and
    </script>-escaped so the vendor body can't close the tag early.
@@ -258,7 +276,10 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
    let content: string;
    if (v.type === "svg") {
       content =
-         "<!DOCTYPE html><html><head><style>" +
+         "<!DOCTYPE html><html><head>" +
+         VISUAL_CSP +
+         VISUAL_PRELUDE +
+         "<style>" +
          themeCss() +
          visualClasses() +
          "body{margin:0;padding:0;overflow:hidden}svg{display:block;width:100%;height:auto}" +
@@ -294,7 +315,10 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
             "ipt>\n";
       }
       content =
-         "<!DOCTYPE html><html><head><style>" +
+         "<!DOCTYPE html><html><head>" +
+         VISUAL_CSP +
+         VISUAL_PRELUDE +
+         "<style>" +
          themeCss() +
          visualClasses() +
          canvasCss +
@@ -313,7 +337,22 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
    });
    container.appendChild(iframe);
 
+   /* The srcdoc loads once. A later load means the visual's own code navigated the frame (the
+      page's frame-src should already have refused it): drop the frame, never keep what it went to. */
+   let srcdocLoads = 0;
    iframe.addEventListener("load", () => {
+      if (!iframe.getAttribute("srcdoc")) return; // the initial about:blank, before srcdoc is set
+      if (++srcdocLoads > 1) {
+         if (iframe.contentWindow) {
+            knownWindows.delete(iframe.contentWindow);
+            resizeMap.delete(iframe.contentWindow);
+         }
+         const note = document.createElement("div");
+         note.className = "convo-visual-blocked";
+         note.textContent = "This visual tried to leave its frame and was closed.";
+         iframe.replaceWith(note);
+         return;
+      }
       if (iframe.contentWindow) {
          knownWindows.add(iframe.contentWindow);
          resizeMap.set(iframe.contentWindow, { iframe, lastH: 0 });

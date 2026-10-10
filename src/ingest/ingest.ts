@@ -14,6 +14,7 @@
  */
 
 import type { UserPrefs } from "./prefs.ts";
+import type { EmailRef } from "./email.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 
@@ -66,6 +67,7 @@ export interface ConversationItem {
    text?: string;
    tools?: ToolCall[];
    id?: number; // server DB message id, stamped for message_appended dedup (absent on older servers)
+   email?: EmailRef; // a user turn that asked about an email (DAWN's row `email_ref`, P1.4)
 }
 
 /* What ingest can push to the conversation console (a passive view). Streaming
@@ -95,9 +97,12 @@ export interface ConversationSink {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string, messageId?: number): void;
-   /* A user turn from DAWN (a voice transcript). Typed turns are appended locally on
-      submit, so this is only for spoken input echoed back by the daemon. */
-   showUser(text: string, messageId?: number): void;
+   /* A user turn this view didn't draw itself: a voice transcript, or another viewer's typed turn
+      (possibly with the email it asked about). This view's own typed turns are drawn on submit. */
+   showUser(text: string, messageId?: number, email?: EmailRef): void;
+   /* A visual DAWN's render_visual tool drew this turn (a <dawn-visual> block, sent when the tool
+      finishes): shown in the reply where it happened. */
+   addVisual(markup: string): void;
    /* Phase-0 user fan-out helpers: `noteMessageId` records a DB id for a locally-rendered typed
       user turn (so the server echo/fan-out dedups); `hasMessage` reports whether a message id is
       already in the transcript (so the two user frames, arriving in any order, don't both act). */
@@ -122,7 +127,7 @@ export interface ConversationSink {
       `renderAppended` renders a `message_appended` we did NOT stream, deduped on message id. */
    linkStream(convId: number, streamId: number): void;
    adoptId(convId: number, streamId: number, messageId: number): boolean;
-   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number }): void;
+   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void;
    /* A tool reset the conversation — empty the surface. */
    clear(): void;
    /* Current activity (thinking / using tools / ...) or null to clear it. */
@@ -744,7 +749,7 @@ export interface Ingest {
       `attachments` field for a DAWN taking `document_attachments`; otherwise the caller inlines them
       into `text`. `attachments.turnRef` rides as `client_ref` under `turn_refs`. `attachments.fromVisual` marks a
       rendered visual's prompt (`from_visual`), so DAWN lets no confirm count in that turn. */
-   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean }): void;
+   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean; emailRefs?: EmailRef[] }): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */

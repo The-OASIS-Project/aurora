@@ -3,6 +3,11 @@
    <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <!-- Frames may only hold this origin (the model-drawn visuals are srcdoc frames, which this
+           allows). It is what stops a visual's script navigating its own frame to another site to
+           leak data: a frame's own CSP can't govern that, the page's frame-src does. Nothing else
+           is restricted here (no default-src), so the dev server and the app load as before. -->
+      <meta http-equiv="Content-Security-Policy" content="frame-src 'self'" />
       <title>DAWN</title>
       <!-- Critical bootstrap CSS. The stylesheets are imported through main.ts (JS), so
            without this the browser paints the raw static HTML on default white first -

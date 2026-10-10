@@ -326,6 +326,16 @@ wraps, and stores the content itself.
    image would fire mid-stream and exfiltrate. Off-origin images in replies render as a click-to-load
    placeholder showing the host. This applies to every conversation, since an injection can arrive
    through any tool, not only this chip.
+   **Built (2026-10-09):** `src/conversation/format.ts` renders markdown through its own DOMPurify
+   instance that removes everything that fetches by itself (srcset, picture/video/audio/source/
+   track, input, form/button, inline style, table background, svg/math, href except on links, src
+   except on images); an off-origin `<img>` becomes a placeholder naming its host, loaded only by a
+   click (nonce-checked, so a reply can't forge one). Model-drawn visuals (`<dawn-visual>`, sandboxed
+   srcdoc frames) carry a meta CSP with no network access (`default-src 'none'`), the page's
+   `frame-src 'self'` stops a visual navigating its own frame elsewhere (a second load also closes
+   the frame), and WebRTC constructors are removed before the model's code runs. **Residual:** a
+   visual's script could create a nested srcdoc frame with a fresh WebRTC and leak through a STUN
+   DNS lookup; closing that fully would mean not running model scripts at all.
 8. **The assistant's own send/trash confirm is conversational by design (see 9.0):** the model
    asks and the user answers in the conversation (voice-first). That is the owner's intended model;
    the wrapper (9.8) and the reply-image block (7 above) are what limit an injected email.

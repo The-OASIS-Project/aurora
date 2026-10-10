@@ -17,7 +17,9 @@
  */
 
 import { addCorners } from "./corners.ts";
-import { renderMarkdown } from "../conversation/format.ts";
+import { renderMarkdown, wireImageGate } from "../conversation/format.ts";
+
+const gated = new WeakSet<HTMLElement>();
 
 export interface DocDownload {
    /* Suggested save name (DAWN-sourced; sanitized before use). */
@@ -89,7 +91,11 @@ export function textDownload(filename: string, text: string, mime = "text/markdo
 export function setDocBodyText(body: HTMLElement, text: string, asMarkdown: boolean): void {
    if (asMarkdown) {
       body.classList.add("markdown");
-      body.innerHTML = renderMarkdown(text); // sanitized
+      body.innerHTML = renderMarkdown(text); // sanitized; off-origin images are click-to-load
+      if (!gated.has(body)) {
+         gated.add(body); // one listener per body element (it lives and dies with the element)
+         wireImageGate(body);
+      }
    } else {
       body.classList.remove("markdown");
       const pre = document.createElement("pre");
