@@ -71,6 +71,7 @@ import { formatCacheState } from "../util/cache-state.ts";
 import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
+import { MusicSocketWatch, type MusicDeadReason } from "./music-watch.ts";
 import {
    LAST_USER_STORAGE_KEY,
    clearUserState,
@@ -106,6 +107,7 @@ const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after the opcode)
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
+const MUSIC_MAX_STALLS = 3; // silent-while-playing replacements in a row before "unavailable"
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
 /* A connection must stay up this long before the backoff resets: one that dies right after opening
@@ -877,6 +879,10 @@ export class DawnIngest implements Ingest {
    private musicWsAuthed = false; // auth_ok seen -> the socket may carry buffer reports
    private musicUnavailable = false; // surfaced "stream unavailable" after exhausting retries
    private musicWsToken = ""; // token the current music socket is (re)connecting with
+   /* A proxy can keep a dead music socket OPEN with no onclose (see music-watch.ts): replace it
+      when it doesn't attach in time or goes silent while DAWN says music is playing. */
+   private readonly musicWatch = new MusicSocketWatch((reason) => this.onMusicSocketDead(reason));
+   private musicStalls = 0; // consecutive silent-while-playing replacements; any audio frame clears it
    private musicEnabled = true; // config.music_enabled (older servers omit it -> assume on)
    private musicPort = 0; // config.music_port; used for the cross-port prod connect (0 = fall back to main+1)
    private dawnVersion = ""; // daemon version if a frame advertises it (feature-detected; else "")
@@ -1536,6 +1542,7 @@ export class DawnIngest implements Ingest {
          /* Drop the seek-detection baseline: a resume may land at a different track/
             position, and a stale baseline would misread that first music_state as a seek. */
          this.prevMusicIndex = null;
+         this.musicWatch.setPlaying(false); // the reconnect's music_state says again
          /* Drop any in-flight list latch: a load-more that never got its response must not
             poison the post-reconnect boot response into an append. Also drop a queued live
             refresh + its debounce: the reconnect boot list (onopen list_conversations) is the
@@ -1837,6 +1844,7 @@ export class DawnIngest implements Ingest {
             if (typeof p.token === "string") {
                localStorage.setItem(TOKEN_KEY, p.token);
                this.musicWsFails = 0;
+               this.musicStalls = 0;
                this.musicUnavailable = false; // fresh connection re-arms the give-up notice
             }
             /* DAWN has processed our handshake (and its audio_codecs): use_opus is set, so
@@ -2875,6 +2883,7 @@ export class DawnIngest implements Ingest {
             /* Pause freezes output while KEEPING the buffered lead (seamless resume, no
                ~2 s tail after the press and no ~2 s skip on resume); play resumes it. */
             this.music.setPaused(st.paused === true);
+            this.musicWatch.setPlaying(nowPlaying);
             if (stopped || ((trackChanged || seeked) && !autoAdvance)) this.music.flush();
             this.prevMusicIndex = st.queueIndex;
             this.prevMusicPos = st.positionSec;
@@ -2896,6 +2905,9 @@ export class DawnIngest implements Ingest {
          }
 
          case "music_error":
+            /* DAWN can stop streaming on an error without a music_state (a failed auto-advance
+               decode), so stop expecting audio until the next music_state says playing again. */
+            this.musicWatch.setPlaying(false);
             this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
             console.warn("[dawn] music_error:", p.code, p.message);
             break;
@@ -4089,6 +4101,7 @@ export class DawnIngest implements Ingest {
          const token = localStorage.getItem(TOKEN_KEY);
          if (token) {
             this.musicWsFails = 0;
+            this.musicStalls = 0;
             this.musicUnavailable = false;
             this.openMusicStream(token);
          }
@@ -4413,7 +4426,6 @@ export class DawnIngest implements Ingest {
       scheduleMusicReconnect surfaces an error. */
    private openMusicStream(token: string): void {
       if (!this.wantConnected || !token) return;
-      this.musicWsAuthed = false;
       /* Idempotent: DAWN can send the `session` frame more than once per connect, and
          we must not tear down a live socket each time (rapid reopen can race the
          server's stream registration). Only (re)open if there is no live socket for
@@ -4422,8 +4434,8 @@ export class DawnIngest implements Ingest {
          this.musicWs &&
          (this.musicWs.readyState === WebSocket.OPEN ||
             this.musicWs.readyState === WebSocket.CONNECTING);
-      if (live && this.musicWsToken === token) return;
-      this.closeMusicStream();
+      if (live && this.musicWsToken === token) return; // keeps its auth state: buffer reports go on
+      this.closeMusicStream(); // clears musicWsAuthed for the new socket
       this.musicWsToken = token;
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       /* DEV: reach the dawn-music server (main+1) through the Vite /music-ws proxy, so
@@ -4446,6 +4458,7 @@ export class DawnIngest implements Ingest {
       }
       ws.binaryType = "arraybuffer";
       this.musicWs = ws;
+      this.musicWatch.opened();
 
       ws.onopen = (): void => ws.send(JSON.stringify({ type: "auth", token }));
 
@@ -4453,6 +4466,8 @@ export class DawnIngest implements Ingest {
          if (ev.data instanceof ArrayBuffer) {
             const bytes = new Uint8Array(ev.data);
             if (bytes.length === 0) return;
+            this.musicWatch.audio();
+            this.musicStalls = 0;
             /* Frame is [0x20][uint16-LE len][opus]: the daemon prepends the
                WS_BIN_MUSIC_DATA opcode to every dedicated-socket frame. Strip it so the
                decoder gets [len][opus]. (bytes[0] is always the opcode, never opus data,
@@ -4466,6 +4481,7 @@ export class DawnIngest implements Ingest {
                this.musicWsFails = 0; // attached; audio now streams here
                this.musicWsAuthed = true;
                this.musicUnavailable = false;
+               this.musicWatch.attached();
                /* Debug, not info: an idle socket idle-times-out and reconnects to
                   stay ready, so at info level this would spam every ~30s when nothing
                   is playing. Playback keeps the socket alive (verified: stable). */
@@ -4483,7 +4499,9 @@ export class DawnIngest implements Ingest {
       };
 
       ws.onclose = (): void => {
-         if (this.musicWs === ws) this.musicWs = null;
+         if (this.musicWs !== ws) return; // a replaced socket's late close
+         this.musicWs = null;
+         this.musicWatch.stop();
          this.scheduleMusicReconnect();
       };
       ws.onerror = (): void => {
@@ -4494,14 +4512,7 @@ export class DawnIngest implements Ingest {
    private scheduleMusicReconnect(): void {
       if (!this.wantConnected || !this.musicEnabled) return;
       if (this.musicWsFails >= MUSIC_WS_MAX_FAILS) {
-         /* This socket is the only music transport, so exhausting retries means there
-            is no audio path at all - surface it once (not silent silence). A later
-            music_control re-arms the retries (see musicControl). auth_ok clears it. */
-         if (!this.musicUnavailable) {
-            this.musicUnavailable = true;
-            this.sinks.music.setError("Music stream unavailable");
-            console.warn("[dawn] music stream: giving up after", MUSIC_WS_MAX_FAILS, "attempts");
-         }
+         this.musicGiveUp(`${MUSIC_WS_MAX_FAILS} attempts`);
          return;
       }
       const token = localStorage.getItem(TOKEN_KEY);
@@ -4512,8 +4523,39 @@ export class DawnIngest implements Ingest {
       this.musicWsTimer = window.setTimeout(() => this.openMusicStream(token), delay);
    }
 
+   /* This socket is the only music transport, so giving up means there is no audio path at all -
+      surface it once (not silent silence). A later music_control re-arms the retries (see
+      musicControl). auth_ok clears it. */
+   private musicGiveUp(why: string): void {
+      if (this.musicUnavailable) return;
+      this.musicUnavailable = true;
+      this.sinks.music.setError("Music stream unavailable");
+      console.warn("[dawn] music stream: giving up after", why);
+   }
+
+   /* The watch found the socket dead without a close: replace it through the normal retries. A
+      connect timeout counts as a failed attempt there. A stall doesn't (the socket did attach, and
+      auth_ok resets that count), so stalls are capped on their own: when fresh sockets keep getting
+      nothing while DAWN says "playing", the silence is DAWN's and another replacement won't help.
+      The cap still reconnects (so audio plays the moment DAWN sends it) but stops judging the socket
+      by silence until audio arrives or playback starts again. */
+   private onMusicSocketDead(reason: MusicDeadReason): void {
+      console.warn(
+         reason === "connect"
+            ? "[dawn] music stream: no auth_ok in time, reconnecting"
+            : "[dawn] music stream: no audio while playing, reconnecting"
+      );
+      this.closeMusicStream();
+      if (reason === "stall" && ++this.musicStalls >= MUSIC_MAX_STALLS) {
+         this.musicWatch.holdStalls();
+         this.musicGiveUp(`${MUSIC_MAX_STALLS} silent reconnects`);
+      }
+      this.scheduleMusicReconnect();
+   }
+
    private closeMusicStream(): void {
       window.clearTimeout(this.musicWsTimer);
+      this.musicWatch.stop();
       this.musicWsAuthed = false;
       const ws = this.musicWs;
       if (!ws) return;
