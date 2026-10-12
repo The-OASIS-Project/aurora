@@ -5,8 +5,8 @@
  *
  * It is the user's own financial data, read-only - no write beyond the sanctioned
  * subscribe/get. The subscription is gated on EFFECTIVE visibility (shown AND not suspended by
- * the standby screensaver or a hidden tab), so DAWN only fetches from Schwab when someone is
- * actually looking (mirrors the Watches 1 Hz gauge).
+ * the standby screensaver or a tab hidden for over 3 minutes, src/util/tab-away.ts), so DAWN only
+ * fetches from Schwab when someone is actually looking (mirrors the Watches 1 Hz gauge).
  *
  * Ambient signal: a position row SPIKES (a brief gain/loss-tinted wash) only on a MATERIAL move
  * (a ~0.5pp day-change swing, a gain/loss sign flip, or a ~0.5% value move), never on the
@@ -28,6 +28,7 @@ import type {
    StocksSink
 } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
+import { watchTabAway } from "../util/tab-away.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
@@ -49,7 +50,7 @@ export interface StocksPanelController extends StocksSink {
    setVisible(on: boolean): void;
    /* Suspend/resume the subscription independent of the panel toggle: set by the standby
       screensaver, so "nobody watching" means zero API traffic. (A hidden tab is handled
-      internally via visibilitychange.) */
+      internally, after a 3-minute grace: src/util/tab-away.ts.) */
    setSuspended(on: boolean): void;
    /* The DAWN user's IANA tz, for the "as of" stamp. */
    setTimezone(tz: string | undefined): void;
@@ -224,9 +225,10 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
 
    /* --- subscription lifecycle (gated on EFFECTIVE visibility) ------------ */
    let suspended = false;
-   let tabHidden = typeof document !== "undefined" && document.hidden;
    let subscribed = false;
-   const effective = (): boolean => vis.isVisible() && !suspended && !tabHidden;
+   /* A hidden tab counts only after a grace period, so a quick tab hop doesn't drop and refetch. */
+   const tabAway = watchTabAway(() => syncSubscription());
+   const effective = (): boolean => vis.isVisible() && !suspended && !tabAway.away();
    const syncSubscription = (): void => {
       const want = effective();
       if (want === subscribed) return;
@@ -241,11 +243,6 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       opts.onPortfolioSubscribe(want, extHours);
       render();
    };
-   const onVisChange = (): void => {
-      tabHidden = document.hidden;
-      syncSubscription();
-   };
-   document.addEventListener("visibilitychange", onVisChange);
 
    /* --- as-of stamp + staleness ------------------------------------------ */
    const fmtAsOf = (asOfSec: number): string => {
@@ -568,7 +565,7 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          if (subscribed) opts.onPortfolioSubscribe(false, extHours);
          subscribed = false;
          window.clearInterval(watchdog);
-         document.removeEventListener("visibilitychange", onVisChange);
+         tabAway.dispose();
          refreshBtn.removeEventListener("click", onRefreshClick);
          eyeBtn.removeEventListener("click", onEyeClick);
          extBtn.removeEventListener("click", onExtClick);

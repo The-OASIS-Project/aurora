@@ -573,7 +573,12 @@ and same-origin URLs are dropped.
 ### 7.1 Subscription rule
 
 `subscribed = panelEffective || (panelShown && anyNotifyOn && linkLive)`, where `panelEffective` = shown AND
-expanded AND not standby AND tab visible (the Stocks pattern). The view computes it (it owns the
+expanded AND not standby AND the tab not away (the Stocks pattern; a hidden tab counts as away only after
+a 3-minute grace, `src/util/tab-away.ts`, so a quick tab hop changes nothing). Marking read and the
+"is a bell redundant" check use the raw tab visibility instead, with no grace. Coming back into view
+refreshes the list in place: the loaded pages are re-read (until they reach the oldest loaded row)
+and swapped in without blanking, keeping the scroll and the open message, with new mail behind the
+"new" pill while the user is scrolled. The view computes it (it owns the
 prefs); DawnIngest stores the intent and replays it on reconnect. Standby suspends only the
 `panelEffective` half, because standby and a hidden tab are exactly when a notification matters. Turning the
 panel OFF (Panels menu) silences it entirely, notifications included: the bells live in the panel,

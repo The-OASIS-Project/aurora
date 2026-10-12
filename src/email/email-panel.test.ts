@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { assignMonograms, MAIL_STORAGE_KEYS, mountEmailPanel } from "./email-panel.ts";
 import { EmailSim } from "../ingest/email-sim.ts";
+import { EmailRequestError } from "../ingest/email.ts";
 import { LocalUserPrefs } from "../ingest/prefs.ts";
 import { AFTER_MOVE, ALWAYS_IMAGES, MARK_READ, TRUSTED_SENDERS } from "./mail-prefs.ts";
 
@@ -331,5 +332,217 @@ describe("Mail options (3.9)", () => {
          prefs.dispose();
          document.body.replaceChildren();
       }
+   });
+});
+
+describe("Mail and tab switches", () => {
+   let hidden = false;
+   const setHidden = (h: boolean): void => {
+      hidden = h;
+      document.dispatchEvent(new Event("visibilitychange"));
+   };
+   const mountWithSim = async () => {
+      hidden = false;
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
+      const panel = mountEmailPanel(document.body, { source: sim, prefs: new LocalUserPrefs(), onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      panel.setVisible(true);
+      await flush();
+      return { sim, panel, list: vi.spyOn(sim, "list") };
+   };
+   afterEach(() => {
+      vi.useRealTimers();
+      delete (document as { hidden?: boolean }).hidden;
+   });
+
+   it("does nothing on a quick hop to another tab and back", async () => {
+      const { panel, list } = await mountWithSim();
+      const before = document.querySelectorAll(".mail-row").length;
+      expect(before).toBeGreaterThan(0);
+      setHidden(true);
+      setHidden(false);
+      await flush();
+      expect(list).not.toHaveBeenCalled();
+      expect(document.querySelectorAll(".mail-row").length).toBe(before);
+      panel.destroy();
+   });
+
+   it("after a longer absence, refreshes in place without emptying the list", async () => {
+      const { panel, list } = await mountWithSim();
+      const firstKey = document.querySelector<HTMLElement>(".mail-row")?.dataset.key;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+      /* The refresh is in flight: the old list is still on screen, not a blank or a skeleton. */
+      expect(document.querySelector<HTMLElement>(".mail-row")?.dataset.key).toBe(firstKey);
+      await flush();
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(list.mock.calls[0][0].cursor).toBeUndefined();
+      expect(document.querySelector<HTMLElement>(".mail-row")?.dataset.key).toBe(firstKey);
+      panel.destroy();
+   });
+
+   it("the refresh drops mail that went away and adds new mail, keeping the rest", async () => {
+      const { sim, panel, list } = await mountWithSim();
+      const keys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+      const before = keys();
+      const real = await sim.list({ limit: 1000 });
+      const gone = real.rows[1];
+      const newest = { ...real.rows[0], messageId: "fresh-1", subject: "Brand new", date: real.rows[0].date + 60 };
+      list.mockImplementationOnce(async (q) => {
+         const r = await EmailSim.prototype.list.call(sim, q);
+         return { ...r, rows: [newest, ...r.rows.filter((x) => x.messageId !== gone.messageId)] };
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+      await flush();
+      const after = keys();
+      expect(after.some((k) => k.includes("fresh-1"))).toBe(true);
+      expect(after.some((k) => k.includes(gone.messageId))).toBe(false);
+      expect(after.filter((k) => !k.includes("fresh-1")).length).toBe(before.length - 1);
+      panel.destroy();
+   });
+
+   it("keeps reading pages after lots of new mail, so no messages go missing in between", async () => {
+      const { sim, panel, list } = await mountWithSim();
+      const keys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+      const before = keys();
+      const first = await sim.list({ limit: 25 });
+      const top = first.rows[0];
+      const burst = Array.from({ length: 25 }, (_, i) => ({ ...top, messageId: `burst-${i}`, subject: `Burst ${i}`, date: top.date + 1000 - i }));
+      list.mockClear(); // the setup read above isn't the panel's
+      list.mockImplementationOnce(async () => ({ rows: burst, cursor: "after-burst", partial: [] }));
+      list.mockImplementationOnce(async (q) => {
+         expect(q.cursor).toBe("after-burst");
+         return EmailSim.prototype.list.call(sim, { ...q, cursor: undefined });
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+      await flush();
+      await flush();
+      const after = keys();
+      expect(list).toHaveBeenCalledTimes(2); // the burst page, then the page holding the old rows
+      expect(after.filter((k) => k.includes("burst-")).length).toBe(25);
+      for (const k of before) expect(after).toContain(k);
+      panel.destroy();
+   });
+
+   it("doesn't bring back a message archived while the refresh was in flight", async () => {
+      const { sim, panel, list } = await mountWithSim();
+      const firstRow = document.querySelector<HTMLElement>(".mail-row")!;
+      const k = firstRow.dataset.key!;
+      let release!: () => void;
+      list.mockImplementationOnce(async (q) => {
+         const r = await EmailSim.prototype.list.call(sim, q);
+         await new Promise<void>((res) => (release = res));
+         return r; // read before the archive: still holds the message
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+      await flush();
+      firstRow.querySelector<HTMLButtonElement>('[data-act="archive"]')!.click();
+      await flush();
+      expect(document.querySelector(`.mail-row[data-key="${k}"]`)).toBeNull();
+      release();
+      await flush();
+      await flush();
+      expect(document.querySelector(`.mail-row[data-key="${k}"]`)).toBeNull();
+      panel.destroy();
+   });
+
+   it("reads through an empty page that has more after it", async () => {
+      const { sim, panel, list } = await mountWithSim();
+      const before = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key);
+      list.mockImplementationOnce(async () => ({ rows: [], cursor: "more", partial: [] }));
+      list.mockImplementationOnce(async (q) => EmailSim.prototype.list.call(sim, { ...q, cursor: undefined }));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+      await flush();
+      await flush();
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key)).toEqual(before);
+      panel.destroy();
+   });
+
+   it("coming back while DAWN is unreachable keeps the list, then refreshes it in place on link-up", async () => {
+      const { panel, list } = await mountWithSim();
+      const count = document.querySelectorAll(".mail-row").length;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      panel.setLinked(false);
+      setHidden(false);
+      await flush();
+      expect(list).not.toHaveBeenCalled();
+      expect(document.querySelectorAll(".mail-row").length).toBe(count);
+      panel.setLinked(true);
+      expect(document.querySelectorAll(".mail-row").length).toBe(count); // never blanked while it loads
+      await flush();
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(document.querySelectorAll(".mail-row").length).toBe(count);
+      panel.destroy();
+   });
+
+   const leaveAndReturn = (): void => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      setHidden(true);
+      vi.advanceTimersByTime(3 * 60_000);
+      vi.useRealTimers();
+      setHidden(false);
+   };
+   const shownKeys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+
+   it("keeps the list when the refresh only finds empty pages", async () => {
+      const { panel, list } = await mountWithSim();
+      const before = shownKeys();
+      list.mockImplementation(async () => ({ rows: [], cursor: "more", partial: [] }));
+      leaveAndReturn();
+      for (let i = 0; i < 6; i++) await flush();
+      expect(list).toHaveBeenCalledTimes(3);
+      expect(shownKeys()).toEqual(before);
+      panel.destroy();
+   });
+
+   it("keeps the list when the refresh fails", async () => {
+      const { panel, list } = await mountWithSim();
+      const before = shownKeys();
+      list.mockImplementationOnce(async () => {
+         throw new EmailRequestError("TIMEOUT", "DAWN didn't answer");
+      });
+      leaveAndReturn();
+      await flush();
+      await flush();
+      expect(shownKeys()).toEqual(before);
+      expect(document.querySelector(".mail-status")?.textContent ?? "").not.toContain("didn't answer");
+      panel.destroy();
+   });
+
+   it("starts a fresh load when DAWN says the paging went stale", async () => {
+      const { panel, list } = await mountWithSim();
+      list.mockImplementationOnce(async () => {
+         throw new EmailRequestError("CURSOR_STALE", "The list changed");
+      });
+      leaveAndReturn();
+      await flush();
+      await flush();
+      expect(list).toHaveBeenCalledTimes(2); // the refresh, then a fresh first page
+      expect(list.mock.calls[1][0].cursor).toBeUndefined();
+      expect(shownKeys().length).toBeGreaterThan(0);
+      panel.destroy();
    });
 });

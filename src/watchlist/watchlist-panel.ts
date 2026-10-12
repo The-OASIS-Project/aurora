@@ -23,6 +23,7 @@ import type {
    WatchlistSink
 } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
+import { watchTabAway } from "../util/tab-away.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
@@ -151,9 +152,10 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
 
    /* --- subscription lifecycle (gated on EFFECTIVE visibility) ------------ */
    let suspended = false;
-   let tabHidden = typeof document !== "undefined" && document.hidden;
    let subscribed = false;
-   const effective = (): boolean => vis.isVisible() && !suspended && !tabHidden;
+   /* A hidden tab counts only after a grace period, so a quick tab hop doesn't drop and refetch. */
+   const tabAway = watchTabAway(() => syncSubscription());
+   const effective = (): boolean => vis.isVisible() && !suspended && !tabAway.away();
    const syncSubscription = (): void => {
       const want = effective();
       if (want === subscribed) return;
@@ -166,11 +168,6 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
       opts.onWatchSubscribe(want, extHours);
       render();
    };
-   const onVisChange = (): void => {
-      tabHidden = document.hidden;
-      syncSubscription();
-   };
-   document.addEventListener("visibilitychange", onVisChange);
 
    /* --- as-of stamp + staleness ------------------------------------------ */
    const fmtAsOf = (asOfSec: number): string => {
@@ -443,7 +440,7 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
          if (subscribed) opts.onWatchSubscribe(false, extHours);
          subscribed = false;
          window.clearInterval(watchdog);
-         document.removeEventListener("visibilitychange", onVisChange);
+         tabAway.dispose();
          addRow.removeEventListener("submit", submitAdd);
          refreshBtn.removeEventListener("click", onRefreshClick);
          extBtn.removeEventListener("click", onExtClick);

@@ -990,9 +990,10 @@ build (P0 parser, P1 fetch/cache/refresher/verbs/fan-out).
   this DAWN" after ~an 8-15s timeout.
 - **Cadence + visibility gating:** 30s during regular hours; off-hours only if the user flips the
   Extended Hours switch (`ext_hours:true` on subscribe -> 5-min). Aurora subscribes only while the
-  panel is EFFECTIVELY visible (shown AND not standby-asleep AND not a hidden tab) and unsubscribes
+  panel is EFFECTIVELY visible (shown AND not standby-asleep AND the tab not hidden for over 3
+  minutes; the grace keeps a quick tab hop from dropping and refetching) and unsubscribes
   otherwise, re-subscribing on reconnect - so DAWN fetches from Schwab only while someone is
-  actually watching (mirror of the watch-readings gauge). A closed-market `get` returns the last
+  watching or just was (the shared rule in `src/util/tab-away.ts`, also used by Watchlist and Mail). A closed-market `get` returns the last
   session's close with a prior-session `as_of` (no live pull), so the stale badge applies.
 - **cash_equivalent** renders as an ordinary labeled position with a separate pinned Cash line
   (`Σ accounts[].cash`) so holdings + cash reconcile to `total_value`. No cash-fold (the account

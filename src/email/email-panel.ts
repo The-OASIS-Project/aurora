@@ -44,6 +44,7 @@ import { addCorners } from "../render/corners.ts";
 import { makeMovableHandle, raiseMovable, type MovableHandle } from "../render/movable.ts";
 import { makeResizable } from "../render/resizable.ts";
 import { makeVisibility } from "../render/visibility.ts";
+import { watchTabAway } from "../util/tab-away.ts";
 import { renderEmailBody } from "./render-body.ts";
 import { fitImages, fitRatio } from "./fit-images.ts";
 import type { UserPrefs } from "../ingest/prefs.ts";
@@ -109,6 +110,7 @@ const TOAST_MS = 6000;
 const REFLOW_LOCK_MS = 400;
 const REFLOW_UNLOCK_PX = 8;
 const WASH_MS = 1500;
+const MAX_EMPTY_REFRESH_PAGES = 3; // empty pages in a row (with more after them) before a refresh gives up
 const NOTIFY_COALESCE_MS = 30_000;
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -411,7 +413,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let listGen = 0;
    let staleReloads = 0;
    let lastPageEmpty = false; // a page came back empty while the cursor stayed open (an account failing)
-   let listStale = false; // changes arrived while the list wasn't on screen: reload on return
+   let listStale = false; // changes arrived while the list wasn't on screen: refresh on return
    let skeletonTimer = 0;
    let showSkeleton = false;
    const partials = new Map<number, { code: EmailErrorCode; message: string }>();
@@ -546,9 +548,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    /* --- subscription (7.1) ------------------------------------------------- */
    let suspended = false;
-   let tabHidden = document.hidden;
    let subscribed = false;
-   const panelEffective = (): boolean => vis.isVisible() && expanded && !suspended && !tabHidden;
+   /* A hidden tab counts only after a grace period, so a quick tab hop doesn't drop and refetch. */
+   const tabAway = watchTabAway(() => syncEffective());
+   const panelEffective = (): boolean => vis.isVisible() && expanded && !suspended && !tabAway.away();
+   /* What needs the person actually looking, with no grace: marking read, and whether a new-mail
+      bell is redundant. A hidden tab never marks a message read or swallows a bell. */
+   const onScreen = (): boolean => panelEffective() && !document.hidden;
+   const onRawVisibility = (): void => syncMark();
+   document.addEventListener("visibilitychange", onRawVisibility);
    /* Listen while the panel is on screen, or (opt-in bells) while it's COLLAPSED or the tab is
       hidden. Turning the panel off in the Panels menu silences it entirely: the bell settings live
       in the panel, so an off panel must not keep raising cards the user can't trace. */
@@ -565,19 +573,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const syncEffective = (): void => {
       const eff = panelEffective();
       if (eff && !wasEffective && availability === "available") {
-         /* Coming back into view: catch up (the list may be stale while unsubscribed). */
+         /* Coming back into view: catch up (the list may be stale while unsubscribed). A list
+            already on screen is refreshed in place, so returning never blanks it or loses the scroll. */
          refreshCounts();
-         reload();
+         if (rows.length === 0 || loadError) reload();
+         else refreshInPlace();
       }
       wasEffective = eff;
       syncSubscription();
       syncMark();
    };
-   const onVisChange = (): void => {
-      tabHidden = document.hidden;
-      syncEffective();
-   };
-   document.addEventListener("visibilitychange", onVisChange);
 
    const refreshCounts = (): void => {
       source
@@ -593,8 +598,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       showSkeleton = false;
    };
 
+   /* Edits made while an in-place refresh is in flight (see refreshInPlace). */
+   let refreshing: {
+      dropped: Set<string>;
+      added: Map<string, EmailRow>;
+      updated: Map<string, Partial<EmailRow>>; // changes pushed by DAWN (another client, Friday)
+      unread: Map<string, boolean>; // the user's own read/unread here
+   } | null = null;
    const reload = (): void => {
       listGen++;
+      refreshing = null; // a refresh this supersedes has nothing left to replay onto
       rows = [];
       cursor = undefined;
       loadError = null;
@@ -610,6 +623,175 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       rowEls.clear();
       listEl.scrollTop = 0;
       loadMore();
+   };
+
+   /* Refresh the list on screen without blanking it: re-read as many pages as are loaded now
+      (through DAWN's own paging, so there are no gaps and nothing is guessed from dates), then swap
+      them in at once. Scroll, the open message and the row elements stay. What the user does while
+      it's in flight (a move, read/unread, an undo putting mail back) is replayed onto the fresh
+      rows, since the pages were read before it. New mail at the top waits behind the "new" pill
+      while the user is scrolled or pointing at the list, like live mail. A failure keeps the list on
+      screen (marked stale, so the next return or link-up tries again); only a stale cursor reloads.
+      An account that fails this refresh keeps its rows. */
+   const noteUnread = (row: EmailRow): void => {
+      refreshing?.unread.set(rowKey(row), row.unread);
+   };
+   /* Recorded whether or not the row is loaded: the refresh may have read it already. */
+   const noteUpdate = (u: Partial<EmailRow> & { accountId: number; messageId: string }): void => {
+      if (!refreshing) return;
+      const k = rowKey(u as EmailRow);
+      refreshing.updated.set(k, { ...refreshing.updated.get(k), ...u });
+   };
+   const refreshInPlace = (): void => {
+      if (destroyed || availability !== "available" || accounts.length === 0 || noneSelected()) return;
+      if (!linked) {
+         listStale = true; // e.g. a laptop waking before the link is back: link-up refreshes it
+         return;
+      }
+      if (rows.length === 0) return reload(); // nothing on screen to keep
+      listGen++;
+      const gen = listGen;
+      loading = true;
+      listStale = false;
+      advanceFrom = null; // they belonged to a page request this one supersedes
+      advanceAfterPage = false;
+      /* Read until the fresh pages reach the oldest row loaded now, so new mail at the top can't push
+         loaded rows out of reach and leave a gap. DAWN keeps each account's own order (IMAP by UID),
+         so neither the tail's key nor a date alone proves it: also require at least as many rows as
+         are loaded now. Empty pages with more after them are read through (a few in a row at most);
+         if the fresh pages never reach the tail, the list on screen stays as it is (marked stale)
+         rather than shrinking under the user. */
+      const oldTail = rows[rows.length - 1];
+      const tailKey = rowKey(oldTail);
+      const oldCount = rows.length;
+      const oldKeys = new Set(rows.map(rowKey));
+      const oldHead = rows.length ? rows[0].date : -Infinity;
+      const edits = {
+         dropped: new Set<string>(),
+         added: new Map<string, EmailRow>(),
+         updated: new Map<string, Partial<EmailRow>>(),
+         unread: new Map<string, boolean>()
+      };
+      refreshing = edits;
+      const base = { accountIds: filterIsAll() ? undefined : selectedIds(), unreadOnly, query: query || undefined, limit: PAGE };
+      const buf: EmailRow[] = [];
+      const seen = new Set<string>();
+      const freshPartials: typeof partials = new Map();
+      let next: string | null = null;
+      let reachedTail = false;
+      let empties = 0;
+      const fetchPages = async (): Promise<"swap" | "keep" | "superseded"> => {
+         let cur: string | undefined;
+         for (;;) {
+            const r = await source.list({ ...base, cursor: cur });
+            if (destroyed || gen !== listGen) return "superseded";
+            const tail = buf.length ? buf[buf.length - 1].date : Infinity;
+            let outOfOrder = false;
+            let pushed = 0;
+            for (const row of r.rows) {
+               const k = rowKey(row);
+               if (seen.has(k)) continue;
+               seen.add(k);
+               pushed++;
+               if (k === tailKey || row.date < oldTail.date) reachedTail = true;
+               if (row.date > tail) outOfOrder = true; // same rule as loadMore
+               buf.push(row);
+            }
+            if (outOfOrder) buf.sort((x, y) => y.date - x.date);
+            for (const f of r.partial) freshPartials.set(f.accountId, { code: f.code, message: f.message });
+            next = r.cursor;
+            if (next === null || buf.length >= ROW_CAP) return "swap";
+            if (reachedTail) {
+               /* Rows that will survive the swap vs the loaded rows that weren't moved away meanwhile. */
+               let goneOld = 0;
+               for (const k of edits.dropped) if (oldKeys.has(k)) goneOld++;
+               let survivors = 0;
+               for (const r of buf) if (!edits.dropped.has(rowKey(r))) survivors++;
+               if (survivors >= oldCount - goneOld) return "swap";
+            }
+            empties = pushed === 0 ? empties + 1 : 0; // a page of nothing new counts as empty
+            if (empties >= MAX_EMPTY_REFRESH_PAGES) return "keep";
+            cur = next;
+         }
+      };
+      fetchPages()
+         .then((outcome) => {
+            if (outcome === "superseded") return;
+            if (outcome === "keep") {
+               listStale = true;
+               return;
+            }
+            let list = buf.filter((r) => !edits.dropped.has(rowKey(r)));
+            /* An account that failed this refresh keeps the rows it had (its place stays in the cursor). */
+            const inBuf = new Set(list.map(rowKey));
+            for (const r of rows) {
+               if (!freshPartials.has(r.accountId) || inBuf.has(rowKey(r))) continue;
+               const at = list.findIndex((x) => x.date < r.date);
+               if (at >= 0) list.splice(at, 0, r);
+               else list.push(r);
+            }
+            list = list.map((r) => {
+               const k = rowKey(r);
+               const upd = edits.updated.get(k);
+               const u = edits.unread.get(k);
+               let out = upd ? { ...r, ...upd } : r;
+               if (u !== undefined && u !== out.unread) out = { ...out, unread: u };
+               return out;
+            });
+            for (const [k, row] of edits.added) {
+               if (list.some((r) => rowKey(r) === k)) continue;
+               const at = list.findIndex((r) => r.date < row.date);
+               if (at >= 0) list.splice(at, 0, row);
+               else if (next === null) list.push(row);
+            }
+            const arrived = list.filter((r) => !oldKeys.has(rowKey(r)) && !edits.added.has(rowKey(r)) && r.date > oldHead);
+            const busy = listEl.scrollTop > 4 || pointerOverList || listEl.contains(document.activeElement);
+            if (busy && arrived.length && !query) {
+               const held = new Set(arrived.map(rowKey));
+               list = list.filter((r) => !held.has(rowKey(r)));
+               for (const r of arrived.reverse()) {
+                  if (pendingNew.some((p) => rowKey(p) === rowKey(r))) continue;
+                  if (pendingNew.length < PAGE) pendingNew.unshift(r);
+                  else pendingOverflow = true;
+               }
+            } else if (arrived.length) {
+               const now = performance.now();
+               for (const r of arrived) washed.set(rowKey(r), now + WASH_MS);
+               scheduleWash();
+            }
+            const inList = new Set(list.map(rowKey));
+            pendingNew = pendingNew.filter((p) => !inList.has(rowKey(p)));
+            if (list.length > ROW_CAP) list.length = ROW_CAP;
+            if (list.length !== rows.length || list.some((r, i) => rowKey(r) !== rowKey(rows[i]))) lockReflow();
+            rows = list;
+            cursor = next;
+            advanceFrom = null; // an index into the old list: a move made meanwhile goes back to the list
+            advanceAfterPage = false;
+            lastPageEmpty = false;
+            loadError = null;
+            partials.clear();
+            for (const [id, f] of freshPartials) partials.set(id, f);
+         })
+         .catch((e: unknown) => {
+            if (destroyed || gen !== listGen || errorCode(e) === "SUPERSEDED") return;
+            if (errorCode(e) === "CURSOR_STALE") {
+               refreshing = null;
+               loading = false;
+               reload(); // the list changed under the paging: start fresh
+               return;
+            }
+            listStale = true; // keep what's on screen (a timeout or link loss); the next return or link-up retries
+         })
+         .finally(() => {
+            if (refreshing === edits) refreshing = null;
+            if (destroyed || gen !== listGen) return;
+            loading = false;
+            clearSkeleton();
+            render();
+            requestAnimationFrame(() => {
+               if (gen === listGen && canAutoPage() && sentinelVisible()) loadMore();
+            });
+         });
    };
 
    /* Paging runs only for a list someone can see, and never re-fires itself after an error
@@ -1264,7 +1446,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
    const syncMark = (): void => {
       if (!mark) return;
-      if (panelEffective() && linked) {
+      if (onScreen() && linked) {
          if (mark.handle) return;
          mark.startedAt = performance.now();
          mark.handle = window.setTimeout(fireMark, mark.remaining);
@@ -1314,6 +1496,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             const local = rows.find((x) => rowKey(x) === k);
             if (local) local.unread = res.unread;
             reader.row.unread = res.unread;
+            noteUnread(reader.row);
             /* Trust keys on the message's own From address (3.9), never the display name. */
             reader.fromKey = normalizeAddress(res.message.fromAddr || row.fromAddr);
             applyAutoImages(reader);
@@ -1400,6 +1583,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* --- triage ------------------------------------------------------------- */
    const removeRows = (keys: string[]): void => {
       const set = new Set(keys);
+      if (refreshing) for (const k of keys) {
+         refreshing.dropped.add(k);
+         refreshing.added.delete(k);
+      }
       rows = rows.filter((r) => !set.has(rowKey(r)));
       pendingNew = pendingNew.filter((r) => !set.has(rowKey(r)));
    };
@@ -1423,6 +1610,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    const insertSorted = (row: EmailRow): void => {
       const k = rowKey(row);
+      refreshing?.dropped.delete(k); // it's back (an undo), even if it doesn't fit the loaded range
       pendingNew = pendingNew.filter((r) => rowKey(r) !== k);
       if (rows.some((r) => rowKey(r) === k)) return;
       const at = rows.findIndex((r) => r.date < row.date);
@@ -1431,6 +1619,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          rows.push(row);
       } else {
          rows.splice(at, 0, row);
+      }
+      if (refreshing) {
+         refreshing.added.set(k, row);
+         refreshing.dropped.delete(k);
       }
       if (rows.length > ROW_CAP) rows.length = ROW_CAP;
       washed.set(k, performance.now() + WASH_MS);
@@ -1494,6 +1686,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          if (!rows.some((r) => rowKey(r) === k)) {
             rows.splice(Math.min(Math.max(index, 0), rows.length), 0, row);
             lockReflow();
+         }
+         if (refreshing) {
+            refreshing.dropped.delete(k); // the move didn't happen: the refresh must keep the row
+            refreshing.added.set(k, row);
          }
          /* Never let an older action's failure take over a newer action's undo. */
          reportFailure(seq, `Couldn't ${verb}: ${why}`);
@@ -1575,10 +1771,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const seq = ++actionSeq;
       const prev = row.unread;
       row.unread = unread;
+      noteUnread(row);
       render();
       source.setFlags(row.accountId, [row.messageId], { unread }).catch((e: unknown) => {
          if (destroyed) return;
-         row.unread = prev;
+         const now = rows.find((r) => rowKey(r) === rowKey(row)) ?? row; // the list may have been refreshed since
+         now.unread = prev;
+         noteUnread(now);
          reportFailure(seq, `Couldn't mark ${unread ? "unread" : "read"}: ${errorText(e)}`);
          render();
       });
@@ -2098,7 +2297,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
    const queueNotice = (row: EmailRow): void => {
       if (!source.supportsLiveChanges() || !prefs.notify.includes(row.accountId) || !row.unread || !vis.isVisible()) return;
-      if (panelEffective()) return; // they're looking at the list: the arrival itself is the signal
+      if (onScreen()) return; // they're looking at the list: the arrival itself is the signal
       const st = notifyState.get(row.accountId);
       /* The window runs from the LAST arrival, so the card's count and the coalescing agree. */
       if (st) window.clearTimeout(st.timer);
@@ -2361,8 +2560,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          cancelMark();
       }
       if (!panelEffective()) {
-         /* Nobody is looking at the list: don't grow or reshape it in the background; reload when
-            it comes back into view. */
+         /* Nobody is looking at the list: don't grow it in the background; the return refreshes it.
+            Still drop and update rows it names, so a move made elsewhere (another tab, Friday)
+            doesn't linger on screen until the return's refresh lands. */
+         removeRows(ch.destroyed.map((id) => keyOf(ch.accountId, id)));
+         for (const u of ch.updated) {
+            const i = rows.findIndex((r) => rowKey(r) === rowKey(u));
+            if (i >= 0) rows[i] = { ...rows[i], ...u };
+            noteUpdate(u);
+         }
          listStale = true;
          return;
       }
@@ -2375,6 +2581,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       for (const u of ch.updated) {
          const i = rows.findIndex((r) => rowKey(r) === rowKey(u));
          if (i >= 0) rows[i] = { ...rows[i], ...u };
+         noteUpdate(u);
       }
       let arrived = 0;
       for (const c of ch.created) {
@@ -2488,9 +2695,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             if (!accountsKnown) render();
             else if (!source.supportsLiveChanges()) {
                /* No change feed to catch up from: what arrived while down is learned by loading again. */
-               if (panelEffective()) reload();
+               if (panelEffective()) (rows.length ? refreshInPlace() : reload());
                else listStale = true;
-            } else if (panelEffective() && (listStale || rows.length === 0)) reload();
+            } else if (panelEffective() && (listStale || rows.length === 0)) (rows.length ? refreshInPlace() : reload());
             else catchUp();
          }
          render();
@@ -2546,7 +2753,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          cancelMark();
          unsubPrefs();
          if (removed) window.clearTimeout(removed.timer);
-         document.removeEventListener("visibilitychange", onVisChange);
+         tabAway.dispose();
+         document.removeEventListener("visibilitychange", onRawVisibility);
          document.removeEventListener("pointerdown", onDocPointer);
          window.removeEventListener("pointermove", onPointerMove);
          el.removeEventListener("keydown", onKeyDown);
