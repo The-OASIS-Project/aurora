@@ -393,6 +393,7 @@ export class Notifications implements NotificationsSink {
          storageKey: this.posKey(notice.id),
          ignore: ".notice-close, .notice-action, .notice-action-select",
          raise: false, // cards keep their own layer above every panel
+         lockable: false, // a notice comes and goes on its own: no position padlock
          onSnap: (s) => this.onSnap(card, s)
       });
 

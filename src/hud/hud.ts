@@ -98,8 +98,16 @@ export function mountHud(root: HTMLElement): HudController {
    const statusEl = root.querySelector<HTMLElement>("#hud-status");
    /* raise:false - they live inside #hud's own stacking context, so click-to-front couldn't lift
       them over a panel anyway. */
-   const disposeClockMove = clockEl ? makeMovable(clockEl, { storageKey: CLOCK_POS_KEY, raise: false }) : noop;
-   const disposeStatusMove = statusEl ? makeMovable(statusEl, { storageKey: STATUS_POS_KEY, raise: false }) : noop;
+   const disposeClockMove = clockEl ? makeMovable(clockEl, {
+           storageKey: CLOCK_POS_KEY,
+           raise: false,
+           lockSlot: (btn) => (clockEl.querySelector(".clk-mark") ?? clockEl).append(btn) // after "D.A.W.N."
+        }) : noop;
+   const disposeStatusMove = statusEl ? makeMovable(statusEl, {
+           storageKey: STATUS_POS_KEY,
+           raise: false,
+           lockSlot: (btn) => statusEl.append(btn) // below the readout rows, right-aligned
+        }) : noop;
    const clockVis = clockEl
       ? makeVisibility(clockEl, { storageKey: CLOCK_SHOWN_KEY, offClass: "hud-clock-off" })
       : null;

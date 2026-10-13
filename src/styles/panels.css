@@ -200,7 +200,7 @@
       reactor behind it; the cards themselves opt back in so they are grabbable. */
    pointer-events: auto;
    /* Draggable to reorder / move between rails. */
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
    touch-action: none;
    padding: 0.85rem 1rem 0.95rem 1.1rem;
    background: linear-gradient(
@@ -270,7 +270,7 @@
 .drag-ghost {
    z-index: 40;
    pointer-events: none;
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
    border-radius: 0;
    box-shadow:
       inset 0 0 0 1px color-mix(in srgb, var(--node-accent, var(--accent)) 55%, transparent),

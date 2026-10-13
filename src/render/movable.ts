@@ -20,6 +20,7 @@
  * side rails and reports intent to the store; this moves a live self-owned view.
  */
 
+import { mountPanelLock } from "./panel-lock.ts";
 import { ANCHOR_SIZE_FRAC } from "../design/tokens.ts";
 
 /* Central dead zone: a full-height vertical strip as wide as the reactor, centered on it.
@@ -55,6 +56,11 @@ export interface MovableOptions {
    /* Join the click-to-front stacking band (default true). Notification cards opt out: they
       sit in their own layer above every panel. */
    raise?: boolean;
+   /* Give the view a position padlock (default true; src/render/panel-lock.ts). Notification
+      cards opt out: they come and go on their own. */
+   lockable?: boolean;
+   /* Place the padlock inline (e.g. in a header) instead of the top-left corner. */
+   lockSlot?: (btn: HTMLButtonElement) => void;
 }
 
 /* A preview for one snapped axis: a short glowing bar, either at a viewport edge
@@ -186,6 +192,8 @@ export interface MovableHandle {
    /* The widest this view may grow from where it sits without a docked edge entering the
       reactor's dead zone (or leaving the viewport). */
    maxWidth(): number;
+   /* The user locked this view in place (its padlock or "Lock all panels"): no drag, no resize. */
+   isLocked(): boolean;
 }
 
 export function makeMovable(el: HTMLElement, opts: MovableOptions): () => void {
@@ -466,6 +474,8 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const target = e.target as HTMLElement;
       if (opts.handle && !target.closest(opts.handle)) return; // only the handle drags
       if (opts.ignore && target.closest(opts.ignore)) return; // let controls handle it
+      if (target.closest(".movable-lock")) return; // the padlock is a button, never a drag
+      if (lock?.locked()) return; // locked in place: the press is just a press
       const r = el.getBoundingClientRect();
       startX = e.clientX;
       startY = e.clientY;
@@ -587,6 +597,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
 
    restore();
    movables.add(el); // visible to other movable views as a snap target
+   const lock = opts.lockable === false ? null : mountPanelLock(el, opts.storageKey, opts.lockSlot);
    const raises = opts.raise !== false;
    const onRaise = (): void => raiseMovable(el);
    if (raises) {
@@ -643,7 +654,9 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
    return {
       commitResize,
       maxWidth,
+      isLocked: () => lock?.locked() ?? false,
       dispose: (): void => {
+         lock?.dispose();
          movables.delete(el);
          if (raises) {
             el.removeEventListener("pointerdown", onRaise, { capture: true });

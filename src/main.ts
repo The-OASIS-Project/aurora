@@ -14,6 +14,7 @@
 
 /* Self-hosted fonts (bundled by Vite, no runtime CDN). Latin subset only, and
    only the weights the UI uses, so we do not ship Cyrillic/Greek we never draw. */
+import { arePanelsLocked, setPanelsLocked } from "./render/panel-lock.ts";
 import "@fontsource/ibm-plex-sans/latin-400.css";
 import "@fontsource/ibm-plex-sans/latin-500.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
@@ -478,6 +479,7 @@ const menu = mountMenu(stage, {
       { id: "clock", label: "Clock", enabled: hud.clock.isVisible() },
       { id: "telemetry", label: "Telemetry", enabled: hud.status.isVisible() }
    ].sort((a, b) => a.label.localeCompare(b.label)),
+   panelToggles: [{ label: "Lock all panels", get: arePanelsLocked, toggle: () => setPanelsLocked(!arePanelsLocked()) }],
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());

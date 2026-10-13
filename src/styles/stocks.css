@@ -23,7 +23,7 @@
    cursor: default;
 }
 .stocks.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .stocks.stocks-off {
    display: none;
@@ -38,10 +38,10 @@
    display: flex;
    align-items: center;
    gap: 0.5rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
 }
 .stocks.movable-dragging .stocks-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .stocks-title {
    flex: 1 1 auto;

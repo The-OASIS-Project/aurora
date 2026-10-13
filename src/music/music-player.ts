@@ -197,7 +197,11 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    vol.max = "1";
    vol.step = "0.02";
    vol.value = String(opts.audio.getVolume());
-   volRow.append(muteBtn, vol);
+   /* Playing but silent (volume at 0 or muted): say so, so silence explains itself. */
+   const volHint = document.createElement("span");
+   volHint.className = "music-vol-hint";
+   volHint.textContent = "Muted"; // shown uppercase, for a volume of 0 or the mute button
+   volRow.append(muteBtn, vol, volHint);
 
    /* Order: title/artist first, then the spectrum meter below it, then transport.
       (The EQ reads as a response to the now-playing line rather than a header.) */
@@ -267,6 +271,13 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       const playing = Boolean(state?.playing && !state.paused);
       playBtn.replaceChild(icon(playing ? "pause" : "play"), playBtn.firstChild as Node);
       playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
+      syncSilent();
+   };
+   const syncSilent = (): void => {
+      const silent = opts.audio.isMuted() || Number(vol.value) === 0;
+      const playing = Boolean(state?.playing && !state.paused);
+      el.classList.toggle("music-silent", silent && playing);
+      muteBtn.classList.toggle("muted", silent);
    };
 
    const render = (): void => {
@@ -358,7 +369,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    vol.addEventListener("input", () => {
       const v = Number(vol.value);
       opts.audio.setVolume(v);
-      muteBtn.classList.toggle("muted", v === 0);
+      syncSilent();
       window.clearTimeout(volTimer);
       volTimer = window.setTimeout(() => opts.control("volume", { level: v }), 150);
    });
@@ -366,8 +377,19 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       const next = !opts.audio.isMuted();
       opts.audio.setMuted(next);
       muteBtn.replaceChild(icon(next ? "mute" : "volume"), muteBtn.firstChild as Node);
-      muteBtn.classList.toggle("muted", next);
+      syncSilent();
    });
+   /* After a mouse or touch adjustment, give up keyboard focus, so a later keypress (an arrow,
+      Page Down, Home) can't quietly turn the music down. Tab still reaches the slider. */
+   const blurVol = (): void => {
+      if (document.activeElement === vol) vol.blur();
+   };
+   /* On the window, once: a drag released off the slider still ends here. */
+   vol.addEventListener("pointerdown", () => {
+      window.addEventListener("pointerup", blurVol, { once: true });
+      window.addEventListener("pointercancel", blurVol, { once: true });
+   });
+   syncSilent();
 
    /* --- per-frame: spectrum + progress ------------------------------------ */
    let lastCur = -1;

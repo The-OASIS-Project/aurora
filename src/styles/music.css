@@ -29,10 +29,10 @@
    opacity: 1;
    transform: translateY(0);
    pointer-events: auto;
-   cursor: grab; /* the panel is grab-to-move; controls override to pointer */
+   cursor: var(--move-cursor, grab); /* the panel is grab-to-move; controls override to pointer */
 }
 .music.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
    transition: none; /* follow the pointer 1:1 while dragging */
 }
 /* Operator hid the player from the Panels menu: gone entirely, no pointer capture,
@@ -226,6 +226,7 @@
 
 /* Volume row. */
 .music-vol {
+   position: relative;
    display: flex;
    align-items: center;
    gap: 0.6rem;
@@ -264,6 +265,25 @@
    border: none;
    border-radius: 50%;
    background: var(--accent);
+}
+/* Out of the flow (above the slider's right end), so appearing never shifts the slider mid-drag. */
+.music-vol-hint {
+   display: none;
+   position: absolute;
+   right: 0;
+   bottom: 100%;
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--warn);
+   white-space: nowrap;
+   pointer-events: none;
+}
+.music-silent .music-vol-hint {
+   display: inline;
+}
+.music-silent .music-mute.muted {
+   color: var(--warn);
 }
 .music-vol-slider:focus-visible {
    outline: 2px solid var(--accent);

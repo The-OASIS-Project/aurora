@@ -23,7 +23,7 @@
    cursor: default; /* body is interactive; only the header drags */
 }
 .watches.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .watches.watches-off {
    display: none;
@@ -37,10 +37,10 @@
    display: flex;
    align-items: baseline;
    gap: 0.6rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
 }
 .watches.movable-dragging .watches-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .watches-title {
    font-size: var(--fs-data);

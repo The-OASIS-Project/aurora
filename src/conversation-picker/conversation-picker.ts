@@ -133,6 +133,7 @@ export function mountConversationPicker(
       storageKey: POS_KEY,
       handle: ".cpick-head",
       ignore: ".cpick-new",
+      lockSlot: (btn) => head.insertBefore(btn, newBtn), // the corner holds the collapse caret
       onSnap: () => positionPanel() // recompute open-up/down + clamp after the picker is moved
    });
 

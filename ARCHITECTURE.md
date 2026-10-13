@@ -205,7 +205,8 @@ has no use for change-notification plumbing, and polling has no ordering surpris
   mirrored to CSS custom properties). Do not hardcode colors in components.
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, Home Assistant board) and the notification cards are grab-to-move
-  with a persisted position, via `makeMovable` (`src/render/movable.ts`) - all sharing one
+  with a persisted position, via `makeMovable` (`src/render/movable.ts`), each with a position
+  padlock (`src/render/panel-lock.ts`, plus "Lock all panels" in the Panels menu) - all sharing one
   snap set (they snap to each other and the viewport, with a central dead zone around the
   reactor). This is distinct from the store-backed ambient panels, which drag onto the side
   rails through `PanelDrag` (a path only `StubIngest` exercises today). The clock and the

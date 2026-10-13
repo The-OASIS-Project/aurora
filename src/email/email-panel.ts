@@ -332,6 +332,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       defaultWidth: 340,
       defaultHeight: 520,
       maxWidth: () => movable?.maxWidth() ?? Infinity,
+      isLocked: () => movable?.isLocked() ?? false,
       onCommit: (edges) => movable?.commitResize(edges)
    });
    const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "mail-off", defaultVisible: false });
@@ -402,7 +403,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    movable = makeMovableHandle(el, {
       storageKey: POS_KEY,
       handle: ".mail-head",
-      ignore: ".mail-head-tools, .rs-grip"
+      ignore: ".mail-head-tools, .rs-grip",
+      lockSlot: (btn) => headTools.prepend(btn) // the corner holds the collapse caret
    });
    resizable.setEnabled(expanded && vis.isVisible()); // re-clamp now that the dock limits are known
 

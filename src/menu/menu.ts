@@ -46,6 +46,8 @@ export interface MenuSlider {
 export interface MenuOptions {
    getPanels: () => MenuPanel[];
    onTogglePanel: (id: string) => void;
+   /* Checkbox rows below the panel list, after a divider (e.g. "Lock all panels"). */
+   panelToggles?: MenuToggle[];
    displayToggles: MenuToggle[];
    /* Optional stepped slider appended below the Display toggles (e.g. text/UI size). */
    displaySlider?: MenuSlider;
@@ -83,12 +85,15 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
    const closeAll = (): void =>
       bar.querySelectorAll<HTMLElement>(".menu-group.open").forEach((g) => g.classList.remove("open"));
 
-   const panels = toggleMenu("Panels", () =>
-      opts.getPanels().map((p) => ({
-         label: p.label,
-         checked: p.enabled,
-         onChange: () => opts.onTogglePanel(p.id)
-      }))
+   const panels = toggleMenu(
+      "Panels",
+      () =>
+         opts.getPanels().map((p) => ({
+            label: p.label,
+            checked: p.enabled,
+            onChange: () => opts.onTogglePanel(p.id)
+         })),
+      () => (opts.panelToggles ?? []).map((t) => ({ label: t.label, checked: t.get(), onChange: () => t.toggle() }))
    );
    const display = displayMenu(
       () =>
@@ -152,12 +157,17 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
 /* A menu whose dropdown is a list of checkbox rows, rebuilt from `getRows`. */
 function toggleMenu(
    title: string,
-   getRows: () => ToggleRow[]
+   getRows: () => ToggleRow[],
+   getExtra?: () => ToggleRow[]
 ): { el: HTMLElement; refresh: () => void } {
    const { el, dropdown } = menuGroup(title);
    const refresh = (): void => {
+      const extra = getExtra?.() ?? [];
+      const divider = document.createElement("div");
+      divider.className = "menu-divider";
       dropdown.replaceChildren(
-         ...getRows().map((r) => {
+         ...[...getRows(), ...(extra.length ? [null, ...extra] : [])].map((r) => {
+            if (!r) return divider;
             const row = document.createElement("label");
             row.className = "menu-row";
             const cb = document.createElement("input");

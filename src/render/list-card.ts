@@ -116,6 +116,7 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
    };
    const onGripDown = (e: PointerEvent): void => {
       if (e.button !== 0) return;
+      if ((e.currentTarget as HTMLElement).closest(".movable-locked")) return; // locked in place (panel-lock.ts)
       e.preventDefault();
       rStartY = e.clientY;
       rStartH = list.getBoundingClientRect().height;

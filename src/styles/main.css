@@ -300,12 +300,12 @@ body.engaged #docks {
 #hud-clock,
 #hud-status {
    pointer-events: auto;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
    touch-action: none;
 }
 #hud-clock:active,
 #hud-status:active {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .hud-clock-off,
 .hud-status-off {
@@ -945,4 +945,95 @@ body.engaged #docks {
 .md-img-blocked:focus-visible {
    color: var(--accent-glow);
    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Position padlock on every movable view (src/render/panel-lock.ts). In the top-left corner,
+   inside the corner bracket and clear of the title at every UI scale (rem-sized, with a wider
+   invisible hit pad), or inline where that corner holds a control. Shown on hover or keyboard
+   focus; a locked panel says so with brighter corner brackets and no grab cursor. */
+.movable-lock {
+   position: absolute;
+   top: var(--lock-top, 0.1rem);
+   left: var(--lock-left, 0.15rem);
+   z-index: 7;
+   width: 0.85rem;
+   height: 0.85rem;
+   padding: 0.1rem;
+   border: none;
+   border-radius: 3px;
+   background: transparent;
+   color: var(--text-dim);
+   cursor: pointer;
+   opacity: 0;
+   transition: opacity 0.18s ease, color 0.18s ease;
+}
+.movable-lock::before {
+   content: "";
+   position: absolute;
+   inset: -4px; /* a comfortable target around a small mark */
+}
+.movable-lock svg {
+   display: block;
+   width: 100%;
+   height: 100%;
+   fill: none;
+   stroke: currentColor;
+   stroke-width: 2;
+   stroke-linecap: round;
+   stroke-linejoin: round;
+}
+/* Inline (a header slot, or after a readout): in the flow, its slot kept while hidden so the
+   row never shifts on hover. */
+.movable-lock-inline {
+   position: relative;
+   top: auto;
+   left: auto;
+   flex: none;
+   vertical-align: middle;
+   margin: 0 0.25rem;
+}
+#hud-status > .movable-lock-inline {
+   display: block;
+   margin: 0.3rem 0 0 auto;
+}
+.movable-lockable:hover .movable-lock,
+.movable-lock:focus-visible {
+   opacity: 0.85;
+}
+.movable-lock:hover:not(:disabled) {
+   color: var(--accent);
+}
+.movable-lock:focus-visible {
+   outline: 1px solid var(--accent);
+   outline-offset: 1px;
+}
+/* Held by "Lock all panels": reads differently from "click to unlock". */
+.movable-lock:disabled {
+   cursor: default;
+   color: var(--text-faint);
+}
+@media (hover: none) {
+   /* No hover on a touch screen: keep the padlock reachable. */
+   .movable-lock {
+      opacity: 0.55;
+   }
+}
+/* Locked: firmer corner brackets, no grab cursor, no resize grips. */
+.movable-locked > .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.movable-locked {
+   --move-cursor: default;
+}
+.movable-locked.rs-enabled > .rs-grip {
+   display: none;
+}
+.movable-locked .lcard-grip {
+   cursor: default;
+   pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+   .movable-lock {
+      transition: none;
+   }
 }

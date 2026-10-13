@@ -92,7 +92,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, HA board) and the notification cards (`src/notify/`) are
   grab-to-move with a persisted position via `makeMovable` (`src/render/movable.ts`), all
-  sharing one snap set with a central dead zone around the reactor. **The clock and the
+  sharing one snap set with a central dead zone around the reactor. Every movable view gets a
+  position padlock in its top-left corner (`src/render/panel-lock.ts`; locked = no drag, no
+  resize; the Panels menu's "Lock all panels" locks them all); notification cards opt out. **The clock and the
   telemetry readout are now movable + toggleable too** (grab-to-move + a Panels-menu
   show/hide, wired in `hud.ts`), so the only remaining fixed HUD chrome is the frame corners
   and the reticle. **The conversation picker is now movable too** (grab its header bar via

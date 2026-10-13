@@ -39,11 +39,11 @@
    align-items: center;
    gap: 0.4rem;
    padding: 0.35rem 0.6rem 0.35rem 0.2rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
    flex: none;
 }
 .mail.movable-dragging .mail-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .mail-toggle {
    display: inline-flex;

@@ -21,6 +21,8 @@ export interface ResizableOptions {
    defaultHeight: number;
    /* The widest the view may grow right now (from MovableHandle.maxWidth). */
    maxWidth?: () => number;
+   /* True while the view is locked in place (no resizing then). */
+   isLocked?: () => boolean;
    /* Released after a resize: which edges moved. */
    onCommit?: (edges: ResizeEdges) => void;
    /* The size changed (live, during a drag too). */
@@ -96,7 +98,7 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
    let active: { edges: ResizeEdges; x: number; y: number; left: number; top: number; w: number; h: number } | null = null;
 
    const onDown = (e: PointerEvent): void => {
-      if (e.button !== 0 || !enabled) return;
+      if (e.button !== 0 || !enabled || opts.isLocked?.()) return;
       const g = GRIPS.find((x) => x.cls === (e.currentTarget as HTMLElement).dataset.grip);
       if (!g) return;
       e.preventDefault();

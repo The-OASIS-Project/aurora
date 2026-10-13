@@ -24,7 +24,7 @@
    cursor: default; /* body is interactive; only the header drags */
 }
 .ha.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 /* Operator hid the card from the Panels menu: gone entirely, no pointer capture. */
 .ha.ha-off {
@@ -40,10 +40,10 @@
    display: flex;
    align-items: baseline;
    gap: 0.6rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
 }
 .ha.movable-dragging .ha-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .ha-title {
    font-size: var(--fs-data);

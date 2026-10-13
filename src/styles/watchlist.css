@@ -22,7 +22,7 @@
    cursor: default;
 }
 .watchlist.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .watchlist.watchlist-off {
    display: none;
@@ -36,10 +36,10 @@
    display: flex;
    align-items: center;
    gap: 0.5rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
 }
 .watchlist.movable-dragging .watchlist-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .watchlist-title {
    flex: 1 1 auto;

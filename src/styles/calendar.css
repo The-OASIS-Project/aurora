@@ -20,10 +20,10 @@
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
    backdrop-filter: blur(7px);
    -webkit-backdrop-filter: blur(7px);
-   cursor: grab; /* the card is grab-to-move */
+   cursor: var(--move-cursor, grab); /* the card is grab-to-move */
 }
 .calendar.movable-dragging {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 /* Reveal the full text (the truncated location wraps in place, growing the card
    TALLER, not wider) on hover OR once the card has been manually resized larger.

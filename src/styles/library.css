@@ -34,10 +34,10 @@
    align-items: baseline;
    justify-content: space-between;
    gap: 0.6rem;
-   cursor: grab;
+   cursor: var(--move-cursor, grab);
 }
 .library.movable-dragging .library-head {
-   cursor: grabbing;
+   cursor: var(--move-cursor, grabbing);
 }
 .library-title {
    font-size: var(--fs-data);
