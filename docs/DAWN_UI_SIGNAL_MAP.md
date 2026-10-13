@@ -155,7 +155,7 @@ the first two are active; treat everything else as terminal.
 
 | Frame | Payload | Fires when |
 |-------|---------|------------|
-| `music_state` | `playing`, `paused`, `track{title, artist, album, duration_sec, path}`, `position_sec`, `queue_length`, `queue_index`, `quality`, `bitrate`, ... | On subscribe, on any control action, on track change. **Everything a now-playing panel needs.** |
+| `music_state` | `playing`, `paused`, `track{title, artist, album, duration_sec, path}`, `position_sec`, `queue_length`, `queue_index`, `quality`, `bitrate`, `advance?:"auto"`, `loading?:true`, ... | On subscribe, on any control action, on track change. **Everything a now-playing panel needs.** `advance:"auto"` = a natural track end or end-of-queue stop, sent ~2 s before it's heard: Aurora holds it for its buffered depth (`src/ingest/music-hold.ts`). `loading:true` (Plex only; absent = false) = DAWN is fetching the track, no audio or position ticks until the ready state. |
 | `music_position` | `position_sec`, `duration_sec` | Periodic progress tick. |
 | `music_error` | `code`, `message` | Playback error. |
 

@@ -72,6 +72,7 @@ import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
 import { MusicSocketWatch, type MusicDeadReason } from "./music-watch.ts";
+import { MusicStateHold } from "./music-hold.ts";
 import {
    LAST_USER_STORAGE_KEY,
    clearUserState,
@@ -309,7 +310,8 @@ function toMusicState(p: Record<string, unknown>): MusicState {
       quality: String(p.quality ?? ""),
       bitrate: Number(p.bitrate ?? 0),
       sourceFormat: String(p.source_format ?? ""),
-      sourceRate: Number(p.source_rate ?? 0)
+      sourceRate: Number(p.source_rate ?? 0),
+      loading: p.loading === true
    };
 }
 
@@ -892,6 +894,11 @@ export class DawnIngest implements Ingest {
    private prevMusicPos = 0; // last raw server position seen (from state OR position ticks)
    private prevMusicPosAt = 0; // performance.now() when prevMusicPos was captured
    private prevMusicPlaying = false; // was playback advancing at prevMusicPos (for the projection)
+   private prevMusicPath = ""; // last track path seen (a new file at the same index is a track change)
+   private prevMusicDuration = 0; // the heard track's length (to finish its counter while a state is held)
+   private pendingMusicSeek: { index: number; params: Record<string, unknown> } | null = null; // sent once that track is ready
+   /* DAWN's end-of-track state, held until the buffered audio has played out (music-hold.ts). */
+   private readonly musicHold = new MusicStateHold((payload, state, arrivedAt) => this.applyMusicState(payload, state, arrivedAt));
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
@@ -1542,6 +1549,8 @@ export class DawnIngest implements Ingest {
          /* Drop the seek-detection baseline: a resume may land at a different track/
             position, and a stale baseline would misread that first music_state as a seek. */
          this.prevMusicIndex = null;
+         this.musicHold.drop(); // the reconnect's music_state says where playback is
+         this.pendingMusicSeek = null;
          this.musicWatch.setPlaying(false); // the reconnect's music_state says again
          /* Drop any in-flight list latch: a load-more that never got its response must not
             poison the post-reconnect boot response into an append. Also drop a queued live
@@ -2855,45 +2864,39 @@ export class DawnIngest implements Ingest {
 
          case "music_state": {
             const st = toMusicState(p);
-            /* Flush the decode buffer on a USER-initiated track change or seek so the new
-               audio starts at once instead of after the old lead drains. A natural end-of-
-               track advance is tagged advance:"auto" by the server (gapless: the next
-               track is already in our buffered lead) - do NOT flush that, or we truncate
-               ~2 s of good audio.
-
-               DAWN re-emits an untagged music_state on EVERY control (volume, pause,
-               shuffle, repeat, ...) carrying the current position, and sends no music_state
-               during steady playback (only music_position ticks). So a real seek can't be
-               told from a routine control echo by a raw position delta - that would flush
-               good audio on a plain volume nudge. Instead compare the reported position to
-               where playback should be by now (last known position projected forward by
-               wall-clock while playing); only a genuine jump past a small tolerance is a
-               seek. The baseline is refreshed by both state and position frames below. */
-            const now = performance.now();
-            const elapsedSec = this.prevMusicPlaying ? Math.max(0, (now - this.prevMusicPosAt) / 1000) : 0;
-            const projected = this.prevMusicPos + elapsedSec;
-            const seen = this.prevMusicIndex !== null;
-            const nowPlaying = st.playing && !st.paused;
-            const autoAdvance = p.advance === "auto";
-            const trackChanged = seen && st.queueIndex !== this.prevMusicIndex;
-            const seeked = seen && Math.abs(st.positionSec - projected) > MUSIC_SEEK_TOLERANCE_SEC;
-            /* Stop (not pause) resets the server position to 0, so its buffered lead is
-               stale - flush it. Pause keeps position, so it is NOT a flush (see below). */
-            const stopped = seen && this.prevMusicPlaying && !nowPlaying && !st.paused;
-            /* Pause freezes output while KEEPING the buffered lead (seamless resume, no
-               ~2 s tail after the press and no ~2 s skip on resume); play resumes it. */
-            this.music.setPaused(st.paused === true);
-            this.musicWatch.setPlaying(nowPlaying);
-            if (stopped || ((trackChanged || seeked) && !autoAdvance)) this.music.flush();
-            this.prevMusicIndex = st.queueIndex;
-            this.prevMusicPos = st.positionSec;
-            this.prevMusicPosAt = now;
-            this.prevMusicPlaying = nowPlaying;
-            this.sinks.music.setState({ ...st, positionSec: this.music.audiblePosition(st.positionSec) });
+            /* Another advance:"auto" state while one is held belongs to the same transition (a
+               Plex track's loading state, then its ready state, or a skip past a bad track):
+               it replaces the held one and the timer stands, so the latest state applies when
+               the heard track ends. */
+            if (p.advance === "auto" && this.musicHold.peek()) {
+               this.musicHold.replace(p, st);
+               this.musicWatch.setPlaying(st.playing && !st.paused && !st.loading);
+               break;
+            }
+            /* Any other newer state lands a held one first (Next, pause, seek...). The held state's
+               baseline counts from when it arrived, so this one's seek check is still valid. */
+            this.musicHold.resolve();
+            /* End of a track (advance:"auto"), heard ~2 s later than DAWN sends it: hold it until
+               the buffered audio has played out (see music-hold.ts). */
+            const buffered = this.music.bufferedLeadMs();
+            if (p.advance === "auto" && this.prevMusicPlaying && buffered > 0) {
+               this.musicHold.hold(p, st, buffered);
+               /* A natural stop or a loading next track: DAWN sends no audio meanwhile (what's left
+                  is buffered), so the watch stops expecting it. A ready next track keeps it. */
+               this.musicWatch.setPlaying(st.playing && !st.paused && !st.loading);
+               /* Count the heard track to its end while the next one's position ticks are ignored. */
+               if (this.prevMusicDuration > 0) {
+                  this.sinks.music.setPosition(Math.max(0, this.prevMusicDuration - this.musicHold.remainingSec()), this.prevMusicDuration);
+               }
+               break;
+            }
+            this.applyMusicState(p, st);
             break;
          }
 
          case "music_position": {
+            /* While a state is held, ticks describe the NEXT track: keep counting the heard one. */
+            if (this.musicHold.peek()) break;
             const posSec = Number(p.position_sec ?? 0);
             /* Keep the seek-detection baseline fresh: position ticks (~1/s) are the only
                frames during steady playback, so without this the projection above would
@@ -4090,8 +4093,116 @@ export class DawnIngest implements Ingest {
       }
    }
 
-   /* Music transport: a music_control write (Tier C, a deliberate user action). */
+   /* Apply one music_state to the player, the watch and the view.
+
+      Flush the decode buffer on a USER-initiated track change or seek so the new audio starts
+      at once instead of after the old lead drains. A natural end-of-track advance is tagged
+      advance:"auto" by the server (gapless: the next track is already in our buffered lead) -
+      do NOT flush that, or we truncate ~2 s of good audio. A natural stop at the end of the
+      queue is tagged too: it arrives once the buffer has played out (held, see music_state), and
+      is neither flushed nor muted, so the tail always finishes.
+
+      DAWN re-emits an untagged music_state on EVERY control (volume, pause, shuffle, repeat,
+      ...) carrying the current position, and sends no music_state during steady playback (only
+      music_position ticks). So a real seek can't be told from a routine control echo by a raw
+      position delta - that would flush good audio on a plain volume nudge. Instead compare the
+      reported position to where playback should be by now (last known position projected
+      forward by wall-clock while playing); only a genuine jump past a small tolerance is a
+      seek. The baseline is refreshed by both state and position frames. `arrivedAt`: a held state
+      applied late; DAWN's position for it counts from when it arrived, so that is its baseline
+      time (else a control echo right after would read the ~2 s gap as a seek and flush). */
+   private applyMusicState(p: Record<string, unknown>, st: MusicState, arrivedAt?: number): void {
+      const now = performance.now();
+      const noSeekCheck = arrivedAt !== undefined; // its own ~0 position is a track start, not a seek
+      const elapsedSec = this.prevMusicPlaying ? Math.max(0, (now - this.prevMusicPosAt) / 1000) : 0;
+      const projected = this.prevMusicPos + elapsedSec;
+      const seen = this.prevMusicIndex !== null;
+      const nowPlaying = st.playing && !st.paused;
+      const autoAdvance = p.advance === "auto";
+      /* A different file at the same index is a new track too (a new song played into index 0). */
+      const trackChanged = seen && (st.queueIndex !== this.prevMusicIndex || (st.track?.path ?? "") !== this.prevMusicPath);
+      const seeked = seen && !noSeekCheck && Math.abs(st.positionSec - projected) > MUSIC_SEEK_TOLERANCE_SEC;
+      /* Stop (not pause) resets the server position to 0, so its buffered lead is stale - flush
+         it. Pause keeps position, so it is NOT a flush (see below). */
+      const stopped = seen && this.prevMusicPlaying && !nowPlaying && !st.paused;
+      /* Pause freezes output while KEEPING the buffered lead (seamless resume, no ~2 s tail after
+         the press and no ~2 s skip on resume); play resumes it. */
+      this.music.setPaused(st.paused === true);
+      /* Loading (DAWN fetching or opening the next track): no audio to expect meanwhile. */
+      this.musicWatch.setPlaying(nowPlaying && !st.loading);
+      if ((stopped || trackChanged || seeked) && !autoAdvance) this.music.flush();
+      this.prevMusicIndex = st.queueIndex;
+      this.prevMusicPath = st.track?.path ?? "";
+      this.prevMusicDuration = st.durationSec;
+      this.prevMusicPos = st.positionSec;
+      this.prevMusicPosAt = arrivedAt ?? now;
+      this.prevMusicPlaying = nowPlaying && !st.loading; // a loading track's position doesn't move
+      /* A seek waiting for its track to open (musicControl's seek-while-held). */
+      const ps = this.pendingMusicSeek;
+      if (ps && !st.loading) {
+         this.pendingMusicSeek = null;
+         if (st.playing && st.queueIndex === ps.index) {
+            this.send({ type: "music_control", payload: { action: "seek", ...ps.params } });
+         }
+      }
+      /* A stop gets no further position ticks: reset the bar rather than freeze it at the old end. */
+      const shown = st.playing || st.paused ? this.music.audiblePosition(st.positionSec) : 0;
+      this.sinks.music.setState({ ...st, positionSec: shown });
+   }
+
+   /* Music transport: a music_control write (Tier C, a deliberate user action). A held end-of-
+      track state is resolved first (DAWN has already moved past what's heard):
+      - next: if the held state is a playing next track, DAWN is already on it, so "next" means
+        that track from the start (play_index), not the one after it;
+      - seek: the seek is within the heard track, so drop the held state and go back to it
+        (play_index) before seeking;
+      - pause or next on a held natural stop: the queue already ended in DAWN; stop here, send
+        nothing. previous on it steps back from the heard track (DAWN has reset to index 0). */
    musicControl(action: string, params: Record<string, unknown> = {}): void {
+      this.pendingMusicSeek = null; // a newer control replaces a seek still waiting for its track
+      const held = this.musicHold.peek();
+      if (held) {
+         const heardIndex = this.prevMusicIndex;
+         const movedOn = held.state.playing && held.state.queueIndex !== heardIndex;
+         if (action === "seek") {
+            this.musicHold.drop();
+            if (heardIndex !== null) {
+               this.musicWatch.setPlaying(false); // a play_index (maybe a Plex fetch): no audio until its echo
+               this.send({ type: "music_control", payload: { action: "play_index", index: heardIndex } });
+               /* DAWN ignores a seek while a track is still opening (a Plex fetch), so seek once
+                  it reports the track ready (applyMusicState). */
+               this.pendingMusicSeek = { index: heardIndex, params };
+               return;
+            }
+         } else if ((action === "pause" || action === "next") && !held.state.playing) {
+            /* The queue already ended in DAWN: stop here. (Next on the last track does nothing, as
+               it would have a moment earlier.) */
+            this.musicHold.resolve();
+            this.music.flush();
+            return;
+         } else if (action === "previous" && !held.state.playing && heardIndex !== null) {
+            /* DAWN reset to index 0 at the end of the queue: step back from the heard track. */
+            this.musicHold.resolve();
+            action = "play_index";
+            params = { index: Math.max(0, heardIndex - 1) };
+         } else if (action === "next" && movedOn) {
+            this.musicHold.resolve();
+            action = "play_index";
+            params = { index: held.state.queueIndex };
+         } else if (action === "previous" && movedOn && heardIndex !== null && heardIndex > 0 && !held.state.shuffle) {
+            /* DAWN is already one past the heard track, so its "previous" would replay the heard one. */
+            this.musicHold.resolve();
+            action = "play_index";
+            params = { index: heardIndex - 1 };
+         } else {
+            this.musicHold.resolve();
+         }
+      }
+      /* A control that changes the track can make DAWN fetch it on its main thread first (a Plex
+         download), with nothing reaching us meanwhile: expect no audio until its music_state. */
+      if (action === "next" || action === "previous" || action === "play_index" || action === "play") {
+         this.musicWatch.setPlaying(false);
+      }
       this.send({ type: "music_control", payload: { action, ...params } });
       /* The dedicated socket is the only audio path now, so a control the user issued
          while it's down (retries exhausted) would play silently. Treat the action as
@@ -5083,6 +5194,7 @@ export class DawnIngest implements Ingest {
    /* `silent`: don't report "disconnected" (the caller emits its own status, or reloads). */
    disconnect(silent = false): void {
       this.wantConnected = false;
+      this.musicHold.drop(); // nothing left to show it on
       window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
       this.wsFails = 0;
       this.stopMetrics();

@@ -277,7 +277,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       el.classList.add("on");
       const t = state.track;
       const title = t.title || "Unknown";
-      const sub = [t.artist, t.album].filter(Boolean).join("  •  ");
+      const sub = state.loading ? "Loading…" : [t.artist, t.album].filter(Boolean).join("  •  ");
       if (titleEl.textContent !== title) titleEl.textContent = title;
       if (subEl.textContent !== sub) subEl.textContent = sub;
       dur = state.durationSec;
@@ -374,8 +374,9 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    const frame = (): void => {
       if (!vis.isVisible() || !el.classList.contains("on")) return;
 
-      /* Progress: interpolate from the last authoritative position while playing. */
-      const playing = Boolean(state?.playing && !state.paused);
+      /* Progress: interpolate from the last authoritative position while playing (not while
+         DAWN is still fetching the track: nothing is playing yet). */
+      const playing = Boolean(state?.playing && !state.paused && !state.loading);
       let cur = posBase;
       if (playing) cur = posBase + (performance.now() - posAt) / 1000;
       if (dur > 0) cur = Math.min(cur, dur);

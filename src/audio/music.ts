@@ -68,6 +68,11 @@ export class MusicAudio {
       return Math.max(0, rawSec - this.bufferedMs / 1000);
    }
 
+   /* How much decoded audio is still to be heard (worklet ring + decode queue), in ms. */
+   bufferedLeadMs(): number {
+      return this.bufferedMs;
+   }
+
    constructor() {
       /* AudioContext can only start after a user gesture. The user has almost
          always clicked/typed before music plays, but resume once on the first
@@ -296,11 +301,12 @@ export class MusicAudio {
    setPaused(paused: boolean): void {
       this.paused = paused;
       if (!this.ctx) return;
-      if (paused) {
-         if (this.ctx.state === "running") void this.ctx.suspend().catch(() => {});
-      } else if (this.ctx.state === "suspended") {
-         void this.ctx.resume().catch(() => {});
-      }
+      /* Unconditional (bar a closed context): right after suspend() the state can still read
+         "running" while the suspend is pending (and the reverse), so a state-guarded call can
+         leave it suspended under "playing", or playing under "paused". */
+      if (this.ctx.state === "closed") return;
+      if (paused) this.ctx.suspend().catch((e: unknown) => console.warn("[music] suspend failed:", e));
+      else this.ctx.resume().catch((e: unknown) => console.warn("[music] resume failed:", e));
    }
 
    flush(): void {

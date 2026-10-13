@@ -273,7 +273,12 @@ stub-only - kept as the render seam and the extension point for future store-bac
   Stop reporting and the server falls back to real-time pacing (the old stutter). A natural
   end-of-track advance is tagged `advance:"auto"` on `music_state` and is gapless (do NOT
   flush; user skips/seeks are untagged and DO flush). The server's reported position runs
-  ~2s ahead of audible, so subtract the buffered depth for the progress bar.
+  ~2s ahead of audible, so subtract the buffered depth for the progress bar. An auto state
+  (the next track, or the natural end-of-queue stop, also tagged) is HELD for the buffered
+  depth so the title/stop lands when the audio does (`src/ingest/music-hold.ts`; a second auto
+  state replaces the held one, any other state lands it first; Next/seek/Pause have rules in
+  `musicControl`). `loading:true` (Plex fetch) means no audio meanwhile, and the music-socket
+  watch (`music-watch.ts`) must not expect frames then or after Aurora sends a track change.
 - **Music `volume` is server-stored only.** `music_control volume` sets a value DAWN
   echoes in `music_state` but never applies to the audio, so real gain/mute is a
   client-side Web Audio `GainNode` (the player owns it). `repeat_mode` is an int (0/1/2);

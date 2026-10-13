@@ -199,6 +199,7 @@ export interface MusicState {
    bitrate: number; // Opus target bits/sec
    sourceFormat: string;
    sourceRate: number;
+   loading: boolean; // DAWN is fetching or opening the next track (no audio meanwhile; absent = false)
 }
 
 /* What ingest can push to the music player view (a passive view; transport is
