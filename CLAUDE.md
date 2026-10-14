@@ -290,5 +290,5 @@ stub-only - kept as the render seam and the extension point for future store-bac
 
 Small DAWN-side additions the UI would benefit from are collected in
 `docs/DAWN_UI_SIGNAL_MAP.md` (section 9). The larger backend proactive-alert system is
-scoped in `../dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE). Do not start backend
+scoped on the DAWN side as an extension of SAGE. Do not start backend
 work without being asked.

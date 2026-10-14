@@ -844,7 +844,7 @@ Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin pane
    discipline as `next`/`previous`. Empty queue still echoes state.
 
 The broad version of #2/#3 — a backend proactive-alert system feeding one alert
-channel — is scoped in `dawn/docs/PROACTIVE_ALERTS_SCOPE.md` (extend SAGE).
+channel — is scoped on the DAWN side as an extension of SAGE.
 
 ### 9.8 Watches panel (SAGE watch rules) - consumed 2026-08-24 (Phase 1)
 
@@ -956,13 +956,13 @@ background job/briefing) instead of only on click/reconnect. Verified against
   (updating the cache underneath), and preserves scroll position on replace.
 - This is list membership/order only; unread-marking stays on `conversation_messages_appended`
   (orthogonal). Charter: a read (`list_conversations`), no new write. Coordinated with the
-  daemon-side reconnect+sync hardening (`docs/WEBUI_RECONNECT_SYNC_DESIGN.md`); no daemon change
+  daemon-side reconnect+sync hardening; no daemon change
   was needed for the Aurora half (the server already emitted the frame).
 
 ### 9.11 Stocks portfolio panel (`stocks_portfolio_*`) - consumed 2026-09-21
 
-A read-only view of the user's OWN Schwab portfolio, pushed over the WS. The full wire contract is
-DAWN's `docs/STOCKS_PANEL_DESIGN.md` §6; this is the consumer view. Coordinated with the daemon-side
+A read-only view of the user's OWN Schwab portfolio, pushed over the WS. This is the consumer view of
+the wire contract agreed with DAWN. Coordinated with the daemon-side
 build (P0 parser, P1 fetch/cache/refresher/verbs/fan-out).
 
 - **Verbs (Tier C, owner-scoped reads, same auth gate as `doc_library_*`):**
@@ -1040,8 +1040,7 @@ DAWN's memory-correctness work (branch `adaptive_dwell`, uncommitted at the time
 ### 9.13 Per-model reasoning capabilities (P1.1b) - consumed 2026-09-28
 
 DAWN's prompt-cache program replaced the client-side effort guess with server-reported
-capabilities (DAWN `0472230`, groundwork `c6543f2`; plan in DAWN's
-`docs/PROMPT_CACHE_COVERAGE_DESIGN.md` §6). Why: some Claude models are adaptive-only (Opus 5.5,
+capabilities (DAWN `0472230`, groundwork `c6543f2`). Why: some Claude models are adaptive-only (Opus 5.5,
 Fable 5.x reject `thinking.type=disabled`), so the old binary Off/On could show Off while the model
 thought at medium effort.
 
@@ -1155,4 +1154,4 @@ neutral, back-compat. Aurora `9a3a2eb`.)*
 owner-scoped reads + the `stocks_portfolio_update` frame - status/market/as_of + totals + accounts[].positions[];
 snapshot-present-iff-numbers so a state-only frame never renders NaN; visibility-gated subscribe so DAWN fetches
 from Schwab only while watched; cash_equivalent-as-labeled-position + a Cash line, no fold; default-off. Coordinated
-with the DAWN P0/P1 build; wire contract in DAWN's `docs/STOCKS_PANEL_DESIGN.md` §6. Aurora `9f42bb3`.)*
+with the DAWN P0/P1 build. Aurora `9f42bb3`.)*

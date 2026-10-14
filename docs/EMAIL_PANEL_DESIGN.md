@@ -763,8 +763,8 @@ Aurora-wide, first used by Mail (3.9); other panels adopt it later without touch
 - **Safe move:** `UID MOVE` when `MOVE` is advertised, else `UID COPY` + `UID STORE +FLAGS
   (\Deleted)` + `UID EXPUNGE <uid>` (UIDPLUS). **Never bare `EXPUNGE`.** Capture `COPYUID` (the
   destination UID) for undo. No Trash folder -> `NO_TRASH`, never an expunge.
-- **MIME read pipeline:** both backends -> raw RFC822 -> GMime (the dependency already chosen in
-  `EMAIL_ATTACHMENT_DOWNLOAD_DESIGN.md`) -> `{ body_text, body_html (decoded, UTF-8), attachments[]
+- **MIME read pipeline:** both backends -> raw RFC822 -> GMime (the dependency DAWN already chose for
+  attachment downloads) -> `{ body_text, body_html (decoded, UTF-8), attachments[]
   (metadata) }`. When the bounded fetch cuts the raw message, set `text_truncated` /
   `html_truncated` (GMime on a cut part is silently partial). Align the WS `body_html` cap with the
   fetch size (or raise the fetch for the WS path).
@@ -834,7 +834,7 @@ email_read { account_id, message_id, mark_read?: bool (default true) }
 
 - `body_html` is the decoded, charset-converted HTML part (not transfer-encoded bytes), raw (Aurora
   sanitizes), capped at 1 MB for the panel (the IMAP fetch is 2 MB) with `html_truncated`. Not found
-  -> `NOT_FOUND`. (Agreed with DAWN 2026-10-02; plan in `dawn/docs/EMAIL_P1_READ_PLAN.md`.)
+  -> `NOT_FOUND`. (Agreed with DAWN 2026-10-02.)
 
 ### 9.4 Read marking (P1.1)
 
