@@ -333,7 +333,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       defaultHeight: 520,
       maxWidth: () => movable?.maxWidth() ?? Infinity,
       isLocked: () => movable?.isLocked() ?? false,
-      onCommit: (edges) => movable?.commitResize(edges)
+      onCommit: (edges) => {
+         movable?.commitResize(edges);
+         refit(); // skipped during the drag
+      }
    });
    const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "mail-off", defaultVisible: false });
    const reducedMotion =
@@ -453,6 +456,7 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let fitTarget: { el: HTMLElement; design: number; width: number } | null = null;
    const refit = (): void => {
       if (!fitTarget) return;
+      if (el.classList.contains("resizing")) return; // mid-resize: fit once on release (onCommit)
       const cs = getComputedStyle(fitTarget.el);
       const width = fitTarget.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       if (width === fitTarget.width) return; // only the height moved (e.g. images loading)

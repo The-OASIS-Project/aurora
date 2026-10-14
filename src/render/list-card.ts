@@ -20,6 +20,8 @@
  * on the host. Exclude the grip from a card's move-drag via the `.lcard-grip` selector.
  */
 
+import { beginResizeSnap, type ResizeSnap } from "./movable.ts";
+
 const GRIP_RESERVE = 22; // px kept clear below the list (grip + a little breathing room)
 const DEFAULT_CAP_VH = 40; // resting cap when not resized; MUST match the CSS --list-cap fallback
 const MAX_VH = 80; // hover / resize ceiling
@@ -93,7 +95,9 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
    /* The card's top can change without a resize event (a makeMovable drag), which moves
       the list's top and so its ceiling. Recompute after any pointer release. Cheap: a
       couple of measurements + style writes. */
-   const onWindowPointerUp = (): void => applySizing();
+   const onWindowPointerUp = (): void => {
+      if (!resizing) applySizing(); // a grip release sizes itself (onGripUp)
+   };
    window.addEventListener("pointerup", onWindowPointerUp);
 
    /* Grip resize: set the resting height between the floor and the on-screen ceiling,
@@ -102,16 +106,48 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
    let rStartY = 0;
    let rStartH = 0;
    let resizing = false;
+   let rStartBottom = 0;
+   let rCeiling = 0; // measured once per drag (the card's top doesn't move while resizing)
+   let rSnap: ResizeSnap | null = null;
+   let rFrame = 0;
+   let rLastY = 0;
+   let rScrollH = 0; // the content's height, measured at the press (it doesn't change mid-drag)
+   /* Coalesced to one step per frame; the card's bottom snaps to the screen edge and other views'
+      edges (movable.ts). */
+   const gripStep = (): void => {
+      rFrame = 0;
+      if (!resizing || !rSnap) return;
+      const base = rStartBottom - rStartH; // the card's bottom with a zero-height list
+      const bottom = rSnap.snap("bottom", rStartBottom + (rLastY - rStartY), [base + MIN_PX, base + rCeiling]);
+      restingH = Math.max(MIN_PX, Math.min(rCeiling, rStartH + (bottom - rStartBottom)));
+      /* Write-only while dragging: inline height (it doesn't inherit, so the rows aren't
+         re-styled every frame) and the overflow cue from the measured content height. The
+         custom properties are written once on release (applySizing). */
+      const eff = Math.round(Math.min(restingH, rCeiling));
+      list.style.height = `${eff}px`;
+      list.style.maxHeight = `${eff}px`;
+      list.classList.toggle("overflowing", rScrollH > eff + 1);
+   };
    const onGripMove = (e: PointerEvent): void => {
       if (!resizing) return;
-      restingH = Math.max(MIN_PX, Math.min(ceilingPx(), rStartH + (e.clientY - rStartY)));
-      applySizing();
+      rLastY = e.clientY;
+      if (!rFrame) rFrame = requestAnimationFrame(gripStep);
    };
    const onGripUp = (): void => {
+      if (rFrame) {
+         cancelAnimationFrame(rFrame);
+         gripStep(); // land the last move
+      }
       resizing = false;
+      rSnap?.end();
+      rSnap = null;
+      list.style.height = "";
+      list.style.maxHeight = "";
+      applySizing(); // the resting height as custom properties, measured once
       host.classList.remove("lcard-resizing");
       window.removeEventListener("pointermove", onGripMove);
       window.removeEventListener("pointerup", onGripUp);
+      window.removeEventListener("pointercancel", onGripUp);
       if (restingH != null) localStorage.setItem(opts.storageKey, String(Math.round(restingH)));
    };
    const onGripDown = (e: PointerEvent): void => {
@@ -120,12 +156,18 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
       e.preventDefault();
       rStartY = e.clientY;
       rStartH = list.getBoundingClientRect().height;
+      rStartBottom = host.getBoundingClientRect().bottom;
+      rCeiling = ceilingPx();
+      rScrollH = list.scrollHeight;
+      rLastY = e.clientY;
+      rSnap = beginResizeSnap(host);
       restingH = rStartH;
       host.classList.add("lcard-resizing");
       applySizing();
       resizing = true;
       window.addEventListener("pointermove", onGripMove);
       window.addEventListener("pointerup", onGripUp);
+      window.addEventListener("pointercancel", onGripUp); // a touch drag taken over by a pan
    };
    grip.addEventListener("pointerdown", onGripDown);
 
@@ -142,10 +184,12 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
          ceiling first sees the card's real on-screen top. */
       refresh: applySizing,
       destroy: (): void => {
+         if (resizing) onGripUp(); // torn down mid-resize: end it (the snap mark included)
          grip.removeEventListener("pointerdown", onGripDown);
          host.removeEventListener("pointerenter", onEnter);
          window.removeEventListener("pointermove", onGripMove);
          window.removeEventListener("pointerup", onGripUp);
+         window.removeEventListener("pointercancel", onGripUp);
          window.removeEventListener("pointerup", onWindowPointerUp);
          window.removeEventListener("resize", onResize);
          grip.remove();

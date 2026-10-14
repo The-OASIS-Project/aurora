@@ -11,7 +11,7 @@
  */
 
 import type { ResizeEdges } from "./movable.ts";
-import { cssMovableEdge } from "./movable.ts";
+import { beginResizeSnap, cssMovableEdge, type ResizeSnap } from "./movable.ts";
 
 export interface ResizableOptions {
    storageKey: string;
@@ -95,7 +95,23 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       return d;
    });
 
-   let active: { edges: ResizeEdges; x: number; y: number; left: number; top: number; w: number; h: number } | null = null;
+   /* One resize in progress. Its limits and snap targets are measured once at the press: re-reading
+      layout on every pointermove, right after the last move wrote a size, forced a reflow each time. */
+   let active: {
+      edges: ResizeEdges;
+      x: number;
+      y: number;
+      left: number;
+      top: number;
+      w: number;
+      h: number;
+      edge: number;
+      maxW: number;
+      maxH: number;
+      snap: ResizeSnap;
+   } | null = null;
+   let moveFrame = 0;
+   let lastMove: PointerEvent | null = null;
 
    const onDown = (e: PointerEvent): void => {
       if (e.button !== 0 || !enabled || opts.isLocked?.()) return;
@@ -104,7 +120,19 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       e.preventDefault();
       e.stopPropagation(); // never also start a makeMovable drag
       const r = el.getBoundingClientRect();
-      active = { edges: g.edges, x: e.clientX, y: e.clientY, left: r.left, top: r.top, w: r.width, h: r.height };
+      active = {
+         edges: g.edges,
+         x: e.clientX,
+         y: e.clientY,
+         left: r.left,
+         top: r.top,
+         w: r.width,
+         h: r.height,
+         edge: edge(),
+         maxW: maxW(),
+         maxH: maxH(),
+         snap: beginResizeSnap(el)
+      };
       el.style.transition = "";
       el.classList.add("resizing");
       document.body.style.userSelect = "none";
@@ -113,30 +141,48 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       window.addEventListener("pointercancel", onUp);
    };
 
+   /* Pointer moves are coalesced to one resize step per frame (a fast mouse fires several). */
    const onMove = (e: PointerEvent): void => {
       if (!active) return;
-      const dx = e.clientX - active.x;
-      const dy = e.clientY - active.y;
+      lastMove = e;
+      if (!moveFrame) moveFrame = requestAnimationFrame(step);
+   };
+
+   const step = (): void => {
+      moveFrame = 0;
+      const e = lastMove;
       const a = active;
+      if (!a || !e) return;
+      const dx = e.clientX - a.x;
+      const dy = e.clientY - a.y;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const cW = (w: number): number => Math.round(Math.min(a.maxW, Math.max(opts.minWidth, w)));
+      const cH = (h: number): number => Math.round(Math.min(a.maxH, Math.max(opts.minHeight, h)));
+      /* The moving edge snaps to the screen edges and other views' edges (movable.ts). */
       if (a.edges.right) {
          /* Pin the left edge, so a view placed by CSS `right:` grows toward the pointer. */
-         width = clampW(Math.min(a.w + dx, window.innerWidth - edge() - a.left));
+         const right = a.snap.snap("right", a.left + a.w + dx, [a.left + opts.minWidth, a.left + a.maxW]);
+         width = cW(Math.min(right - a.left, W - a.edge - a.left));
          el.style.left = `${Math.round(a.left)}px`;
          el.style.right = "auto";
       }
       if (a.edges.left) {
          /* Growing left: the right edge stays put; never past the viewport's left gutter. */
-         width = clampW(Math.min(a.w - dx, a.left + a.w - edge()));
+         const left = a.snap.snap("left", a.left + dx, [a.left + a.w - a.maxW, a.left + a.w - opts.minWidth]);
+         width = cW(Math.min(a.left + a.w - left, a.left + a.w - a.edge));
          el.style.left = `${Math.round(a.left + a.w - width)}px`;
          el.style.right = "auto";
       }
       if (a.edges.bottom) {
-         height = clampH(Math.min(a.h + dy, window.innerHeight - edge() - a.top));
+         const bottom = a.snap.snap("bottom", a.top + a.h + dy, [a.top + opts.minHeight, a.top + a.maxH]);
+         height = cH(Math.min(bottom - a.top, H - a.edge - a.top));
          el.style.top = `${Math.round(a.top)}px`;
          el.style.bottom = "auto";
       }
       if (a.edges.top) {
-         height = clampH(Math.min(a.h - dy, a.top + a.h - edge()));
+         const top = a.snap.snap("top", a.top + dy, [a.top + a.h - a.maxH, a.top + a.h - opts.minHeight]);
+         height = cH(Math.min(a.top + a.h - top, a.top + a.h - a.edge));
          el.style.top = `${Math.round(a.top + a.h - height)}px`;
          el.style.bottom = "auto";
       }
@@ -145,11 +191,32 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       opts.onResize?.(width, height);
    };
 
+   /* End a drag without landing or committing it. */
+   const abort = (): void => {
+      if (!active) return;
+      cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      lastMove = null;
+      active.snap.end();
+      active = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      el.classList.remove("resizing");
+      document.body.style.userSelect = "";
+   };
+
    const onUp = (): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
       if (!active) return;
+      if (moveFrame) {
+         cancelAnimationFrame(moveFrame);
+         step(); // land the last move before committing
+      }
+      lastMove = null;
+      active.snap.end();
       const edges = active.edges;
       active = null;
       el.classList.remove("resizing");
@@ -173,6 +240,7 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
          if (on) {
             apply();
          } else {
+            abort(); // collapsed mid-drag: drop the drag, never write a size onto the collapsed view
             el.style.width = "";
             el.style.height = "";
          }

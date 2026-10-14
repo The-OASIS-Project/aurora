@@ -15,6 +15,10 @@
    max-height: var(--list-cap, 40vh);
    transition: max-height 200ms ease;
 }
+/* While the grip drags, the height follows the pointer exactly (no easing behind it). */
+.lcard-host.lcard-resizing .lcard {
+   transition: none;
+}
 .lcard::-webkit-scrollbar {
    display: none; /* WebKit/Blink */
 }
@@ -47,6 +51,7 @@
    align-items: center;
    justify-content: center;
    cursor: ns-resize;
+   touch-action: none; /* a touch drag on the grip resizes; the page does not pan */
 }
 .lcard-grip::after {
    content: "";

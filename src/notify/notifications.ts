@@ -394,6 +394,7 @@ export class Notifications implements NotificationsSink {
          ignore: ".notice-close, .notice-action, .notice-action-select",
          raise: false, // cards keep their own layer above every panel
          lockable: false, // a notice comes and goes on its own: no position padlock
+         freeOverAtom: true, // dropped over the reactor it floats free (the undock gesture)
          onSnap: (s) => this.onSnap(card, s)
       });
 

@@ -23,11 +23,41 @@
 import { mountPanelLock } from "./panel-lock.ts";
 import { ANCHOR_SIZE_FRAC } from "../design/tokens.ts";
 
+/* Whether an X snap stop may be used, given the card's width, where it is now, and the dead
+   strip [lo, hi]. A stop that keeps the card clear of the strip is always fine. One that would
+   leave it overlapping is refused for a card that is clear of the strip now (snapping never
+   pulls a card into it), but allowed for a card the user already placed across it (a wide one),
+   so it still docks to the screen edges and lines up with other views there: one rule for both,
+   whatever the width. The grid stop over the atom (the viewport-center column) is never used
+   while overlapping. For a view with the free-drop gesture (`freeOverAtom`, notices), neither is
+   any stop that would put its center over the atom. A screen-edge dock made across the strip is
+   stored `across` (see maxWidth). */
+export function allowXStop(
+   stopLeft: number,
+   width: number,
+   curLeft: number,
+   strip: [number, number],
+   grid: boolean,
+   freeOverAtom = false
+): boolean {
+   const [lo, hi] = strip;
+   const overlaps = (left: number): boolean => left < hi && left + width > lo;
+   if (!overlaps(stopLeft)) return true;
+   if (grid) return false;
+   /* A view with the free-drop gesture (a notice) never snaps with its center over the atom. */
+   if (freeOverAtom) {
+      const center = stopLeft + width / 2;
+      if (center >= lo && center <= hi) return false;
+   }
+   return overlaps(curLeft);
+}
+
 /* Central dead zone: a full-height vertical strip as wide as the reactor, centered on it.
    Reused from ANCHOR_SIZE_FRAC (the atom's real footprint) so it tracks the reactor at
    any resolution. No view snaps INTO this strip - drops resolve to the left/right regions
-   flanking it (the two side columns) - and a card released with its center inside the
-   strip stays free (unsnapped): that free drop over the atom is the undock gesture. */
+   flanking it (the two side columns); a card the user already placed across it keeps its
+   edge snapping (allowXStop) - and a notice released with its center inside the strip stays
+   free (unsnapped): that free drop over the atom is its undock gesture (`freeOverAtom`). */
 const DEAD_ZONE_RADIUS_FRAC = ANCHOR_SIZE_FRAC / 2;
 function deadZoneX(): [number, number] {
    const r = DEAD_ZONE_RADIUS_FRAC * Math.min(window.innerWidth, window.innerHeight);
@@ -61,6 +91,9 @@ export interface MovableOptions {
    lockable?: boolean;
    /* Place the padlock inline (e.g. in a header) instead of the top-left corner. */
    lockSlot?: (btn: HTMLButtonElement) => void;
+   /* Released with its center over the reactor, the view floats free (no snapping): the undock
+      gesture for notification cards. Panels leave it off and snap wherever they are put. */
+   freeOverAtom?: boolean;
 }
 
 /* A preview for one snapped axis: a short glowing bar, either at a viewport edge
@@ -100,7 +133,10 @@ interface Snap {
    NOTE: this changed the `free` meaning, so a `free` position saved by the older
    travel-relative build shifts ONCE on first load (by V/(V-size)); the next drag re-saves
    it correctly. Edge docks (lo/hi/center) are unchanged and never shift. */
-type Anchor = { a: "lo" | "hi" | "center" } | { a: "free"; f: number };
+/* `across`: docked to a screen edge while reaching across the reactor's dead strip (a wide view
+   the user placed there): its width may span the strip (maxWidth), where a normal dock keeps
+   to the space beside the reactor. */
+type Anchor = { a: "lo" | "hi"; across?: boolean } | { a: "center" } | { a: "free"; f: number };
 interface StoredPos {
    x: Anchor;
    y: Anchor;
@@ -166,6 +202,129 @@ export function visibleMovableRects(exclude?: HTMLElement): DOMRect[] {
       });
 }
 
+/* --- Snap on resize -------------------------------------------------------------------
+   While a view is resized (Mail's edge grips, a list card's bottom grip), the moving edge snaps
+   to the screen edges and to other views' edges: flush against a neighbor (with the move gap)
+   or aligned with its matching edge. Closer than a move snaps (a fine resize shouldn't jump),
+   with the same glowing tick. No viewport-center stop, as for moves. */
+
+export type ResizeSide = "left" | "right" | "top" | "bottom";
+const RESIZE_SNAP_PX = 24;
+
+/* Where a moving edge at `pos` should land: the nearest stop within `threshold`, else `pos`.
+   `guide` is the coordinate to mark (null when not snapped); `screen` = a viewport edge. */
+export function resizeSnapTarget(
+   side: ResizeSide,
+   pos: number,
+   others: DOMRect[],
+   viewport: { w: number; h: number; edge: number },
+   threshold = RESIZE_SNAP_PX,
+   range: [number, number] = [-Infinity, Infinity] // where the edge can actually go (size limits)
+): { pos: number; guide: number | null; screen: boolean } {
+   const horizontal = side === "left" || side === "right";
+   const stops: Array<{ pos: number; guide: number; screen: boolean }> = [];
+   if (horizontal) {
+      stops.push({ pos: viewport.edge, guide: viewport.edge, screen: true });
+      stops.push({ pos: viewport.w - viewport.edge, guide: viewport.w - viewport.edge, screen: true });
+   } else {
+      stops.push({ pos: viewport.edge, guide: viewport.edge, screen: true });
+      stops.push({ pos: viewport.h - viewport.edge, guide: viewport.h - viewport.edge, screen: true });
+   }
+   for (const o of others) {
+      if (side === "right") {
+         stops.push({ pos: o.left - SNAP_GAP, guide: o.left - SNAP_GAP, screen: false }); // flush before it
+         stops.push({ pos: o.right, guide: o.right, screen: false }); // right edges aligned
+      } else if (side === "left") {
+         stops.push({ pos: o.right + SNAP_GAP, guide: o.right + SNAP_GAP, screen: false }); // flush after it
+         stops.push({ pos: o.left, guide: o.left, screen: false }); // left edges aligned
+      } else if (side === "bottom") {
+         stops.push({ pos: o.top - SNAP_GAP, guide: o.top - SNAP_GAP, screen: false }); // flush above it
+         stops.push({ pos: o.bottom, guide: o.bottom, screen: false }); // bottoms aligned
+      } else {
+         stops.push({ pos: o.bottom + SNAP_GAP, guide: o.bottom + SNAP_GAP, screen: false }); // flush below it
+         stops.push({ pos: o.top, guide: o.top, screen: false }); // tops aligned
+      }
+   }
+   let best: { pos: number; guide: number; screen: boolean } | null = null;
+   let bestD = threshold;
+   for (const st of stops) {
+      if (st.pos < range[0] || st.pos > range[1]) continue; // the size limits wouldn't let it land there
+      const d = Math.abs(st.pos - pos);
+      if (d <= bestD) {
+         best = st;
+         bestD = d;
+      }
+   }
+   return best ? { pos: best.pos, guide: best.guide, screen: best.screen } : { pos, guide: null, screen: false };
+}
+
+export interface ResizeSnap {
+   /* Snap the moving edge at `pos` and mark it; returns the coordinate to use. `range` is where
+      the size limits let that edge go, so a stop it can't reach is neither used nor marked. */
+   snap(side: ResizeSide, pos: number, range?: [number, number]): number;
+   /* The resize ended: take the marks down. */
+   end(): void;
+}
+
+/* Start snapping one resize. Everything a move needs is measured ONCE here (the other views
+   don't move during a resize, nor does the viewport): reading layout on every pointermove,
+   right after the previous move wrote a new size, forced a synchronous reflow each time. */
+export function beginResizeSnap(el: HTMLElement): ResizeSnap {
+   const edge = cssMovableEdge();
+   const W = window.innerWidth;
+   const H = window.innerHeight;
+   /* On-screen rects, as for moves (a receded notice is drawn smaller than its layout box). */
+   const others = [...movables].filter((o) => o !== el && o.offsetParent !== null).map((o) => o.getBoundingClientRect());
+   const start = el.getBoundingClientRect(); // centers the marks along the panel
+   /* One mark per orientation, so a corner resize can show both. */
+   const bars: { v: HTMLDivElement | null; h: HTMLDivElement | null } = { v: null, h: null };
+   const lastGuide: { v: number | null; h: number | null } = { v: null, h: null };
+
+   return {
+      snap: (side, pos, range) => {
+         const t = resizeSnapTarget(side, pos, others, { w: W, h: H, edge }, RESIZE_SNAP_PX, range);
+         const horizontal = side === "left" || side === "right";
+         const key = horizontal ? "v" : "h";
+         if (t.guide === lastGuide[key]) return t.pos; // the mark is already right
+         lastGuide[key] = t.guide;
+         let bar = bars[key];
+         if (t.guide === null) {
+            if (bar) bar.style.display = "none";
+            return pos;
+         }
+         if (!bar) {
+            bar = document.createElement("div");
+            bar.className = `movable-snap-bar movable-snap-bar-${key}`;
+            document.body.appendChild(bar);
+            bars[key] = bar;
+         }
+         const g = bar.style;
+         g.display = "block";
+         if (horizontal) {
+            const len = Math.min(160, Math.round(start.height * 0.9));
+            const x = t.screen ? (t.guide <= edge ? IND_INSET : W - IND_INSET - IND_THICK) : t.guide - IND_THICK / 2;
+            g.width = `${IND_THICK}px`;
+            g.height = `${len}px`;
+            g.left = `${Math.round(x)}px`;
+            g.top = `${Math.round(Math.min(H - len, Math.max(0, start.top + start.height / 2 - len / 2)))}px`;
+         } else {
+            const len = Math.min(200, Math.round(start.width * 0.9));
+            const y = t.screen ? (t.guide <= edge ? IND_INSET : H - IND_INSET - IND_THICK) : t.guide - IND_THICK / 2;
+            g.height = `${IND_THICK}px`;
+            g.width = `${len}px`;
+            g.top = `${Math.round(y)}px`;
+            g.left = `${Math.round(Math.min(W - len, Math.max(0, start.left + start.width / 2 - len / 2)))}px`;
+         }
+         return t.pos;
+      },
+      end: () => {
+         bars.v?.remove();
+         bars.h?.remove();
+         bars.v = bars.h = null;
+      }
+   };
+}
+
 /* The gutter a docked view keeps from the viewport edge. Read from the
    --movable-edge CSS custom property so the snap inset and the cards' default CSS
    position (which use the same property) can never drift apart. */
@@ -190,7 +349,8 @@ export interface MovableHandle {
       free; a centered axis goes free) and persist. */
    commitResize(edges: ResizeEdges): void;
    /* The widest this view may grow from where it sits without a docked edge entering the
-      reactor's dead zone (or leaving the viewport). */
+      reactor's dead zone (or leaving the viewport). A view docked across the strip (`across`,
+      a wide view the user placed there) may span it: the full viewport width. */
    maxWidth(): number;
    /* The user locked this view in place (its padlock or "Lock all panels"): no drag, no resize. */
    isLocked(): boolean;
@@ -305,7 +465,8 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const w = r.width;
       const h = r.height;
 
-      type Stop = { pos: number; preview: AxisPreview };
+      /* grid: the viewport-center column, which sits over the atom (never used across the strip). */
+      type Stop = { pos: number; preview: AxisPreview; grid?: boolean };
       const nearest = (
          cur: number,
          stops: Stop[]
@@ -324,7 +485,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          flush-left). The preview marks the edge the box is aligning to. */
       const xStops: Stop[] = [
          { pos: edge, preview: { type: "edge", side: "lo" } },
-         { pos: (W - w) / 2, preview: null },
+         { pos: (W - w) / 2, preview: null, grid: true },
          { pos: W - w - edge, preview: { type: "edge", side: "hi" } }
       ];
       for (const o of others) {
@@ -348,11 +509,9 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          yStops.push({ pos: o.top - h - SNAP_GAP, preview: { type: "guide", coord: o.top - SNAP_GAP } });
       }
 
-      /* Reject any X stop that would land the card overlapping the central dead strip
-         (this also drops the viewport-center stop, whose card sits over the atom): a view
-         can only snap into the left or right region flanking the reactor. */
-      const [dxMin, dxMax] = deadZoneX();
-      const validXStops = xStops.filter((s) => !(s.pos < dxMax && s.pos + w > dxMin));
+      /* The central dead strip: snapping never pulls a card INTO it (see allowXStop). */
+      const dz = deadZoneX();
+      const validXStops = xStops.filter((s) => allowXStop(s.pos, w, r.left, dz, s.grid === true, opts.freeOverAtom === true));
 
       const sx = nearest(r.left, validXStops);
       const sy = nearest(r.top, yStops);
@@ -432,7 +591,10 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          if (!parsed || typeof parsed !== "object") return;
          const p = parsed as { x?: unknown; y?: unknown };
          if (isAnchor(p.x) && isAnchor(p.y)) {
-            stored = { x: p.x, y: p.y }; // v2 anchor schema
+            /* v2 anchor schema; `across` only ever as a real true (untrusted storage). */
+            const clean = (a: Anchor): Anchor =>
+               a.a === "lo" || a.a === "hi" ? ((a as { across?: unknown }).across === true ? { a: a.a, across: true } : { a: a.a }) : a;
+            stored = { x: clean(p.x), y: clean(p.y) };
             if (applyStored("all")) appliedRealSize = true;
             return;
          }
@@ -452,8 +614,17 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       }
    };
 
-   /* True when the view's horizontal centre sits inside the central dead strip: a drop
-      here does not snap (it floats free), which is the undock gesture for a notice. */
+   /* A card at this left edge and width reaching across the strip (the one test behind an
+      `across` dock, wherever a dock is decided: a drop, a resize, a CSS default). */
+   const acrossFor = (left: number, width: number): boolean => {
+      const [lo, hi] = deadZoneX();
+      return left < hi && left + width > lo;
+   };
+   const withAcross = (anc: Anchor, left: number, width: number): Anchor =>
+      anc.a === "lo" || anc.a === "hi" ? (acrossFor(left, width) ? { a: anc.a, across: true } : { a: anc.a }) : anc;
+
+   /* True when the view's horizontal centre sits inside the central dead strip: with
+      `freeOverAtom` (a notice) a drop here does not snap (it floats free), its undock gesture. */
    const inDeadZone = (r: DOMRect): boolean => {
       const [lo, hi] = deadZoneX();
       const cx = r.left + r.width / 2;
@@ -500,7 +671,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       }
       place(originLeft + dx, originTop + dy);
       const r = el.getBoundingClientRect();
-      if (inDeadZone(r)) {
+      if (opts.freeOverAtom && inDeadZone(r)) {
          /* Over the atom: no snapping - it drops free here (the undock region). */
          pending = freeSnap(r);
          vbar.style.display = "none";
@@ -521,7 +692,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       hidePreview();
 
       const rect = el.getBoundingClientRect();
-      const snap = inDeadZone(rect) ? freeSnap(rect) : (pending ?? computeSnap(rect, otherRects));
+      const snap = opts.freeOverAtom && inDeadZone(rect) ? freeSnap(rect) : (pending ?? computeSnap(rect, otherRects));
       pending = null;
       const moved = Math.round(snap.left) !== Math.round(parseFloat(el.style.left || "0"));
       if (moved || snap.xPrev || snap.yPrev) {
@@ -537,16 +708,21 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          free, with the fraction read from the PLACED (post-clamp) pixel so it round-trips. */
       const w = el.offsetWidth;
       const h = el.offsetHeight;
-      const anchorFor = (prev: AxisPreview, snapped: boolean, placed: number, V: number, _size: number): Anchor => {
-         if (prev && prev.type === "edge") return { a: prev.side === "lo" ? "lo" : "hi" };
+      const placedLeft = parseFloat(el.style.left) || 0;
+      const acrossStrip = acrossFor(placedLeft, w);
+      const anchorFor = (prev: AxisPreview, snapped: boolean, placed: number, V: number, _size: number, horizontal: boolean): Anchor => {
+         if (prev && prev.type === "edge") {
+            const side = prev.side === "lo" ? "lo" : "hi";
+            return horizontal && acrossStrip ? { a: side, across: true } : { a: side };
+         }
          if (snapped && !prev) return { a: "center" };
          /* free = the placed top-left corner as a fraction of the viewport (size-independent),
             so a same-resolution restore reproduces this exact pixel. */
          return { a: "free", f: Math.min(1, Math.max(0, placed / Math.max(1, V))) };
       };
       stored = {
-         x: anchorFor(snap.xPrev, snap.xSnapped, parseFloat(el.style.left) || 0, window.innerWidth, w),
-         y: anchorFor(snap.yPrev, snap.ySnapped, parseFloat(el.style.top) || 0, window.innerHeight, h)
+         x: anchorFor(snap.xPrev, snap.xSnapped, placedLeft, window.innerWidth, w, true),
+         y: anchorFor(snap.yPrev, snap.ySnapped, parseFloat(el.style.top) || 0, window.innerHeight, h, false)
       };
       localStorage.setItem(opts.storageKey, JSON.stringify(stored));
       opts.onSnap?.(snap.xSnapped || snap.ySnapped);
@@ -621,15 +797,21 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const fromCss = (lo: number, hi: number, V: number): Anchor =>
          Math.abs(hi - (V - edge)) <= 2 ? { a: "hi" } : Math.abs(lo - edge) <= 2 ? { a: "lo" } : free(lo, V);
       const cur: StoredPos = stored ?? { x: fromCss(r.left, r.right, W), y: fromCss(r.top, r.bottom, H) };
-      const axis = (anc: Anchor, lo: boolean | undefined, hi: boolean | undefined, px: number, V: number): Anchor => {
+      const axis = (anc: Anchor, lo: boolean | undefined, hi: boolean | undefined, px: number, far: number, V: number): Anchor => {
          if (!lo && !hi) return anc;
          if (anc.a === "hi" && lo && !hi) return anc; // grown away from its dock: still docked
          if (anc.a === "lo" && hi && !lo) return anc;
+         /* The moved edge left flush to the screen gutter (a resize snap to the screen edge):
+            docked there, like a move to that edge. */
+         if (lo && !hi && Math.abs(px - edge) <= 2) return { a: "lo" };
+         if (hi && !lo && Math.abs(far - (V - edge)) <= 2) return { a: "hi" };
          return free(px, V);
       };
       stored = {
-         x: axis(cur.x, edges.left, edges.right, r.left, W),
-         y: axis(cur.y, edges.top, edges.bottom, r.top, H)
+         /* A dock that survives the resize re-reads `across` from the new size (narrowed clear of
+            the strip: a normal dock again; grown across it: an across dock). */
+         x: withAcross(axis(cur.x, edges.left, edges.right, r.left, r.right, W), r.left, r.width),
+         y: axis(cur.y, edges.top, edges.bottom, r.top, r.bottom, H)
       };
       try {
          localStorage.setItem(opts.storageKey, JSON.stringify(stored));
@@ -644,8 +826,13 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const W = window.innerWidth;
       const r = el.getBoundingClientRect();
       const [dLo, dHi] = deadZoneX();
+      /* Docked across the strip on purpose (a wide view): it may span it. */
+      if (stored && (stored.x.a === "lo" || stored.x.a === "hi") && stored.x.across) return Math.max(0, W - 2 * edge);
       const dockedLo = stored ? stored.x.a === "lo" : Math.abs(r.left - edge) <= 2;
       const dockedHi = stored ? stored.x.a === "hi" : Math.abs(r.right - (W - edge)) <= 2;
+      /* Never placed by the user: a CSS-default dock already reaching across the strip (its
+         minimum width is wider than the space beside the reactor) is an across dock too. */
+      if (!stored && (dockedLo || dockedHi) && acrossFor(r.left, r.width)) return Math.max(0, W - 2 * edge);
       if (dockedLo) return Math.max(0, dLo - edge);
       if (dockedHi) return Math.max(0, W - dHi - edge);
       return Math.max(0, W - 2 * edge);
