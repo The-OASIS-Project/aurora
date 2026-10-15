@@ -61,7 +61,7 @@ export function fitRatio(available: number, design: number): number {
 
 /* Apply `ratio` to every image under `root`. A sized image scales from its width/height
    attributes; an unsized one from its loaded size. Each unsized image gets ONE load listener,
-   which reads the ratio current when it loads (images are lazy, so that can be much later). */
+   which reads the ratio current when it loads (a slow image can arrive much later). */
 export function fitImages(root: HTMLElement, ratio: number): void {
    root.dataset.fitRatio = String(ratio);
    for (const img of Array.from(root.querySelectorAll("img"))) {

@@ -1386,6 +1386,9 @@ export class DawnIngest implements Ingest {
 
       ws.onopen = (): void => {
          this.unsupportedTypes.clear(); // a new connection may be a different (upgraded) daemon
+         this.sinks.stocks.setUnsupported?.(false);
+         this.sinks.watchlist.setUnsupported?.(false);
+         this.sinks.calendar.setUnsupported?.(false);
          /* The backoff resets only once this connection proves stable, not on the open itself. */
          window.clearTimeout(this.wsStableTimer);
          this.wsStableTimer = window.setTimeout(() => {
@@ -4007,6 +4010,17 @@ export class DawnIngest implements Ingest {
       return this.llm.mode === "local" ? this.localVision : this.cloudVision;
    }
 
+   /* A DAWN vendor script (`/js/vendor/…`, e.g. Chart.js) for a visual to inline. DAWN serves them
+      only to a signed-in browser, so it goes with this app's login, and anything that isn't
+      JavaScript is refused (a redirect to the login page must never be inlined as a script). */
+   async fetchVendorScript(path: string): Promise<string> {
+      if (!/^\/js\/vendor\/[A-Za-z0-9._-]+\.js$/.test(path)) throw new Error("not a vendor script");
+      const res = await fetch(this.dawnUrl(path), { credentials: "same-origin", redirect: "error" });
+      const type = res.headers.get("content-type") ?? "";
+      if (!res.ok || !/javascript/i.test(type)) throw new Error(`vendor script unavailable: ${res.status} ${type}`);
+      return res.text();
+   }
+
    /* Fetch an attached image's bytes over the same-origin /api proxy (the cookie rides it).
       A GET read; the conversation view object-URLs the blob into an <img> thumbnail. */
    async fetchImage(id: string): Promise<{ blob: Blob; contentType: string }> {
@@ -5393,7 +5407,13 @@ export class DawnIngest implements Ingest {
          instead of waiting for a status that will never come. */
       if (requestType === "ha_status") this.sinks.ha.setStatus({ configured: false, connected: false, error: "Home Assistant isn't available on this DAWN" });
       if (requestType.startsWith("ha_")) window.clearInterval(this.haTimer);
-      if (requestType.startsWith("calendar_")) window.clearInterval(this.calendarTimer);
+      if (requestType.startsWith("calendar_")) {
+         window.clearInterval(this.calendarTimer);
+         this.sinks.calendar.setUnsupported?.(true);
+      }
+      /* The Schwab feeds aren't in this DAWN: say so now instead of after the panels' timeout. */
+      if (requestType.startsWith("stocks_portfolio_")) this.sinks.stocks.setUnsupported?.(true);
+      if (requestType.startsWith("stocks_watch_")) this.sinks.watchlist.setUnsupported?.(true);
       console.warn(`[dawn] this DAWN doesn't handle "${requestType || "a message"}"; not sending it again on this connection`);
    }
 

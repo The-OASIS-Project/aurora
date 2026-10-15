@@ -136,6 +136,7 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
    let watchlist: StockWatchlist | null = null;
    let tz: string | undefined;
    let lastFrameAt = 0;
+   let unsupported = false; // this DAWN has no watchlist feed (UNKNOWN_TYPE)
    let lastRefreshAt = 0;
    let extHours = false;
    try {
@@ -209,6 +210,7 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
 
    /* --- render ------------------------------------------------------------ */
    const emptyStateText = (): string => {
+      if (unsupported) return "Watchlist isn't available on this DAWN.";
       const status = watchlist?.status ?? "ok";
       if (status === "token_expired") return "Schwab link expired - reconnect in DAWN (dawn-admin schwab auth).";
       if (status === "not_connected") return "No brokerage linked in DAWN.";
@@ -416,6 +418,12 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
    syncSubscription();
 
    const controller: WatchlistPanelController = {
+      setUnsupported: (on) => {
+         if (on === unsupported) return;
+         unsupported = on;
+         if (on) watchlist = null; // a feed this DAWN doesn't have: nothing left from before stays up
+         render();
+      },
       setWatchlist: (w) => {
          watchlist = w;
          lastFrameAt = performance.now();

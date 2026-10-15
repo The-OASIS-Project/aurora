@@ -408,6 +408,10 @@ export class StubIngest implements Ingest {
       const text = "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
       return { blob: new Blob([text], { type: "text/markdown" }), contentType: "text/markdown" };
    }
+   /* No DAWN vendor scripts behind the stub: a chart visual renders without its library. */
+   async fetchVendorScript(_path: string): Promise<string> {
+      throw new Error("no vendor scripts in the stub");
+   }
    /* No real images behind the stub. */
    async fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
       return { blob: new Blob(), contentType: "" };

@@ -200,6 +200,7 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    let portfolio: StockPortfolio | null = null;
    let tz: string | undefined;
    let lastFrameAt = 0;
+   let unsupported = false; // this DAWN has no portfolio feed (UNKNOWN_TYPE)
    let lastRefreshAt = 0;
    let extHours = false;
    let redacted = false;
@@ -334,7 +335,9 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          baseline.clear();
          statusEl.hidden = false;
          statusEl.className = "stocks-status";
-         statusEl.textContent = emptyStateText(portfolio, subscribed, lastFrameAt);
+         statusEl.textContent = unsupported
+            ? "Portfolio isn't available on this DAWN."
+            : emptyStateText(portfolio, subscribed, lastFrameAt);
          // A state-only frame (e.g. token_expired) owns its own reconnect messaging; the
          // proactive expiry note only rides alongside a live snapshot.
          linkEl.hidden = true;
@@ -541,6 +544,12 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    syncSubscription();
 
    const controller: StocksPanelController = {
+      setUnsupported: (on) => {
+         if (on === unsupported) return;
+         unsupported = on;
+         if (on) portfolio = null; // a feed this DAWN doesn't have: nothing left from before stays up
+         render();
+      },
       setPortfolio: (p) => {
          portfolio = p;
          lastFrameAt = performance.now();

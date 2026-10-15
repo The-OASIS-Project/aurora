@@ -93,6 +93,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
    let events: CalendarEvent[] = [];
    let truncated = false;
    let tz = ""; // user's IANA tz from DAWN; "" => browser-local fallback
+   let unsupported = false; // this DAWN has no calendar (UNKNOWN_TYPE)
 
    const render = (): void => {
       dateEl.textContent = fmtDay(new Date(), tz);
@@ -101,7 +102,7 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
       if (events.length === 0) {
          const empty = document.createElement("div");
          empty.className = "calendar-empty";
-         empty.textContent = "Nothing scheduled";
+         empty.textContent = unsupported ? "Calendar isn't available on this DAWN" : "Nothing scheduled";
          list.appendChild(empty);
          card.refresh();
          return;
@@ -166,6 +167,12 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
    render();
 
    const controller: CalendarPanelController = {
+      setUnsupported: (on) => {
+         if (on === unsupported) return;
+         unsupported = on;
+         if (on) events = []; // a calendar this DAWN doesn't have: nothing left from before stays up
+         render();
+      },
       setCalendars: (calendars: CalendarInfo[]) => {
          colors.clear();
          for (const c of calendars) colors.set(c.id, c.color);

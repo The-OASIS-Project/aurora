@@ -333,9 +333,13 @@ wraps, and stores the content itself.
    click (nonce-checked, so a reply can't forge one). Model-drawn visuals (`<dawn-visual>`, sandboxed
    srcdoc frames) carry a meta CSP with no network access (`default-src 'none'`), the page's
    `frame-src 'self'` stops a visual navigating its own frame elsewhere (a second load also closes
-   the frame), and WebRTC constructors are removed before the model's code runs. **Residual:** a
-   visual's script could create a nested srcdoc frame with a fresh WebRTC and leak through a STUN
-   DNS lookup; closing that fully would mean not running model scripts at all.
+   the frame), and WebRTC constructors are removed before the model's code runs. A nested frame
+   would bring a fresh WebRTC (CSP doesn't stop an about:blank / srcdoc child), so no frame may
+   exist in a visual: frame tags in the model's markup are neutralized before parsing, and the
+   prelude refuses every runtime route to one (createElement, node insertion incl. fragments and
+   Range, the HTML-parsing setters, document.write, execCommand), with non-configurable
+   replacements the model's code can't restore. **Residual:** a browser API that builds a frame by
+   a route not listed here; the fully closed alternative is not running model scripts at all.
 8. **The assistant's own send/trash confirm is conversational by design (see 9.0):** the model
    asks and the user answers in the conversation (voice-first). That is the owner's intended model;
    the wrapper (9.8) and the reply-image block (7 above) are what limit an injected email.

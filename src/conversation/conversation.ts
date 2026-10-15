@@ -126,6 +126,8 @@ export interface ConversationOptions {
    /* Fetch an attached image's bytes (routed through ingest -> /api/images/<id>). The view
       object-URLs the blob into a thumbnail. Absent -> images render as a failed placeholder. */
    fetchImage?: (id: string) => Promise<{ blob: Blob; contentType: string }>;
+   /* Fetch a DAWN vendor script (Chart.js) for a visual to inline (ingest -> /js/vendor/…). */
+   fetchVendorScript?: (path: string) => Promise<string>;
    /* Fetch a document's original file for the download affordance on a doc chip that has a
       stored original (ingest -> /api/documents/original/<blobId>). */
    fetchDocument?: (blobId: string) => Promise<{ blob: Blob; contentType: string }>;
@@ -481,7 +483,7 @@ export function mountConversation(
             d.innerHTML = renderMarkdown(seg.content);
             body.appendChild(d);
          } else {
-            body.appendChild(createVisualFrame(seg.visual));
+            body.appendChild(createVisualFrame(seg.visual, opts.fetchVendorScript));
          }
       }
    };

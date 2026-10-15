@@ -245,6 +245,8 @@ export interface CalendarSink {
    /* The user's IANA timezone (from DAWN), so event times render in the user's local
       time to match the clock, not the browser box's timezone (which may be UTC). */
    setTimezone(tz: string): void;
+   /* This DAWN doesn't have the calendar (it answered UNKNOWN_TYPE); false again on a new connection. */
+   setUnsupported?(on: boolean): void;
 }
 
 /* Per-entity attributes that drive the richer widgets (brightness slider, climate
@@ -471,6 +473,8 @@ export interface StocksSink {
    /* A portfolio update (immediate on subscribe, then on cadence, or one-shot from get). The
       view branches on `snapshot` presence for what to draw and on `status` for the badge. */
    setPortfolio(portfolio: StockPortfolio): void;
+   /* This DAWN doesn't have the portfolio feed (UNKNOWN_TYPE); false again on a new connection. */
+   setUnsupported?(on: boolean): void;
 }
 
 /* One watched (not-held) symbol: quote data only - no qty/value/unrealized, since it is not a
@@ -507,6 +511,8 @@ export interface WatchlistSink {
       one-shot from get. Gated on the WATCHLIST panel's own visibility (its own subscription,
       independent of the portfolio). */
    setWatchlist(watchlist: StockWatchlist): void;
+   /* This DAWN doesn't have the watchlist feed (UNKNOWN_TYPE); false again on a new connection. */
+   setUnsupported?(on: boolean): void;
 }
 
 /* A transient attention card: a proactive alert, a ringing alarm, a job/observation
@@ -859,6 +865,10 @@ export interface Ingest {
       the blob into an <img>. A read; routed through ingest so the view never touches the
       DAWN HTTP boundary directly. Rejects on failure. */
    fetchImage(id: string): Promise<{ blob: Blob; contentType: string }>;
+   /* Fetch one of DAWN's vendor scripts (`/js/vendor/…`, e.g. Chart.js) for a visual to inline.
+      DAWN serves them only to a signed-in browser, so it goes with this app's login. Resolves the
+      script text; rejects on anything that isn't JavaScript (a login page must never be inlined). */
+   fetchVendorScript(path: string): Promise<string>;
    /* Fetch a document's reassembled full text (doc_library_get) - the readable body of a
       document with no uploaded original (e.g. a generated research report), or the
       extracted text of one that has. Resolves with the text + metadata, or null when

@@ -76,7 +76,8 @@ purify.addHook("afterSanitizeAttributes", (node) => {
       if (showImagesNow && src && src.startsWith("https:")) {
          node.setAttribute("src", src);
          node.setAttribute("referrerpolicy", "no-referrer");
-         node.setAttribute("loading", "lazy");
+         /* Eager (the default): images the user chose to show all load now, so the message
+            doesn't reflow under the reader as they scroll in. */
       } else {
          node.removeAttribute("src");
          node.setAttribute("data-blocked", "");

@@ -176,14 +176,56 @@ const VISUAL_CSP =
    "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\">";
 
 /* Runs before the model's code: WebRTC isn't governed by CSP, and a STUN server name can carry data
-   out in a DNS lookup, so the constructors are removed (charts and drawings never need them). This
-   narrows the channel (a nested srcdoc frame could still bring a fresh copy: a residual risk, noted in
-   EMAIL_PANEL_DESIGN 4.7). */
-const VISUAL_PRELUDE =
+   out in a DNS lookup, so the constructors are removed (charts and drawings never need them).
+
+   A nested frame would bring a fresh copy of them (CSP doesn't stop an about:blank / srcdoc child,
+   and its window is reachable at once), so no frame may exist inside a visual: frame tags in the
+   model's markup are neutralized before it is parsed (neutralizeFrames), and this refuses to
+   create or insert one at runtime by any route: createElement(NS), the node-insertion methods
+   (which also cover parsed fragments, clones and templates, and Range insertion), and the
+   HTML-parsing setters (innerHTML, outerHTML, insertAdjacentHTML, setHTML(Unsafe), document.write,
+   execCommand insertHTML). Every HTML argument is checked as a string, whatever it is (a
+   TrustedHTML object is not a string, and would otherwise reach the parser unchecked). Nothing legitimate
+   needs a frame: DAWN's visual guidelines never use one. The originals are captured here, before
+   the model's code runs, and the replacements are non-configurable, so they can't be restored
+   (a fresh realm to copy them from would itself need a frame). */
+const FRAME_TAGS = "iframe|frame|frameset|object|embed|portal|fencedframe";
+export const VISUAL_PRELUDE =
    "<scr" +
-   "ipt>try{delete window.RTCPeerConnection;delete window.webkitRTCPeerConnection;" +
-   "window.RTCPeerConnection=undefined;window.webkitRTCPeerConnection=undefined}catch(e){}</scr" +
+   "ipt>(function(){try{delete window.RTCPeerConnection;delete window.webkitRTCPeerConnection;" +
+   "window.RTCPeerConnection=undefined;window.webkitRTCPeerConnection=undefined}catch(e){}" +
+   `var TAG=/^(${FRAME_TAGS})$/i,SEL="${FRAME_TAGS.split("|").join(",")}",MARK=/<\s*(${FRAME_TAGS})[\s/>]/i;` +
+   'function no(){throw new TypeError("Frames are not allowed in a visual")}' +
+   "function bad(n){if(!n||typeof n!==\"object\")return false;if(n.nodeType===1&&TAG.test(n.localName))return true;" +
+   "return!!(n.querySelector&&n.querySelector(SEL))}" +
+   /* Fail closed: a guard that won't install falls back to a plain assignment of the guarded
+      version; a property that refuses even that is replaced by a method that always refuses. */
+   "function lock(o,k,v){try{Object.defineProperty(o,k,v)}catch(e){try{if(v.value)o[k]=v.value;else o[k]=undefined}catch(e2){try{o[k]=no}catch(e3){}}}}" +
+   "function guard(P,m){if(!P)return;var f=P[m];if(typeof f!==\"function\")return;" +
+   "lock(P,m,{value:function(){for(var i=0;i<arguments.length;i++)if(bad(arguments[i]))no();return f.apply(this,arguments)},writable:false,configurable:false})}" +
+   "function guardHTML(P,m){if(!P)return;var f=P[m];if(typeof f!==\"function\")return;" +
+   "lock(P,m,{value:function(){for(var i=0;i<arguments.length;i++)if(arguments[i]!=null&&MARK.test(String(arguments[i])))no();return f.apply(this,arguments)},writable:false,configurable:false})}" +
+   "function guardSet(P,k){if(!P)return;var d=Object.getOwnPropertyDescriptor(P,k);if(!d||!d.set)return;" +
+   "lock(P,k,{get:d.get,set:function(v){if(MARK.test(String(v)))no();d.set.call(this,v)},enumerable:d.enumerable,configurable:false})}" +
+   "var D=Document.prototype,ce=D.createElement,cens=D.createElementNS;" +
+   "lock(D,\"createElement\",{value:function(t){if(TAG.test(String(t)))no();return ce.apply(this,arguments)},writable:false,configurable:false});" +
+   "lock(D,\"createElementNS\",{value:function(ns,t){if(TAG.test(String(t).split(\":\").pop()))no();return cens.apply(this,arguments)},writable:false,configurable:false});" +
+   "var N=window.Node&&Node.prototype,E=window.Element&&Element.prototype,F=window.DocumentFragment&&DocumentFragment.prototype,C=window.CharacterData&&CharacterData.prototype,S=window.ShadowRoot&&ShadowRoot.prototype;" +
+   "[\"appendChild\",\"insertBefore\",\"replaceChild\"].forEach(function(m){guard(N,m)});" +
+   "[\"append\",\"prepend\",\"before\",\"after\",\"replaceWith\",\"replaceChildren\",\"insertAdjacentElement\"].forEach(function(m){guard(E,m)});" +
+   "[\"append\",\"prepend\",\"replaceChildren\"].forEach(function(m){guard(F,m);guard(D,m)});" +
+   "[\"before\",\"after\",\"replaceWith\"].forEach(function(m){guard(C,m)});" +
+   "var R=window.Range&&Range.prototype;guard(R,\"insertNode\");guard(R,\"surroundContents\");guardHTML(D,\"execCommand\");" +
+   "guardSet(E,\"innerHTML\");guardSet(E,\"outerHTML\");guardSet(S,\"innerHTML\");" +
+   "guardHTML(E,\"insertAdjacentHTML\");guardHTML(E,\"setHTMLUnsafe\");guardHTML(S,\"setHTMLUnsafe\");guardHTML(E,\"setHTML\");guardHTML(S,\"setHTML\");guardHTML(D,\"write\");guardHTML(D,\"writeln\");guard(E,\"moveBefore\");" +
+   "})();</scr" +
    "ipt>";
+
+/* Neutralize frame tags in the model's markup before it is parsed (the parser would build them
+   with no script involved): `<iframe` becomes an inert unknown element. */
+export function neutralizeFrames(code: string): string {
+   return code.replace(new RegExp(`<(/?)\\s*(${FRAME_TAGS})(?=[\\s/>])`, "gi"), "<$1x-blocked-$2");
+}
 
 /* Replace <script src="/js/vendor/X"> with the inlined vendor code (a sandboxed srcdoc
    iframe has no base URL, so it can't load external scripts). Fetched once, cached, and
@@ -192,7 +234,7 @@ const VISUAL_PRELUDE =
    Quote-agnostic (single OR double): the model reaches for single-quoted HTML attributes to
    avoid escaping inside render_visual's JSON, so a "-only match would silently skip inlining
    and leave a dead external <script> - blanking the chart. (Mirrors DAWN's visual-render.js.) */
-async function inlineVendor(content: string): Promise<string> {
+async function inlineVendor(content: string, fetchVendor?: (path: string) => Promise<string>): Promise<string> {
    const tags = content.match(/<script\s+src=(["'])(\/js\/vendor\/[^"']+)\1\s*>\s*<\/script>/gi);
    if (!tags) return content;
    let out = content;
@@ -201,29 +243,31 @@ async function inlineVendor(content: string): Promise<string> {
       if (!src) continue;
       /* The src is model-generated (reachable by prompt injection): resolve it and require it to
          stay under /js/vendor/ after normalization, so "/js/vendor/../../api/images/<id>" can't
-         pull the user's data into the visual's sandbox. Fetched WITHOUT cookies - the vendor
-         scripts are public static files. */
+         pull the user's data into the visual's sandbox. Fetched through ingest with this app's
+         login (DAWN serves /js/vendor only to a signed-in browser; a cookie-less fetch got its
+         login page, which inlined as a script and blanked every chart). */
       let path = "";
       try {
          path = new URL(src, window.location.origin).pathname;
       } catch {
          path = "";
       }
-      if (!path.startsWith("/js/vendor/") || src.includes("\\")) {
+      if (!path.startsWith("/js/vendor/") || src.includes("\\") || !fetchVendor) {
          out = out.replace(tag, "");
          continue;
       }
       let code = vendorCache.get(path);
       if (code === undefined) {
          try {
-            const res = await fetch(path, { credentials: "omit" });
-            code = res.ok ? (await res.text()).replace(/<\/script/gi, "<\\/script") : "";
+            code = (await fetchVendor(path)).replace(/<\/script/gi, "<\\/script");
+            vendorCache.set(path, code); // only a real script is cached: a failure retries next time
          } catch {
             code = ""; // vendor unavailable: drop the tag, the visual degrades rather than hangs
          }
-         vendorCache.set(path, code);
       }
-      out = out.replace(tag, "<scr" + "ipt>" + code + "</scr" + "ipt>");
+      /* A function replacer: a vendor body's `$'` / `$&` must not expand as replacement patterns. */
+      const inlined = "<scr" + "ipt>" + code + "</scr" + "ipt>";
+      out = out.replace(tag, () => inlined);
    }
    return out;
 }
@@ -254,7 +298,7 @@ function triggerDownload(v: VisualBlock): void {
 }
 
 /* Build the container (download button + sandboxed iframe) for one visual. */
-export function createVisualFrame(v: VisualBlock): HTMLElement {
+export function createVisualFrame(v: VisualBlock, fetchVendor?: (path: string) => Promise<string>): HTMLElement {
    const container = document.createElement("div");
    container.className = "convo-visual";
    container.setAttribute("data-visual-title", v.title); // title is DAWN text; attribute, not HTML
@@ -285,7 +329,7 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
          "body{margin:0;padding:0;overflow:hidden}svg{display:block;width:100%;height:auto}" +
          "</style></head><body>\n" +
          BRIDGE_SCRIPT +
-         v.code +
+         neutralizeFrames(v.code) +
          "</body></html>";
       const vb = parseViewBox(v.code);
       iframe.style.height =
@@ -297,7 +341,7 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
       const isChart = v.code.indexOf("<canvas") !== -1 && /\bnew\s+Chart\s*\(/.test(v.code);
       let canvasCss = "";
       let chartFix = "";
-      let code = v.code;
+      let code = neutralizeFrames(v.code);
       if (isChart) {
          const maxH = code.match(/max-height\s*:\s*(\d+)px/i);
          const boxH = maxH ? Math.min(parseInt(maxH[1], 10), 380) : 380;
@@ -332,7 +376,7 @@ export function createVisualFrame(v: VisualBlock): HTMLElement {
 
    /* Vendor scripts (Chart.js) must be inlined; fetch may be async, so attach the frame now
       and set srcdoc once ready. */
-   void inlineVendor(content).then((resolved) => {
+   void inlineVendor(content, fetchVendor).then((resolved) => {
       iframe.srcdoc = resolved;
    });
    container.appendChild(iframe);

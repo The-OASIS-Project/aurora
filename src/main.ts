@@ -721,6 +721,7 @@ const conversation = mountConversation(stage, {
    /* Inline attachment display: images + doc originals are fetched through the ingest
       boundary (never a direct DAWN call from the view). */
    fetchImage: (id) => ingest.fetchImage(id),
+   fetchVendorScript: (path) => ingest.fetchVendorScript(path),
    fetchDocument: (blobId) => ingest.fetchDocumentOriginal(blobId),
    /* Composer uploads (sanctioned conversation-input writes): documents (POST /api/documents)
       and images (POST /api/images); image attach is gated on the model being vision-capable. */
