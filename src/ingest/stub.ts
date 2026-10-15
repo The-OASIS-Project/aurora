@@ -89,6 +89,9 @@ export class StubIngest implements Ingest {
 
    /* No music engine behind the stub. */
    musicControl(_action: string, _params?: Record<string, unknown>): void {}
+   musicQueueList(): void {}
+   musicSearch(_query: string): void {}
+   musicLibrary(_type: string, _params?: Record<string, unknown>): void {}
 
    /* No Home Assistant behind the stub (the HA board stays "not configured"). */
    refreshHA(): void {}

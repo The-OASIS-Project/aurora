@@ -11,6 +11,8 @@
 
 import type { MusicAudio } from "../audio/music.ts";
 import type { MusicState, MusicSink } from "../ingest/ingest.ts";
+import { makeListCard, type ListCard } from "../render/list-card.ts";
+import { mountMusicLibrary } from "./music-library.ts";
 import { makeMovable } from "../render/movable.ts";
 import { addCorners } from "../render/corners.ts";
 import { makeVisibility } from "../render/visibility.ts";
@@ -19,6 +21,10 @@ import { PALETTE } from "../design/tokens.ts";
 export interface MusicPlayerOptions {
    audio: MusicAudio;
    control: (action: string, params?: Record<string, unknown>) => void;
+   /* Reads for the queue and library section (Ingest.musicQueueList / musicSearch / musicLibrary). */
+   queueList: () => void;
+   search: (query: string) => void;
+   library: (type: string, params?: Record<string, unknown>) => void;
 }
 
 export interface MusicPlayerController extends MusicSink {
@@ -59,6 +65,8 @@ const ICONS: Record<string, { solid?: boolean; paths: string[] }> = {
    repeat: { paths: ["M17 2l4 4-4 4", "M3 11v-1a4 4 0 0 1 4-4h14", "M7 22l-4-4 4-4", "M21 13v1a4 4 0 0 1-4 4H3"] },
    volume: { paths: ["M11 5 6 9H3v6h3l5 4z", "M15.5 8.5a5 5 0 0 1 0 7", "M18.5 6a9 9 0 0 1 0 12"] },
    mute: { paths: ["M11 5 6 9H3v6h3l5 4z", "M22 9l-6 6", "M16 9l6 6"] },
+   /* A list: the queue and library section. */
+   queue: { paths: ["M9 6h12", "M9 12h12", "M9 18h12", "M4 6h.01", "M4 12h.01", "M4 18h.01"] },
    /* Ascending equalizer bars: the "vivid spectrum" affordance. */
    eq: { solid: true, paths: ["M4 12h3v8H4z", "M10.5 4h3v16h-3z", "M17 9h3v11h-3z"] }
 };
@@ -201,12 +209,45 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    const volHint = document.createElement("span");
    volHint.className = "music-vol-hint";
    volHint.textContent = "Muted"; // shown uppercase, for a volume of 0 or the mute button
-   volRow.append(muteBtn, vol, volHint);
+   /* Opens the queue and library section below (remembered per browser). */
+   const libBtn = mkBtn("library", "queue", "Queue and library", "music-mode music-lib-btn");
+   volRow.append(muteBtn, vol, volHint, libBtn);
+
+   let libCard: ListCard | null = null; // set once the section is in the card (below)
+   const lib = mountMusicLibrary({
+      control: opts.control,
+      queueList: opts.queueList,
+      search: opts.search,
+      library: opts.library,
+      onRender: () => libCard?.refresh()
+   });
+   /* The empty card's way in: opens the section on the Library tab. */
+   const openLibBtn = document.createElement("button");
+   openLibBtn.type = "button";
+   openLibBtn.className = "music-open-lib";
+   openLibBtn.textContent = "Open the Library";
 
    /* Order: title/artist first, then the spectrum meter below it, then transport.
       (The EQ reads as a response to the now-playing line rather than a header.) */
-   el.append(head, canvas, seek, times, controls, volRow, colorBtn);
+   el.append(head, canvas, seek, times, controls, volRow, lib.el, colorBtn);
    root.appendChild(el);
+   /* The section's height drags like the other list panels (the same grip, with snapping). */
+   libCard = makeListCard(el, lib.body, { storageKey: "dawn.hero.musicLibH" });
+   const syncLib = (): void => {
+      el.classList.toggle("music-lib-open", lib.isOpen());
+      libBtn.classList.toggle("active", lib.isOpen());
+      libBtn.setAttribute("aria-expanded", lib.isOpen() ? "true" : "false");
+      libCard?.refresh();
+   };
+   libBtn.addEventListener("click", () => {
+      lib.setOpen(!lib.isOpen());
+      syncLib();
+   });
+   openLibBtn.addEventListener("click", () => {
+      lib.openLibrary();
+      syncLib();
+   });
+   syncLib();
 
    /* User visibility (Panels menu), persisted. `music-off` force-hides the player
       regardless of the track-presence fade. Defaults to shown. */
@@ -216,7 +257,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       start anywhere except the interactive controls; position is persisted. */
    const disposeMovable = makeMovable(el, {
       storageKey: "dawn.hero.musicPos",
-      ignore: "button, input, .music-seek"
+      ignore: "button, input, .music-seek, .music-lib, .lcard-grip"
    });
 
    /* --- state ------------------------------------------------------------- */
@@ -281,8 +322,18 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    };
 
    const render = (): void => {
+      /* Nothing queued: a compact card (title, volume, the queue button) so the library can still
+         be opened to pick something. Before DAWN has said anything (no state), stay hidden. */
+      const empty = !!state && !state.track;
+      el.classList.toggle("music-empty", empty);
       if (!state || !state.track) {
-         el.classList.remove("on");
+         el.classList.toggle("on", empty);
+         if (empty) {
+            titleEl.textContent = "Nothing playing";
+            subEl.replaceChildren(openLibBtn);
+            dur = 0;
+            durEl.textContent = fmtTime(0);
+         }
          return;
       }
       el.classList.add("on");
@@ -305,6 +356,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       posBase = s.positionSec;
       posAt = performance.now();
       render();
+      lib.setState(s);
    };
    const setPosition = (positionSec: number, durationSec: number): void => {
       posBase = positionSec;
@@ -417,6 +469,10 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       setState,
       setPosition,
       setError,
+      setQueue: (q) => lib.setQueue(q),
+      setSearchResults: (query, tracks) => lib.setSearchResults(query, tracks),
+      setLibrary: (page) => lib.setLibrary(page),
+      setLibraryError: (code, message) => lib.setError(code, message),
       frame,
       isVisible: vis.isVisible,
       setVisible: vis.setVisible,
@@ -424,6 +480,8 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
          window.clearTimeout(volTimer);
          window.clearTimeout(errorTimer);
          disposeMovable();
+         libCard?.destroy();
+         lib.destroy();
          el.remove();
       }
    };

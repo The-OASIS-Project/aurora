@@ -54,7 +54,10 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     preference - it also stops DAWN pacing the reply to synthesis speed, so a client-side audio drop
     alone is not enough); `scheduler_action` dismiss / **snooze**; `new_conversation` + the UI's own
     final-answer persistence; music transport (`music_subscribe` / `music_control` + the
-    `music_buffer` flow-control report, solicited telemetry the server clamps, not a control verb);
+    `music_buffer` flow-control report, solicited telemetry the server clamps, not a control verb; the
+    player's queue and library section reads `music_queue` list / `music_search` / `music_library` and
+    edits the user's own queue through `music_control` add_to_queue / remove_from_queue / clear_queue /
+    add_artist / add_album / play / play_index, no confirm since the queue is transient);
     voice input (mic `AUDIO_IN` / `AUDIO_IN_END` for push-to-talk; `always_on_enable` /
     `always_on_disable` to arm/disarm DAWN's server-side VAD + wake word); the conversation picker's
     `rename_conversation` / `set_pinned` / confirm-gated **`delete_conversation`**; the Watches

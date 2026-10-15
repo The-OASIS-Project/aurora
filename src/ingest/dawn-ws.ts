@@ -36,6 +36,7 @@ import type {
    Ingest,
    IngestSinks,
    LibraryItem,
+   MusicLibraryPage,
    MusicState,
    MusicTrack,
    NoticeAction,
@@ -108,6 +109,8 @@ const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 const BIN_MUSIC_DATA = 0x20; // a music Opus chunk ([uint16-LE len][opus] after the opcode)
 const MUSIC_WS_MAX_FAILS = 5; // give up on the dedicated stream socket after this many
+/* music_error codes that answer the queue and library section's requests (not playback). */
+const MUSIC_SECTION_ERRORS = new Set(["UNAVAILABLE", "SEARCH_FAILED", "NOT_INITIALIZED", "INVALID_INDEX", "INVALID_REQUEST", "MEMORY_ERROR"]);
 const MUSIC_MAX_STALLS = 3; // silent-while-playing replacements in a row before "unavailable"
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
@@ -277,6 +280,49 @@ function toActivity(dawn: string, detail?: string): ActivityStatus | null {
          return { label: "Speaking" };
       case "error":
          return { label: "Error", tone: "alert" };
+      default:
+         return null;
+   }
+}
+
+/* One track row from a queue / search / library payload. */
+function toMusicTrack(t: Record<string, unknown>): MusicTrack {
+   return {
+      path: String(t.path ?? ""),
+      title: String(t.title || t.display_name || ""),
+      artist: String(t.artist ?? ""),
+      album: String(t.album ?? ""),
+      durationSec: Number(t.duration_sec ?? 0) || 0
+   };
+}
+
+/* A music_library_response payload -> one browse page (null for an unknown browse type). */
+function toLibraryPage(p: Record<string, unknown>): MusicLibraryPage | null {
+   const arr = (k: string): Array<Record<string, unknown>> => (Array.isArray(p[k]) ? (p[k] as Array<Record<string, unknown>>) : []);
+   const num = (k: string): number => Number(p[k] ?? 0) || 0;
+   switch (p.browse_type) {
+      case "stats":
+         return { kind: "stats", tracks: num("track_count"), artists: num("artist_count"), albums: num("album_count") };
+      case "tracks":
+         return { kind: "tracks", tracks: arr("tracks").map(toMusicTrack), offset: num("offset"), total: num("total_count") };
+      case "artists":
+         return {
+            kind: "artists",
+            artists: arr("artists").map((a) => ({ name: String(a.name ?? ""), albums: Number(a.album_count ?? 0) || 0, tracks: Number(a.track_count ?? 0) || 0 })),
+            offset: num("offset"),
+            total: num("total_count")
+         };
+      case "albums":
+         return {
+            kind: "albums",
+            albums: arr("albums").map((a) => ({ name: String(a.name ?? ""), artist: String(a.artist ?? ""), tracks: Number(a.track_count ?? 0) || 0 })),
+            offset: num("offset"),
+            total: num("total_count")
+         };
+      case "tracks_by_artist":
+         return { kind: "artist", name: String(p.artist ?? ""), tracks: arr("tracks").map(toMusicTrack) };
+      case "tracks_by_album":
+         return { kind: "album", name: String(p.album ?? ""), tracks: arr("tracks").map(toMusicTrack) };
       default:
          return null;
    }
@@ -2910,11 +2956,31 @@ export class DawnIngest implements Ingest {
             break;
          }
 
+         case "music_queue_response": {
+            const q = Array.isArray(p.queue) ? (p.queue as Array<Record<string, unknown>>) : [];
+            this.sinks.music.setQueue?.({ tracks: q.map(toMusicTrack), currentIndex: Number(p.current_index ?? 0) });
+            break;
+         }
+
+         case "music_search_response": {
+            const r = Array.isArray(p.results) ? (p.results as Array<Record<string, unknown>>) : [];
+            this.sinks.music.setSearchResults?.(String(p.query ?? ""), r.map(toMusicTrack));
+            break;
+         }
+
+         case "music_library_response": {
+            const page = toLibraryPage(p);
+            if (page) this.sinks.music.setLibrary?.(page);
+            break;
+         }
+
          case "music_error":
             /* DAWN can stop streaming on an error without a music_state (a failed auto-advance
                decode), so stop expecting audio until the next music_state says playing again. */
             this.musicWatch.setPlaying(false);
             this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
+            /* The queue and library section's own refusals: it stops waiting and says so. */
+            if (MUSIC_SECTION_ERRORS.has(String(p.code ?? ""))) this.sinks.music.setLibraryError?.(String(p.code), String(p.message ?? ""));
             console.warn("[dawn] music_error:", p.code, p.message);
             break;
 
@@ -4231,6 +4297,20 @@ export class DawnIngest implements Ingest {
             this.openMusicStream(token);
          }
       }
+   }
+
+   /* Reads for the player's queue and library section (answers route to the music sink). */
+   musicQueueList(): void {
+      this.send({ type: "music_queue", payload: { action: "list" } });
+   }
+
+   musicSearch(query: string): void {
+      const q = query.trim();
+      if (q) this.send({ type: "music_search", payload: { query: q.slice(0, 200), limit: 100 } });
+   }
+
+   musicLibrary(type: string, params: Record<string, unknown> = {}): void {
+      this.send({ type: "music_library", payload: { type, ...params } });
    }
 
    /* Closed-loop flow-control report up the music socket (from MusicAudio, ~32 ms).

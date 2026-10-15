@@ -159,6 +159,15 @@ the first two are active; treat everything else as terminal.
 | `music_position` | `position_sec`, `duration_sec` | Periodic progress tick. |
 | `music_error` | `code`, `message` | Playback error. |
 
+Aurora's player also has a queue and library section (`src/music/music-library.ts`): reads
+`music_queue {action:"list"}` -> `music_queue_response {queue[], current_index}`, `music_search
+{query, limit}` -> `music_search_response {query, results[]}` ("source:plex" / "source:local" in the
+query narrows it), and `music_library {type: stats|tracks|artists|albums|tracks_by_artist|tracks_by_album,
+offset, limit, artist?, album?}` -> `music_library_response {browse_type, ...}`; queue edits ride
+`music_control` (add_to_queue, remove_from_queue, clear_queue, add_artist, add_album, play {path},
+play_index). DAWN answers a queue edit with `music_state` (to the sender and the user's other tabs),
+never the list, so the list is re-read when the queue moves while it's open.
+
 Requires one setup message: `music_subscribe` (`{quality, audio_codecs}`). After
 that the three frames above flow on their own. The binary `MUSIC_DATA` audio
 chunks (`0x20`) are a separate concern you can ignore for a display-only panel.

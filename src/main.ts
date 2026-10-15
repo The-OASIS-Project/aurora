@@ -209,7 +209,10 @@ dawn.onVoiceWake(() => standby.wakeOnVoice()); // a wake-word match wakes the di
    the menu) so the Panels menu can bind to its show/hide. */
 const musicPlayer = mountMusicPlayer(stage, {
    audio: dawn.getMusicAudio(),
-   control: (action, params) => ingest.musicControl(action, params)
+   control: (action, params) => ingest.musicControl(action, params),
+   queueList: () => ingest.musicQueueList(),
+   search: (query) => ingest.musicSearch(query),
+   library: (type, params) => ingest.musicLibrary(type, params)
 });
 
 /* The calendar card: a standalone movable view (like the music player) showing

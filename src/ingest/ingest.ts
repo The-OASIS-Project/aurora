@@ -202,12 +202,33 @@ export interface MusicState {
    loading: boolean; // DAWN is fetching or opening the next track (no audio meanwhile; absent = false)
 }
 
+/* The player's queue (music_queue list): the tracks in play order and which one is current. */
+export interface MusicQueue {
+   tracks: MusicTrack[];
+   currentIndex: number;
+}
+
+/* One page of DAWN's music library browse (music_library). `offset`/`total` page the long lists. */
+export type MusicLibraryPage =
+   | { kind: "stats"; tracks: number; artists: number; albums: number }
+   | { kind: "tracks"; tracks: MusicTrack[]; offset: number; total: number }
+   | { kind: "artists"; artists: Array<{ name: string; albums: number; tracks: number }>; offset: number; total: number }
+   | { kind: "albums"; albums: Array<{ name: string; artist: string; tracks: number }>; offset: number; total: number }
+   | { kind: "artist"; name: string; tracks: MusicTrack[] }
+   | { kind: "album"; name: string; tracks: MusicTrack[] };
+
 /* What ingest can push to the music player view (a passive view; transport is
    sent back out via Ingest.musicControl). */
 export interface MusicSink {
    setState(state: MusicState): void;
    setPosition(positionSec: number, durationSec: number): void;
    setError(message: string): void;
+   /* The queue and library section (answers to musicQueueList / musicSearch / musicLibrary). */
+   setQueue?(queue: MusicQueue): void;
+   setSearchResults?(query: string, tracks: MusicTrack[]): void;
+   setLibrary?(page: MusicLibraryPage): void;
+   /* DAWN refused one of the section's requests (a music_error for a read or a queue edit). */
+   setLibraryError?(code: string, message: string): void;
 }
 
 /* One of the user's active calendars (calendar_list_my_calendars): the id->{name,
@@ -784,6 +805,12 @@ export interface Ingest {
    /* Music transport (a deliberate Tier-C write, like chat submit): a music_control
       action verb plus its params, e.g. musicControl("seek", { position_sec: 42 }). */
    musicControl(action: string, params?: Record<string, unknown>): void;
+   /* Reads for the player's queue and library section: the queue (music_queue list), a search
+      (music_search; "source:plex" / "source:local" narrows it), and a library browse page
+      (music_library: stats, tracks, artists, albums, tracks_by_artist, tracks_by_album). */
+   musicQueueList(): void;
+   musicSearch(query: string): void;
+   musicLibrary(type: string, params?: Record<string, unknown>): void;
    /* User asked the HA board for fresh state now (force a live re-poll instead of
       waiting for the interval). A read, like the other calendar/HA polls. */
    refreshHA(): void;
