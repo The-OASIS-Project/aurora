@@ -2210,7 +2210,9 @@ export class DawnIngest implements Ingest {
             break;
 
          case "get_my_settings_response": {
-            const tz = (p as { timezone?: string }).timezone;
+            /* An unset user zone ("") means the server's zone (DAWN user-timezone): DAWN sends its
+               resolved zone as server_timezone. An older daemon sends neither: browser-local. */
+            const tz = (p as { timezone?: string }).timezone || (p as { server_timezone?: string }).server_timezone;
             if (tz) {
                this.sinks.telemetry.setTimezone(tz);
                /* Same tz drives the calendar: it fixes the displayed times AND which
