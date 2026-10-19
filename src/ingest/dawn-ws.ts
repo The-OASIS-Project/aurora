@@ -942,7 +942,7 @@ export class DawnIngest implements Ingest {
    private prevMusicPlaying = false; // was playback advancing at prevMusicPos (for the projection)
    private prevMusicPath = ""; // last track path seen (a new file at the same index is a track change)
    private prevMusicDuration = 0; // the heard track's length (to finish its counter while a state is held)
-   private pendingMusicSeek: { index: number; params: Record<string, unknown> } | null = null; // sent once that track is ready
+   private pendingMusicSeek: { index: number; path: string; params: Record<string, unknown> } | null = null; // sent once that track is ready
    /* DAWN's end-of-track state, held until the buffered audio has played out (music-hold.ts). */
    private readonly musicHold = new MusicStateHold((payload, state, arrivedAt) => this.applyMusicState(payload, state, arrivedAt));
    private status: StatusHandler = () => {};
@@ -2977,6 +2977,15 @@ export class DawnIngest implements Ingest {
          }
 
          case "music_error":
+            /* A declined "previous" (nothing earlier: the queue's start, or shuffle with no history
+               yet) isn't an error and changes nothing: playback goes on, so the watch expects its
+               audio again (the previous had paused that expectation) and it's logged quietly. */
+            if (p.code === "NOTHING_EARLIER") {
+               this.musicWatch.setPlaying(this.prevMusicPlaying);
+               this.sinks.music.setError(String(p.message ?? "Nothing earlier to go back to"), "info");
+               console.info("[dawn] music: nothing earlier to go back to");
+               break;
+            }
             /* DAWN can stop streaming on an error without a music_state (a failed auto-advance
                decode), so stop expecting audio until the next music_state says playing again. */
             this.musicWatch.setPlaying(false);
@@ -4202,7 +4211,12 @@ export class DawnIngest implements Ingest {
       const nowPlaying = st.playing && !st.paused;
       const autoAdvance = p.advance === "auto";
       /* A different file at the same index is a new track too (a new song played into index 0). */
-      const trackChanged = seen && (st.queueIndex !== this.prevMusicIndex || (st.track?.path ?? "") !== this.prevMusicPath);
+      /* By the track itself when both paths are known: the queue position alone can change under a
+         playing track (another tab replaced the shared queue, and this client plays on with
+         queue_index -1, or the track sits at a new position), which is no track change and must not
+         flush. The position is the fallback when a path is missing. */
+      const path = st.track?.path ?? "";
+      const trackChanged = seen && (path && this.prevMusicPath ? path !== this.prevMusicPath : st.queueIndex !== this.prevMusicIndex);
       const seeked = seen && !noSeekCheck && Math.abs(st.positionSec - projected) > MUSIC_SEEK_TOLERANCE_SEC;
       /* Stop (not pause) resets the server position to 0, so its buffered lead is stale - flush
          it. Pause keeps position, so it is NOT a flush (see below). */
@@ -4223,7 +4237,9 @@ export class DawnIngest implements Ingest {
       const ps = this.pendingMusicSeek;
       if (ps && !st.loading) {
          this.pendingMusicSeek = null;
-         if (st.playing && st.queueIndex === ps.index) {
+         /* By the track itself when both paths are known (the queue can move under it), else by position. */
+         const path = st.track?.path ?? "";
+         if (st.playing && (path && ps.path ? path === ps.path : st.queueIndex === ps.index)) {
             this.send({ type: "music_control", payload: { action: "seek", ...ps.params } });
          }
       }
@@ -4244,18 +4260,25 @@ export class DawnIngest implements Ingest {
       this.pendingMusicSeek = null; // a newer control replaces a seek still waiting for its track
       const held = this.musicHold.peek();
       if (held) {
-         const heardIndex = this.prevMusicIndex;
-         const movedOn = held.state.playing && held.state.queueIndex !== heardIndex;
+         /* The heard track's queue position, or null when unknown or not in the shared queue any more
+            (queue_index -1: another client replaced the queue): never sent as a play_index. */
+         const heardIndex = this.prevMusicIndex !== null && this.prevMusicIndex >= 0 ? this.prevMusicIndex : null;
+         const movedOn = held.state.playing && held.state.queueIndex >= 0 && held.state.queueIndex !== heardIndex;
          if (action === "seek") {
-            this.musicHold.drop();
             if (heardIndex !== null) {
+               this.musicHold.drop();
                this.musicWatch.setPlaying(false); // a play_index (maybe a Plex fetch): no audio until its echo
                this.send({ type: "music_control", payload: { action: "play_index", index: heardIndex } });
                /* DAWN ignores a seek while a track is still opening (a Plex fetch), so seek once
                   it reports the track ready (applyMusicState). */
-               this.pendingMusicSeek = { index: heardIndex, params };
+               this.pendingMusicSeek = { index: heardIndex, path: this.prevMusicPath, params };
                return;
             }
+            /* The heard track isn't in the shared queue any more, so there's no way back to it that
+               leaves the queue alone (play {path} inserts it for every client). Ignore the seek rather
+               than land it in the next song, which DAWN is already on: the heard track plays out and
+               the next one lands on time. */
+            return;
          } else if ((action === "pause" || action === "next") && !held.state.playing) {
             /* The queue already ended in DAWN: stop here. (Next on the last track does nothing, as
                it would have a moment earlier.) */

@@ -191,3 +191,50 @@ describe("end-of-track music_state hold", () => {
       expect(t.controls().pop()).toEqual({ action: "play_index", index: 2 });
    });
 });
+
+describe("a track the shared queue no longer holds (queue_index -1)", () => {
+   it("isn't a track change: the position moving under the same track doesn't flush", () => {
+      const t = setup();
+      t.state(1);
+      t.state(1, { queue_index: -1 }); // another client replaced the queue
+      t.state(1, { queue_index: 3 }); // or the track sits at a new position
+      expect(t.player.flushes).toBe(0);
+      t.state(2, { queue_index: 3 }); // a new track at the same position is one
+      expect(t.player.flushes).toBe(1);
+   });
+
+   it("never sends a play_index of -1 from the held remaps", () => {
+      const t = setup();
+      t.state(1, { queue_index: -1 });
+      t.state(0, { advance: "auto", queue_index: 0 });
+      t.ing.musicControl("previous");
+      expect(t.controls().pop()).toEqual({ action: "previous" });
+      t.state(1, { queue_index: -1 });
+      t.state(0, { advance: "auto", queue_index: 0 });
+      const sent = t.controls().length;
+      t.ing.musicControl("seek", { position: 30 });
+      expect(t.controls().length).toBe(sent); // no seek into a song the user wasn't looking at
+      expect(t.last().track?.title).toBe("Song 1"); // still the heard track, held as before
+      vi.advanceTimersByTime(2000);
+      expect(t.last().track?.title).toBe("Song 0"); // the next one lands on time
+   });
+
+   it("a seek waiting for its track finds it by path even if the queue moved", () => {
+      const t = setup();
+      t.state(1);
+      t.state(2, { advance: "auto" });
+      t.ing.musicControl("seek", { position: 30 });
+      expect(t.controls().pop()).toEqual({ action: "play_index", index: 1 });
+      t.state(1, { queue_index: 4 }); // another tab replaced the queue meanwhile
+      expect(t.controls().pop()).toEqual({ action: "seek", position: 30 });
+   });
+
+   it("a declined previous keeps the watch expecting audio", () => {
+      const t = setup();
+      t.state(1);
+      t.ing.musicControl("previous");
+      expect(t.ing.musicWatch.playing).toBe(false);
+      t.frame("music_error", { code: "NOTHING_EARLIER", message: "Nothing earlier" });
+      expect(t.ing.musicWatch.playing).toBe(true);
+   });
+});

@@ -191,7 +191,7 @@ export interface MusicState {
    positionSec: number;
    durationSec: number;
    queueLength: number;
-   queueIndex: number;
+   queueIndex: number; // -1: playing a track the shared queue no longer holds (another client replaced it)
    shuffle: boolean;
    repeatMode: number; // 0 none | 1 all | 2 one
    volume: number; // server-stored hint; real gain is client-side
@@ -222,7 +222,9 @@ export type MusicLibraryPage =
 export interface MusicSink {
    setState(state: MusicState): void;
    setPosition(positionSec: number, durationSec: number): void;
-   setError(message: string): void;
+   /* A short message in place of the artist line; "info" for one that isn't a failure (a declined
+      previous), shown plainly rather than as an error. */
+   setError(message: string, tone?: "error" | "info"): void;
    /* The queue and library section (answers to musicQueueList / musicSearch / musicLibrary). */
    setQueue?(queue: MusicQueue): void;
    setSearchResults?(query: string, tracks: MusicTrack[]): void;

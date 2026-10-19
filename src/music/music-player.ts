@@ -267,6 +267,7 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
    let dur = 0;
    let vizColor = PALETTE.accentGlow; // seed from the token; readAccent() then tracks the live var
    let errorTimer = 0;
+   let notice: string | null = null; // a setError message, kept over state renders until its timer ends
 
    const readAccent = (): void => {
       const c = getComputedStyle(document.documentElement).getPropertyValue("--accent-glow").trim();
@@ -341,7 +342,9 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       const title = t.title || "Unknown";
       const sub = state.loading ? "Loading…" : [t.artist, t.album].filter(Boolean).join("  •  ");
       if (titleEl.textContent !== title) titleEl.textContent = title;
-      if (subEl.textContent !== sub) subEl.textContent = sub;
+      /* DAWN follows an error with a music_state at once: the message stays until its timer ends. */
+      const shown = notice ?? sub;
+      if (subEl.textContent !== shown) subEl.textContent = shown;
       dur = state.durationSec;
       durEl.textContent = fmtTime(dur);
       setPlayGlyph();
@@ -363,12 +366,15 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
       posAt = performance.now();
       if (durationSec > 0) dur = durationSec;
    };
-   const setError = (message: string): void => {
+   const setError = (message: string, tone: "error" | "info" = "error"): void => {
+      notice = message;
       subEl.textContent = message;
-      subEl.classList.add("error");
+      subEl.classList.toggle("error", tone === "error");
+      subEl.classList.toggle("notice", tone === "info");
       window.clearTimeout(errorTimer);
       errorTimer = window.setTimeout(() => {
-         subEl.classList.remove("error");
+         notice = null;
+         subEl.classList.remove("error", "notice");
          render();
       }, 4000);
    };
@@ -393,7 +399,10 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
                Bare `play` is used only to resume an actual pause. */
             if (state?.playing && !state.paused) opts.control("pause");
             else if (state?.paused) opts.control("play");
-            else opts.control("play_index", { index: state?.queueIndex ?? 0 });
+            /* A stopped player whose track isn't in the shared queue (queue_index -1): a bare play
+               starts the queue's top. Never a play_index of -1. */
+            else if ((state?.queueIndex ?? 0) >= 0) opts.control("play_index", { index: state?.queueIndex ?? 0 });
+            else opts.control("play");
             break;
          case "next":
             opts.control("next");

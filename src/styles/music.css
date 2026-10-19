@@ -119,6 +119,9 @@
 .music-sub.error {
    color: var(--alert-glow);
 }
+.music-sub.notice {
+   color: var(--text);
+}
 
 /* Seek bar. */
 .music-seek {
