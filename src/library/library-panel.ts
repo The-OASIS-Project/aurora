@@ -35,6 +35,7 @@ import {
    type DocDownload
 } from "../render/doc-viewer.ts";
 import { relativeTime } from "../util/time.ts";
+import { safeTimeZone } from "../util/tz.ts";
 
 export interface LibraryPanelOptions {
    /* Re-list the first page (also the manual refresh control; the library has no push). */
@@ -54,6 +55,8 @@ export interface LibraryPanelOptions {
 }
 
 export interface LibraryPanelController extends LibrarySink {
+   /* The DAWN user's timezone, for the item dates (browser-local until known). */
+   setTimezone(tz: string): void;
    isVisible(): boolean;
    setVisible(on: boolean): void;
    destroy(): void;
@@ -106,12 +109,13 @@ function sizeInfo(item: LibraryItem): string {
    return item.numChunks > 0 ? `${item.numChunks} part${item.numChunks === 1 ? "" : "s"}` : "";
 }
 
-function fmtDate(epochSec: number): string {
+function fmtDate(epochSec: number, tz: string | undefined): string {
    if (!epochSec) return "";
-   return new Date(epochSec * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+   return new Date(epochSec * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric", timeZone: tz });
 }
 
 export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions): LibraryPanelController {
+   let tz: string | undefined; // the DAWN user's zone; browser-local until known
    const el = document.createElement("div");
    el.id = "library";
    el.className = "library";
@@ -250,10 +254,13 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
       tryFullText(item, body, stale, setDownload, setEditable);
    };
 
+   const readerSubtitle = (item: LibraryItem): string =>
+      [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt, tz), item.isGlobal ? "shared" : ""].filter(Boolean).join(" · ");
+   let readerItem: LibraryItem | null = null; // the item the reader opened, to re-date it
+
    const openReader = (item: LibraryItem): void => {
-      const subtitle = [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt), item.isGlobal ? "shared" : ""]
-         .filter(Boolean)
-         .join(" · ");
+      const subtitle = readerSubtitle(item);
+      readerItem = item;
       /* Open-time download: a stored binary original (exact file) for a document, or the
          note body saved as markdown. A generated document with only reassembled text gets
          its Download set later, from tryFullText. */
@@ -306,7 +313,7 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
       meta.className = "library-row-meta";
       const when = document.createElement("span");
       when.className = "library-row-when";
-      when.textContent = relativeTime(item.createdAt);
+      when.textContent = relativeTime(item.createdAt, tz);
       meta.append(when);
       const size = sizeInfo(item);
       if (size) {
@@ -391,6 +398,13 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
 
    /* --- sink -------------------------------------------------------------- */
    const controller: LibraryPanelController = {
+      setTimezone: (zone) => {
+         const z = safeTimeZone(zone);
+         if (z === tz) return;
+         tz = z;
+         if (viewItems().length) render(); // re-date the listed rows
+         if (reader && readerItem) reader.setSubtitle(readerSubtitle(readerItem)); // and an open reader (a no-op once closed)
+      },
       setItems: (items, o) => {
          if (o.searching) {
             if (!isSearching()) return; // stale search response after the query was cleared

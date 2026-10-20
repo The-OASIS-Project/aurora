@@ -46,7 +46,7 @@ export function relativeTime(epochSec: number, tz?: string | null): string {
    const days = dayDiff(then, now, zone);
    if (days <= 1) return "Yesterday";
    if (days < 7) return then.toLocaleDateString([], { weekday: "long", timeZone: zone });
-   const sameYear = tzMidnightUTC(then, zone) >= Date.UTC(now.getUTCFullYear(), 0, 1);
+   const sameYear = wallParts(then.getTime(), zone).y === wallParts(now.getTime(), zone).y; // the zone's year, not UTC's
    return then.toLocaleDateString([], {
       month: "short",
       day: "numeric",
@@ -81,4 +81,62 @@ export function isoDate(epochSec: number, tz?: string | null): string {
    }).formatToParts(d);
    const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
    return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/* The zone's wall clock at an instant (epoch ms): calendar date + time of day. */
+function wallParts(ms: number, zone: string | undefined): { y: number; mo: number; d: number; h: number; mi: number; s: number } {
+   const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric"
+   }).formatToParts(new Date(ms));
+   const val = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? "0");
+   return { y: val("year"), mo: val("month"), d: val("day"), h: val("hour") % 24, mi: val("minute"), s: val("second") };
+}
+
+/* Seconds the zone's clock reads ahead of UTC at an instant (epoch ms). */
+function offsetSecAt(ms: number, zone: string | undefined): number {
+   const w = wallParts(ms, zone);
+   return Math.round((Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi, w.s) - ms) / 1000);
+}
+
+/* The first instant (epoch seconds) of calendar date y-mo-d in the zone. Usually its midnight;
+   where a clock change skips midnight, the moment the clock jumps (the day starts at 01:00).
+   Month/day overflow is fine (d + 1 at a month's end is the next month's 1st). */
+export function dayStart(y: number, mo: number, d: number, zone: string | undefined): number {
+   const wallMs = Date.UTC(y, mo - 1, d);
+   const want = new Date(wallMs);
+   const onDay = (p: ReturnType<typeof wallParts>): boolean =>
+      p.y === want.getUTCFullYear() && p.mo === want.getUTCMonth() + 1 && p.d === want.getUTCDate();
+   /* Midnight under each offset in force around it (a day either side covers a change at any
+      hour). A clock set back across midnight reads 00:00 twice: the day starts at the first. */
+   let first: number | null = null;
+   for (const k of [-1, 0, 1]) {
+      const t = wallMs - offsetSecAt(wallMs + k * 86400_000, zone) * 1000;
+      const p = wallParts(t, zone);
+      if (onDay(p) && p.h === 0 && p.mi === 0 && p.s === 0 && (first === null || t < first)) first = t;
+   }
+   if (first !== null) return Math.floor(first / 1000);
+   let t = wallMs - offsetSecAt(wallMs, zone) * 1000;
+   t = wallMs - offsetSecAt(t, zone) * 1000; // again, in case the offset changed in between
+   const p = wallParts(t, zone);
+   if (!onDay(p)) {
+      /* Midnight doesn't exist: t reads on the day before; the day starts where that reading
+         would reach 24:00, the jump. */
+      t += (86400 - (p.h * 3600 + p.mi * 60 + p.s)) * 1000;
+   }
+   return Math.floor(t / 1000);
+}
+
+/* Today in the zone (browser-local when unset or invalid), as epoch seconds [first instant,
+   the next day's first instant): 23 or 25 hours across a clock change, not always 24. */
+export function todayWindow(tz?: string | null, nowMs: number = Date.now()): { start: number; end: number } {
+   const zone = safeTimeZone(tz);
+   const w = wallParts(nowMs, zone);
+   return { start: dayStart(w.y, w.mo, w.d, zone), end: dayStart(w.y, w.mo, w.d + 1, zone) };
 }

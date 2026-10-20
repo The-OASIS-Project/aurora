@@ -790,6 +790,7 @@ ingest.start({
          watchlistPanel.setTimezone(tz); // and the watchlist "as of" stamp
          contextPanel.setTimezone(tz); // and the Context panel's item dates
          emailPanel.setTimezone(tz); // and the Mail panel's dates
+         libraryPanel.setTimezone(tz); // and the Library's item dates
       }
    },
    music: musicPlayer,

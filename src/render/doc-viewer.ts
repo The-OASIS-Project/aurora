@@ -67,6 +67,8 @@ export interface DocViewerOpts {
 export interface DocViewerHandle {
    /* Idempotent; only acts while this viewer is still the active one. */
    close(): void;
+   /* Replace the subtitle (e.g. its date, after a timezone change); same active-only rule. */
+   setSubtitle(text: string): void;
 }
 
 /* Append `ext` only when `name` has no extension of its own (a note label, a generated
@@ -207,12 +209,11 @@ export function openDocViewer(opts: DocViewerOpts): DocViewerHandle {
    title.className = "docview-title";
    title.textContent = opts.title || "(untitled)";
    titleWrap.append(title);
-   if (opts.subtitle) {
-      const sub = document.createElement("div");
-      sub.className = "docview-sub";
-      sub.textContent = opts.subtitle;
-      titleWrap.append(sub);
-   }
+   const sub = document.createElement("div");
+   sub.className = "docview-sub";
+   sub.textContent = opts.subtitle ?? "";
+   sub.hidden = !opts.subtitle;
+   titleWrap.append(sub);
 
    const actions = document.createElement("div");
    actions.className = "docview-actions";
@@ -403,6 +404,11 @@ export function openDocViewer(opts: DocViewerOpts): DocViewerHandle {
    return {
       close: (): void => {
          if (current && current.req === req) closeCurrent();
+      },
+      setSubtitle: (text: string): void => {
+         if (!current || current.req !== req) return;
+         sub.textContent = text;
+         sub.hidden = !text;
       }
    };
 }

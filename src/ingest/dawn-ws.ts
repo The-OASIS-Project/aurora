@@ -95,6 +95,8 @@ import {
    type ModelControl,
    type Reasoning
 } from "../model/model.ts";
+import { todayWindow } from "../util/time.ts";
+import { safeTimeZone } from "../util/tz.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
    type prefix then payload. TTS rides the MAIN socket; music rides ONLY the dedicated
@@ -359,47 +361,6 @@ function toMusicState(p: Record<string, unknown>): MusicState {
       sourceRate: Number(p.source_rate ?? 0),
       loading: p.loading === true
    };
-}
-
-/* Timezone offset (local - UTC, in seconds) for an IANA zone at a given instant. */
-function tzOffsetSec(tz: string, at: Date): number {
-   const dtf = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-   });
-   const p: Record<string, string> = {};
-   for (const part of dtf.formatToParts(at)) p[part.type] = part.value;
-   const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
-   return Math.round((asUTC - at.getTime()) / 1000);
-}
-
-/* Today's window as epoch seconds [midnight, next midnight) IN THE USER'S timezone
-   (from DAWN), so it matches the clock rather than the browser box's zone (which may
-   be UTC). An empty tz falls back to the browser's local zone. Recomputed each fetch,
-   so an open panel rolls over at midnight. */
-function todayWindow(tz: string): { start: number; end: number } {
-   if (!tz) {
-      const s = new Date();
-      s.setHours(0, 0, 0, 0);
-      return { start: Math.floor(s.getTime() / 1000), end: Math.floor(s.getTime() / 1000) + 86400 };
-   }
-   const now = new Date();
-   const off = tzOffsetSec(tz, now);
-   /* Shift by the offset so the UTC getters read the wall-clock date in `tz`. */
-   const wall = new Date(now.getTime() + off * 1000);
-   const midnightAsUTC = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), 0, 0, 0);
-   let startMs = midnightAsUTC - off * 1000;
-   /* Re-correct against the offset AT that midnight (covers a DST edge overnight). */
-   const offMidnight = tzOffsetSec(tz, new Date(startMs));
-   if (offMidnight !== off) startMs = midnightAsUTC - offMidnight * 1000;
-   const start = Math.floor(startMs / 1000);
-   return { start, end: start + 86400 };
 }
 
 /* DAWN's cut for an email ref's display strings (160 bytes on a character boundary, control
@@ -1028,6 +989,7 @@ export class DawnIngest implements Ingest {
       re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
       drop-in - a single-entity delta updates one row without a full re-poll. */
    private readonly haEntities = new Map<string, HAEntity>();
+   private zoneFromSession = false; // this DAWN names the zone on the session frame (get_my_settings's is then ignored)
    private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
    private uptimeTimer = 0; // ticks the uptime display every second between polls
    private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
@@ -1905,6 +1867,13 @@ export class DawnIngest implements Ingest {
                this.musicStalls = 0;
                this.musicUnavailable = false; // fresh connection re-arms the give-up notice
             }
+            /* The user's zone (their own, else the server's), the one DAWN reads and speaks times
+               in. Authenticated frame only; an older DAWN leaves it out (get_my_settings covers it). */
+            if (p.authenticated === true) {
+               const zone = (p as { timezone?: unknown }).timezone;
+               this.zoneFromSession = typeof zone === "string" && zone !== "";
+               if (typeof zone === "string") this.applyTimezone(zone);
+            }
             /* DAWN has processed our handshake (and its audio_codecs): use_opus is set, so
                shipping Opus is now safe. */
             this.capsSynced = true;
@@ -2212,19 +2181,18 @@ export class DawnIngest implements Ingest {
          case "get_my_settings_response": {
             /* An unset user zone ("") means the server's zone (DAWN user-timezone): DAWN sends its
                resolved zone as server_timezone. An older daemon sends neither: browser-local. */
-            const tz = (p as { timezone?: string }).timezone || (p as { server_timezone?: string }).server_timezone;
-            if (tz) {
-               this.sinks.telemetry.setTimezone(tz);
-               /* Same tz drives the calendar: it fixes the displayed times AND which
-                  events count as "today", so store it, tell the panel, and refetch
-                  with the corrected window (the first fetch used browser-local). */
-               this.userTz = tz;
-               this.sinks.calendar.setTimezone(tz);
-               this.sinks.conversationList.setTimezone(tz); // date grouping in the user's zone
-               this.requestCalendar();
-            }
+            /* Only for an older DAWN: a newer one named the zone on the session frame, resolved the
+               way DAWN uses it (validated, canonical, the server's when the stored one won't load),
+               where this carries the raw stored name. */
+            if (!this.zoneFromSession) this.applyTimezone((p as { timezone?: string }).timezone || (p as { server_timezone?: string }).server_timezone);
             break;
          }
+
+         case "timezone_changed":
+            /* The user saved My Settings (in any tab or the WebUI): their zone may have changed.
+               It can repeat the zone in use, which changes nothing. */
+            this.applyTimezone((p as { timezone?: string }).timezone);
+            break;
 
          case "list_conversations_response": {
             const raw = (p.conversations ?? []) as Array<Record<string, unknown>>;
@@ -4256,6 +4224,20 @@ export class DawnIngest implements Ingest {
         (play_index) before seeking;
       - pause or next on a held natural stop: the queue already ended in DAWN; stop here, send
         nothing. previous on it steps back from the heard track (DAWN has reset to index 0). */
+   /* Show every time and day in the user's zone: the clock, calendar, picker day groups and each
+      panel's dates. An unknown zone keeps the one in use (browser-local until DAWN names one); the
+      same zone again does nothing. The calendar refetches, since the zone decides which events
+      fall on "today". */
+   private applyTimezone(zone: string | undefined): void {
+      const tz = safeTimeZone(zone);
+      if (!tz || tz === this.userTz) return;
+      this.userTz = tz;
+      this.sinks.telemetry.setTimezone(tz);
+      this.sinks.calendar.setTimezone(tz);
+      this.sinks.conversationList.setTimezone(tz);
+      this.requestCalendar();
+   }
+
    musicControl(action: string, params: Record<string, unknown> = {}): void {
       this.pendingMusicSeek = null; // a newer control replaces a seek still waiting for its track
       const held = this.musicHold.peek();
