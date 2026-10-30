@@ -13,8 +13,8 @@ toolchain.
 
 - **Node.js.** Use the version in [`.nvmrc`](.nvmrc) (Node 22). With
   [nvm](https://github.com/nvm-sh/nvm): `nvm use` in the repo root. The `engines`
-  field in `package.json` accepts Node 18 / 20 / 22 (the versions Vite 5 supports),
-  but 22 is what development happens on.
+  field in `package.json` accepts Node 20.19+ and 22.13+ (what the dependencies
+  need), but 22 is what development happens on.
 - **npm** (ships with Node). No global tooling to install.
 - **A browser.** Chrome or Edge. Aurora leans on modern web APIs (WebCodecs,
   AudioWorklet, CSS 3D); it is not tested on Firefox/Safari.
@@ -41,22 +41,27 @@ HTTPS). Log in with your DAWN username and password.
 | `npm run typecheck` | `tsc --noEmit`. The fast correctness check. Run this constantly. |
 | `npm run build` | `tsc` (full typecheck) then `vite build` to a static bundle in `dist/`. |
 | `npm run preview` | Serve the built `dist/` bundle locally to sanity-check a production build. |
+| `npm test` | The unit tests (vitest), once. `npm run test:watch` re-runs them as you edit. |
 
-There is **no unit-test suite**. The safety net is two things, and you are expected
-to use both:
+The safety net is three things, and you are expected to use all of them:
 
 1. **Strict TypeScript.** `tsconfig.json` runs `strict`, `noUnusedLocals`, and
    `noUnusedParameters`. This is not incidental: the render seam (see
    ARCHITECTURE.md) is *enforced by the type system*. "Logic touched a pixel" is a
    compile error, not a code-review nit. Run `npm run typecheck` after every change;
    a green typecheck is the first gate.
-2. **Browser verification.** Because there are no tests, you verify behavior by
-   running it. Keep `npm run dev` open and exercise the actual feature in the
-   browser. For anything touching audio, the reactor, or layout, a visual check is
-   the only check.
+2. **Unit tests.** `npm test` runs the vitest suite (`npm run test:watch` while you
+   work). Tests sit next to the code they cover as `*.test.ts`; one that needs a DOM
+   starts with `// @vitest-environment jsdom`. Logic with real state (the wire
+   handling in `src/ingest/`, the time helpers, the panels' behaviour) gets tests,
+   including hostile and edge-case input.
+3. **Browser verification.** Keep `npm run dev` open and exercise the actual feature
+   in the browser. For anything touching audio, the reactor, or layout, a visual
+   check is the only check.
 
-If you add a real test runner later, wire it into a `test` script and update this
-list.
+CI runs the typecheck, the tests and the build on every push and pull request, plus
+CodeQL and an audit of the runtime dependencies (`.github/workflows/`). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how a change gets into `main`.
 
 ## Develop without a live DAWN
 

@@ -1,7 +1,10 @@
 # Aurora
 
+[![CI](https://github.com/The-OASIS-Project/aurora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/The-OASIS-Project/aurora/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/The-OASIS-Project/aurora/badge)](https://scorecard.dev/viewer/?uri=github.com/The-OASIS-Project/aurora)
+
 Aurora is a next-generation interface for D.A.W.N., the voice assistant at the heart of
-The OASIS Project. It's a calm, always-on screen — JARVIS-style — that shows what DAWN is
+The OASIS Project. It's a calm, always-on, JARVIS-style screen that shows what DAWN is
 doing at a glance and lets you talk to it. A glowing reactor at the center comes alive as
 DAWN listens, thinks, and speaks; notices, alarms, and jobs drift in when they need you
 and fade back when they don't. Made to sit on a monitor and be pleasant to leave running
@@ -14,24 +17,24 @@ all day.
   show how hard it's working.
 - **Conversation.** Chat with DAWN and watch its reply appear as it's written. Each
   message shows who said it, and the window eases into the background when you're idle,
-  then comes forward when you type. Attach images or documents to a message — drop a file
-  anywhere on the screen or use the paperclip — and images show up inline while documents
+  then comes forward when you type. Attach images or documents to a message (drop a file
+  anywhere on the screen or use the paperclip), and images show up inline while documents
   appear as chips you can open.
 - **Context.** Curious why DAWN answered the way it did? Open the Context view to see what
-  it pulled in to reply — each source, how relevant it was, and which ones it actually used
+  it pulled in to reply: each source, how relevant it was, and which ones it actually used
   (those light up gold as the answer lands).
 - **Voice.** Talk to DAWN and hear it reply out loud. Hold the mic button to speak a
   single request, or tap it to switch on hands-free listening so you can just say the wake
   word whenever you need it. The reactor's ring moves to your voice as you speak, and you
   can mute DAWN's replies anytime.
-- **Music.** Play and control your music right from the dashboard — see what's playing,
+- **Music.** Play and control your music right from the dashboard: see what's playing,
   skip, seek, shuffle, and repeat, with a visualizer that moves to the sound.
 - **Notices.** Reminders, alarms and timers, and heads-ups from DAWN slide in when they
   matter and fade back when they don't. Tap one to dismiss it.
 - **Tasks.** See what DAWN is working on in the background; when a job finishes, its answer
   shows up in the conversation.
-- **Home Assistant.** See and control your smart home — lights, switches, locks, fans,
-  blinds, thermostats — grouped by room and updating the moment anything changes.
+- **Home Assistant.** See and control your smart home (lights, switches, locks, fans,
+  blinds, thermostats), grouped by room and updating the moment anything changes.
 - **Calendar.** Your day at a glance: today's events, color-coded by calendar, updating as
   your schedule changes.
 - **Library.** Browse your saved notes and documents and open any one to read.
@@ -45,10 +48,10 @@ all day.
 
 - A running DAWN with its web interface turned on (default `wss://localhost:3000`).
 - A modern web browser (Chrome or Edge work best).
-- Node.js 18+ if you're building or developing it.
+- Node.js 20.19 or newer (22 recommended) if you're building or developing it.
 
 Aurora has two sides: the machine that runs it and the screen where you watch it. Run it
-on anything — a PC, a home server, or the Jetson itself, right next to DAWN — and watch it
+on anything (a PC, a home server, or the Jetson itself, right next to DAWN) and watch it
 in a browser on whatever screen suits you: a laptop, a wall display, or the Jetson's own
 screen.
 
@@ -114,7 +117,7 @@ Log in with your DAWN username and password. Aurora keeps you signed in across r
 so you won't have to log in again every time you reload.
 
 DAWN lives in one place. If you open Aurora in a second tab or window, that one takes over
-and the first shows a **"Use DAWN here"** button to bring it back — only one is live at a
+and the first shows a **"Use DAWN here"** button to bring it back. Only one is live at a
 time, so your tabs never fight over the connection. Whichever tab you bring live catches up
 to the latest of the conversation automatically.
 
@@ -126,6 +129,14 @@ to the latest of the conversation automatically.
   drives, plus small backend additions the UI would benefit from.
 - `ARCHITECTURE.md` - the four-layer design and the render seam.
 - `CLAUDE.md` - guidance for AI assistants working in this repo.
+
+## Contributing, security and license
+
+- `CONTRIBUTING.md` - how a change gets into Aurora: the checks it has to pass and the
+  standards it has to meet.
+- `SECURITY.md` - how to report a security problem privately.
+- Aurora is free software under the GNU General Public License, version 3 or later
+  (`LICENSE`), the same license as DAWN.
 
 ## Part of The OASIS Project
 

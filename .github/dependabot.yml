@@ -1,0 +1,31 @@
+# Dependabot: pull requests that keep pinned dependencies current.
+#
+# - GitHub Actions are pinned to commit SHAs in the workflows; grouped into one
+#   weekly PR.
+# - npm: minor and patch updates grouped into one weekly PR (runtime and dev
+#   tooling separately, so a library bump isn't held up by the toolchain). A
+#   major version comes as its own PR: Vite, Vitest, TypeScript and the
+#   libraries Aurora renders with (three, marked, DOMPurify) change behaviour
+#   across majors, so each one is a deliberate, tested upgrade.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+      tooling:
+        dependency-type: development
+        update-types: [minor, patch]

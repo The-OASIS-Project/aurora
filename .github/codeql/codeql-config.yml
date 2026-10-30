@@ -1,0 +1,6 @@
+# CodeQL configuration: analyze Aurora's own code, not build output.
+name: Aurora CodeQL config
+
+paths-ignore:
+  - dist
+  - node_modules
