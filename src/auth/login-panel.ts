@@ -96,6 +96,7 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
 
    let busy = false;
    let manual = false; // a user-initiated login is in progress (vs silent resume)
+   let lost = false; // the link dropped (or DAWN can't be reached) and is being retried silently
 
    const onSubmit = async (e: Event): Promise<void> => {
       e.preventDefault();
@@ -124,10 +125,16 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       overlay.dataset.state = status;
 
       const linked = status === "connected";
-      /* The corner chip stands for "link is up" — including the unstable "stale" state,
-         which is still a live socket, just probing. It must NOT drop to the login card. */
-      const chipVisible = linked || status === "stale";
-      if (chipVisible) manual = false;
+      /* A silent retry after the link dropped, or a page load waiting for DAWN (both say why in
+         `detail`; a plain "connecting" while a reload resumes doesn't, so F5 never flashes it).
+         The attempts in between say nothing, so it holds until the link is back. */
+      if (linked || status === "stale" || status === "idle" || status === "error" || status === "disconnected" || status === "superseded") lost = false;
+      else if (status === "connecting" && detail && !manual) lost = true;
+      const offline = lost && !manual && status === "connecting";
+      /* The corner chip: "link is up" (including the unstable "stale" state, still a live socket,
+         just probing), or "Disconnected" while it's retried. Never the login card for either. */
+      const chipVisible = linked || status === "stale" || offline;
+      if (linked || status === "stale") manual = false;
       /* Superseded: show the takeover card instead of the credential form (the user is
          authenticated; they only choose which tab is live). It owns the overlay in that state. */
       const takenOver = status === "superseded";
@@ -141,8 +148,9 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       overlay.hidden = chipVisible || !(takenOver || needsUser || manualProgress);
 
       chip.hidden = !chipVisible;
-      chip.dataset.state = status;
-      chipText.textContent = label;
+      chip.dataset.state = offline ? "offline" : status;
+      chipText.textContent = offline ? "Disconnected" : label;
+      chip.title = offline ? "Reconnecting to DAWN… (connection / log out)" : "Connection / Log out";
       if (linked) password.value = "";
    };
    setStatus("checking");

@@ -191,6 +191,9 @@ export interface MusicState {
    positionSec: number;
    durationSec: number;
    queueLength: number;
+   /* The queue's revision: changes on every edit (add, remove, clear, replace, shuffle/repeat),
+      never on a track advance. 0 from an older DAWN. */
+   queueRev: number;
    queueIndex: number; // -1: playing a track the shared queue no longer holds (another client replaced it)
    shuffle: boolean;
    repeatMode: number; // 0 none | 1 all | 2 one

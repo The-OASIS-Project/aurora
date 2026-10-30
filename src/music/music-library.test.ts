@@ -86,6 +86,20 @@ describe("music queue", () => {
       expect(t.calls.queue).toBe(2); // the opening read, then one for the burst
    });
 
+   it("re-reads the queue on a queue_rev change that keeps the count and the current track", () => {
+      const t = setup();
+      const state = (rev: number) => ({ queueLength: 3, queueIndex: 0, track: track(1), queueRev: rev }) as unknown as MusicState;
+      t.view.setState(state(4));
+      vi.advanceTimersByTime(200);
+      const reads = t.calls.queue;
+      t.view.setState(state(4)); // a track tick or a position update: nothing
+      vi.advanceTimersByTime(200);
+      expect(t.calls.queue).toBe(reads);
+      t.view.setState(state(5)); // a swap or a shuffle change
+      vi.advanceTimersByTime(200);
+      expect(t.calls.queue).toBe(reads + 1);
+   });
+
    it("does nothing while closed", () => {
       const t = setup(false);
       expect(t.view.el.hidden).toBe(true);

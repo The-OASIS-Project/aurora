@@ -116,6 +116,14 @@ const MUSIC_SECTION_ERRORS = new Set(["UNAVAILABLE", "SEARCH_FAILED", "NOT_INITI
 const MUSIC_MAX_STALLS = 3; // silent-while-playing replacements in a row before "unavailable"
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
 const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
+const LOGIN_WATCH_FAST_MS = 5000; // the login card re-checks the cookie this often for a minute...
+const LOGIN_WATCH_FAST_CHECKS = 12;
+const LOGIN_WATCH_SLOW_MS = 30000; // ...then this often
+const AUTH_STATUS_TIMEOUT_MS = 5000; // a /api/auth/status that takes longer counts as unreachable
+const RESUME_QUIET_TRIES = 6; // ~1 minute of page-load retries before the card says DAWN can't be reached
+const REVOKE_RECHECKS = 3; // a "not logged in" answer to an UNAUTHORIZED is asked again this many times...
+const REVOKE_RECHECK_MS = 3000; // ...this far apart, before signing out
+const UNCONFIRMED_REVOKE_MAX = 3; // reconnects on an UNAUTHORIZED auth status didn't confirm, before signing out
 /* A connection must stay up this long before the backoff resets: one that dies right after opening
    (e.g. a frame the browser refuses, which fails the socket) otherwise reconnects every second forever. */
 const MAIN_WS_STABLE_MS = 10_000;
@@ -351,6 +359,7 @@ function toMusicState(p: Record<string, unknown>): MusicState {
       positionSec: Number(p.position_sec ?? 0),
       durationSec: track?.durationSec ?? 0,
       queueLength: Number(p.queue_length ?? 0),
+      queueRev: Number(p.queue_rev ?? 0),
       queueIndex: Number(p.queue_index ?? 0),
       shuffle: p.shuffle === true,
       repeatMode: Number(p.repeat_mode ?? 0),
@@ -909,6 +918,10 @@ export class DawnIngest implements Ingest {
    private status: StatusHandler = () => {};
    private wantConnected = false; // did the user ask to be connected (vs a drop)
    private wsReconnectTimer = 0; // scheduled main-socket reconnect after an unexpected drop
+   private checkingAuth = false; // an UNAUTHORIZED is being confirmed against /api/auth/status
+   private unconfirmedRevokes = 0; // UNAUTHORIZEDs auth status didn't confirm, since DAWN last accepted the login (a pong)
+   private loginWatchTimer = 0; // the login card's periodic "logged in after all?" check
+   private resumeFails = 0; // page-load resume attempts that couldn't reach DAWN (backoff)
    private wsFails = 0; // consecutive main-socket reconnect attempts (drives the backoff)
    private wsStableTimer = 0; // resets wsFails once the current connection has stayed up
    private loadedInitial = false; // guard: load the starting conversation only once
@@ -1213,7 +1226,21 @@ export class DawnIngest implements Ingest {
    /* The login panel calls this. Runs the documented cookie-auth flow, then opens
       the socket. Throws on auth failure so the panel can show the reason. */
    async connect(username: string, password: string): Promise<void> {
+      window.clearTimeout(this.loginWatchTimer);
+      window.clearTimeout(this.wsReconnectTimer); // a pending resume retry
       this.wantConnected = true;
+      try {
+         await this.signIn(username, password);
+      } catch (e) {
+         /* Not signed in: the card stays, and keeps checking whether this browser is logged in
+            after all (a restart-time sign-out), as before the attempt. */
+         this.wantConnected = false;
+         this.watchForLogin(0);
+         throw e;
+      }
+   }
+
+   private async signIn(username: string, password: string): Promise<void> {
       this.emit("authenticating");
       /* Learn DAWN's flags (per-app logins) before logging in, in case the page-load probe failed:
          the login and every URL after it must agree on which cookie they use. */
@@ -1341,9 +1368,13 @@ export class DawnIngest implements Ingest {
       the socket straight away (resuming the stored session). Keeps the user logged
       in across an F5 instead of asking for credentials every reload. */
    async tryResume(): Promise<void> {
+      let reached = false;
       try {
          const s = await this.authStatus();
+         if (this.wantConnected) return; // a sign-in or another resume got there meanwhile
          if (s) {
+            reached = true;
+            this.resumeFails = 0;
             /* A DAWN whose contract this client doesn't speak: say so before opening anything. */
             if (typeof s.protocol === "number" && s.protocol !== CLIENT_PROTOCOL) {
                this.emit("error", protocolMismatchText(s.protocol, this.dawnVersion));
@@ -1372,12 +1403,51 @@ export class DawnIngest implements Ingest {
             }
          }
       } catch {
-         /* fall through to show the login card */
+         /* unreachable: handled below */
+      }
+      /* DAWN didn't answer (down or restarting; a proxy's 5xx): whether this browser is logged in
+         is unknown, so wait for DAWN rather than show the login card, and ask again. */
+      if (!reached) {
+         this.resumeFails++;
+         /* Quiet at first (a restart takes a minute or so); then say so on the card, still trying. */
+         if (this.resumeFails > RESUME_QUIET_TRIES) this.emit("error", "Can't reach DAWN. Still trying…");
+         else this.emit("connecting", "waiting for DAWN…");
+         window.clearTimeout(this.wsReconnectTimer);
+         this.wsReconnectTimer = window.setTimeout(() => void this.tryResume(), Math.min(MAIN_WS_MAX_DELAY, 1000 * 2 ** (this.resumeFails - 1)));
+         return;
       }
       /* No valid session — reveal the login card, with why the last one ended if it was revoked. */
       const reason = takeEndReason();
       if (reason) this.emit("error", reason);
       else this.emit("idle");
+      this.watchForLogin(0);
+   }
+
+   /* While the login card is up, ask DAWN now and then whether this browser is logged in after all,
+      and resume if so. A DAWN shutting down answers "not logged in" for every login once its
+      database has closed, and a restart can land the page here mid-shutdown: the cookie is still
+      good once DAWN is back. A really ended login keeps answering "no", so nothing happens. */
+   private watchForLogin(checks: number): void {
+      window.clearTimeout(this.loginWatchTimer);
+      this.loginWatchTimer = window.setTimeout(async () => {
+         if (this.wantConnected) return; // signing in, or already resumed
+         let s: Awaited<ReturnType<DawnIngest["authStatus"]>> = null;
+         try {
+            s = await this.authStatus();
+         } catch {
+            s = null;
+         }
+         if (this.wantConnected) return;
+         if (!s?.authenticated) {
+            this.watchForLogin(checks + 1);
+            return;
+         }
+         /* Logged in as someone other than this tab showed (its panels may still hold that user's
+            data, behind the card): no automatic resume; signing in reloads onto a clean page. */
+         const who = typeof s.username === "string" ? s.username.trim() : "";
+         if (this.signedInAs !== "" && who !== this.signedInAs) return;
+         void this.tryResume();
+      }, checks < LOGIN_WATCH_FAST_CHECKS ? LOGIN_WATCH_FAST_MS : LOGIN_WATCH_SLOW_MS);
    }
 
    private openSocket(): void {
@@ -1678,7 +1748,10 @@ export class DawnIngest implements Ingest {
 
    private heartbeatTick(): void {
       if (this.pendingPingSeq !== 0) return; // still waiting on a pong; the timeout owns that
-      if (performance.now() - this.lastInboundAt < PING_IDLE_MS) return; // recent traffic proves life
+      /* Recent traffic proves life, except while a pong is overdue: other replies can keep flowing
+         (DAWN answering SERVICE_UNAVAILABLE, say) without settling the doubt, so probe until a
+         pong clears it or a second miss reconnects. */
+      if (this.missedPongs === 0 && performance.now() - this.lastInboundAt < PING_IDLE_MS) return;
       this.sendPing();
    }
 
@@ -1760,7 +1833,9 @@ export class DawnIngest implements Ingest {
       answer describes the WebUI's login. null on failure. */
    private async authStatus(): Promise<{ authenticated?: boolean; username?: string; protocol?: unknown } | null> {
       const get = async (url: string): Promise<Record<string, unknown> | null> => {
-         const res = await fetch(url, { credentials: "same-origin" });
+         /* A deadline, so a request a proxy or a wedged DAWN never answers counts as unreachable
+            rather than leaving whoever is waiting on it (a sign-out check, the resume) hanging. */
+         const res = await fetch(url, { credentials: "same-origin", signal: AbortSignal.timeout(AUTH_STATUS_TIMEOUT_MS) });
          return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
       };
       let s = await get(this.dawnUrl("/api/auth/status"));
@@ -1787,7 +1862,70 @@ export class DawnIngest implements Ingest {
       }
    }
 
-   private revokeSession(reason?: string): void {
+   /* An UNAUTHORIZED reply. DAWN sends it for a revoked login, but also for any failed login
+      lookup, which is what a DAWN shutting down returns once its database has closed (it closes
+      before the WebUI stops), and its /api/auth/status then says "not logged in" too. So:
+      - DAWN answers "not logged in": ask again a few times, a few seconds apart, while this socket
+        is still open. A shutdown closes the socket (or stops answering) within that; a real end of
+        the login keeps answering "no", and only then is the user signed out.
+      - Unreachable, or still logged in: drop this socket and let the reconnect re-authenticate
+        from the cookie. Bounded (reset by a pong), so a socket DAWN keeps refusing under a
+        valid-looking login still ends at the login card. */
+   private async onUnauthorized(reason?: string): Promise<void> {
+      if (this.loggingOut) {
+         this.revokeSession(reason); // our own logout: it only records the end
+         return;
+      }
+      /* A DAWN with login_unavailable (PR #92) says SERVICE_UNAVAILABLE when it can't check a login
+         and closes for a restart first, so its UNAUTHORIZED always means the login ended. */
+      if (this.hasFeature("login_unavailable")) {
+         this.revokeSession(reason);
+         return;
+      }
+      if (this.checkingAuth) return; // one check covers a burst (the ping and a request together)
+      this.checkingAuth = true;
+      const ws = this.ws;
+      try {
+         let status = await this.authStatusOrNull();
+         for (let i = 0; status?.authenticated === false && i < REVOKE_RECHECKS; i++) {
+            await new Promise((r) => window.setTimeout(r, REVOKE_RECHECK_MS));
+            if (this.loggingOut) {
+               this.revokeSession(reason);
+               return;
+            }
+            if (this.ws !== ws) return; // the socket went away meanwhile (a shutdown): the reconnect takes it from here
+            status = await this.authStatusOrNull();
+         }
+         if (this.ws !== ws) return;
+         if (status?.authenticated === false) {
+            this.unconfirmedRevokes = 0;
+            this.revokeSession(reason, true);
+            return;
+         }
+         if (++this.unconfirmedRevokes > UNCONFIRMED_REVOKE_MAX) {
+            this.unconfirmedRevokes = 0;
+            this.revokeSession(reason); // DAWN says logged in but keeps refusing the socket: no auto-resume
+            return;
+         }
+         console.warn("[dawn] UNAUTHORIZED not confirmed by auth status (DAWN restarting?), reconnecting");
+         /* onclose reconnects (wantConnected), as for any drop. */
+         if (this.wantConnected && ws) ws.close();
+      } finally {
+         this.checkingAuth = false;
+      }
+   }
+
+   private async authStatusOrNull(): Promise<Awaited<ReturnType<DawnIngest["authStatus"]>>> {
+      try {
+         return await this.authStatus();
+      } catch {
+         return null; // unreachable (or timed out)
+      }
+   }
+
+   /* `watch`: the end came from an UNAUTHORIZED that DAWN's auth status kept confirming, which a
+      long shutdown can still fake; if the page can't reload, the login card then keeps checking. */
+   private revokeSession(reason?: string, watch = false): void {
       if (this.loggingOut) {
          this.logoutEnded = true; // our own logout ended the session; logout() wipes + reloads
          return;
@@ -1804,6 +1942,7 @@ export class DawnIngest implements Ingest {
       else localStorage.removeItem(TOKEN_KEY);
       if (reloadedForRevokeRecently() || !markRevokeReload()) {
          this.emit("error", reason);
+         if (watch) this.watchForLogin(0);
          return;
       }
       stashEndReason(reason ?? "Your session ended.");
@@ -1991,6 +2130,7 @@ export class DawnIngest implements Ingest {
 
          case "pong":
             /* Heartbeat reply (a live, authed session). Confirms the link. */
+            this.unconfirmedRevokes = 0; // DAWN accepted this login: refusals before it were a passing state
             this.onPong(typeof p.seq === "number" ? p.seq : 0);
             break;
 
@@ -2724,10 +2864,10 @@ export class DawnIngest implements Ingest {
             }
             /* The session was revoked/expired server-side (DAWN re-validates the token
                against the DB on every authed verb, including our heartbeat ping, and
-               answers a dead session with UNAUTHORIZED instead of a pong). Treat it like
-               force_logout: stop resuming a session that no longer exists, surface login. */
+               answers a dead session with UNAUTHORIZED instead of a pong). Confirmed before
+               acting: a DAWN shutting down answers the same way once its database is closed. */
             if (code === "UNAUTHORIZED") {
-               this.revokeSession(typeof p.message === "string" ? p.message : undefined);
+               void this.onUnauthorized(typeof p.message === "string" ? p.message : undefined);
                break;
             }
             /* turn_refs: an error naming one of OUR turns that hasn't echoed yet means that turn never
@@ -2762,6 +2902,15 @@ export class DawnIngest implements Ingest {
             if (this.hasFeature("turn_refs") && refusalCode) {
                if (this.lastState === "idle") this.sinks.conversation.setThinking(false);
                this.sinks.conversation.noteRefusal(`A message wasn't sent: ${refusalText()}`);
+               break;
+            }
+            /* DAWN couldn't check the login just now (its database busy, or down for a restart;
+               login_unavailable). A typed turn it refused this way already came back above (it
+               names the turn); otherwise it's passing, never a sign-out or an error flash. The
+               connection stays logged in; a ping answered this way gets no pong, and the
+               heartbeat keeps probing until a pong or a second miss (a reconnect). */
+            if (code === "SERVICE_UNAVAILABLE") {
+               console.debug("[dawn] DAWN couldn't check the login just now; retrying");
                break;
             }
             if (code === "INVALID_CLIENT_REF") {
@@ -4189,12 +4338,18 @@ export class DawnIngest implements Ingest {
       /* Stop (not pause) resets the server position to 0, so its buffered lead is stale - flush
          it. Pause keeps position, so it is NOT a flush (see below). */
       const stopped = seen && this.prevMusicPlaying && !nowPlaying && !st.paused;
+      /* The first state after a (re)connect has no baseline, but the buffered lead may be from
+         before the drop (frozen by a pause, or not yet played out). It's only still good for the
+         same track, playing or paused; a stop (a restarted DAWN comes back stopped) or another
+         track makes it stale, and unpausing would play it. */
+      const staleAfterDrop = !seen && this.prevMusicPath !== "" && ((!st.playing && !st.paused) || path !== this.prevMusicPath);
+      /* Flushed before any unpause below, so none of it plays. */
+      if ((stopped || trackChanged || seeked || staleAfterDrop) && !autoAdvance) this.music.flush();
       /* Pause freezes output while KEEPING the buffered lead (seamless resume, no ~2 s tail after
          the press and no ~2 s skip on resume); play resumes it. */
       this.music.setPaused(st.paused === true);
       /* Loading (DAWN fetching or opening the next track): no audio to expect meanwhile. */
       this.musicWatch.setPlaying(nowPlaying && !st.loading);
-      if ((stopped || trackChanged || seeked) && !autoAdvance) this.music.flush();
       this.prevMusicIndex = st.queueIndex;
       this.prevMusicPath = st.track?.path ?? "";
       this.prevMusicDuration = st.durationSec;
@@ -5295,6 +5450,7 @@ export class DawnIngest implements Ingest {
    /* `silent`: don't report "disconnected" (the caller emits its own status, or reloads). */
    disconnect(silent = false): void {
       this.wantConnected = false;
+      window.clearTimeout(this.loginWatchTimer);
       this.musicHold.drop(); // nothing left to show it on
       window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
       this.wsFails = 0;

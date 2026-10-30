@@ -510,12 +510,13 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
          showTab("library");
       },
       setState: (s) => {
-         /* The queue moved (a track added, removed, cleared, or the current one changed). */
+         /* The queue moved (a track added, removed, cleared, or the current one changed). queue_rev
+            also catches an edit that keeps the count and the current track (a swap, a reorder). */
          queueEmpty = !!s && s.queueLength === 0;
          /* The first state means DAWN is talking: a library read sent before the link was up was
             dropped, so ask again for whatever the open section still lacks. */
          if (s && open && tab === "library" && !browse && !searchResults) askLibrary("stats");
-         const sig = s ? `${s.queueLength}|${s.queueIndex}|${s.track?.path ?? ""}` : "";
+         const sig = s ? `${s.queueLength}|${s.queueIndex}|${s.track?.path ?? ""}|${s.queueRev}` : "";
          if (sig === lastQueueSig) return;
          lastQueueSig = sig;
          if (open && tab === "queue") askQueueSoon();

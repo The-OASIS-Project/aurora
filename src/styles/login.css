@@ -190,6 +190,17 @@
    box-shadow: 0 0 8px var(--warn-glow);
    animation: link-stale-pulse 1s ease-in-out infinite;
 }
+/* Disconnected: the link dropped and is being retried. Alert-toned, the dot pulsing while it tries. */
+#link-chip[data-state="offline"] {
+   color: var(--alert-glow);
+   border-color: color-mix(in srgb, var(--alert) 45%, transparent);
+   opacity: 0.95;
+}
+#link-chip[data-state="offline"] .link-dot {
+   background: var(--alert);
+   box-shadow: 0 0 8px var(--alert-glow);
+   animation: link-stale-pulse 1s ease-in-out infinite;
+}
 @keyframes link-stale-pulse {
    0%,
    100% {
@@ -200,7 +211,8 @@
    }
 }
 @media (prefers-reduced-motion: reduce) {
-   #link-chip[data-state="stale"] .link-dot {
+   #link-chip[data-state="stale"] .link-dot,
+   #link-chip[data-state="offline"] .link-dot {
       animation: none;
    }
 }

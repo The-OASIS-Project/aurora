@@ -238,3 +238,30 @@ describe("a track the shared queue no longer holds (queue_index -1)", () => {
       expect(t.ing.musicWatch.playing).toBe(true);
    });
 });
+
+describe("after a reconnect", () => {
+   const drop = (t: ReturnType<typeof setup>) => {
+      t.ing.prevMusicIndex = null; // what the main socket's close does
+   };
+
+   it("drops the old buffered audio when DAWN comes back stopped", () => {
+      const t = setup();
+      t.state(1);
+      t.state(1, { playing: false, paused: true }); // frozen with ~2 s buffered
+      drop(t);
+      t.frame("music_state", { playing: false, paused: false, track: null, position_sec: 0, queue_index: 0, queue_length: 5 });
+      expect(t.player.flushes).toBe(1);
+      expect(t.player.paused).toBe(false);
+   });
+
+   it("keeps it for the same track still playing, and drops it for another one", () => {
+      const t = setup();
+      t.state(1, { position_sec: 30 });
+      drop(t);
+      t.state(1, { position_sec: 30 });
+      expect(t.player.flushes).toBe(0);
+      drop(t);
+      t.state(3);
+      expect(t.player.flushes).toBe(1);
+   });
+});

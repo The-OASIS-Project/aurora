@@ -166,7 +166,13 @@ query narrows it), and `music_library {type: stats|tracks|artists|albums|tracks_
 offset, limit, artist?, album?}` -> `music_library_response {browse_type, ...}`; queue edits ride
 `music_control` (add_to_queue, remove_from_queue, clear_queue, add_artist, add_album, play {path},
 play_index). DAWN answers a queue edit with `music_state` (to the sender and the user's other tabs),
-never the list, so the list is re-read when the queue moves while it's open.
+never the list, so the list is re-read when the queue moves while it's open: its length, current
+index or track, or `music_state.queue_rev` (DAWN PR #91; bumped on every queue edit incl. a
+shuffle/repeat change, never on a track advance; absent = 0 on an older DAWN), which catches an edit
+that keeps all three (a swap, a replace with the same length and index, a voice edit on the shared
+queue). After a reconnect, the first `music_state` flushes the buffered audio unless it's the same
+track still playing or paused: a restarted DAWN comes back stopped, and unfreezing a paused buffer
+would otherwise play ~2 s of the old track.
 
 Requires one setup message: `music_subscribe` (`{quality, audio_codecs}`). After
 that the three frames above flow on their own. The binary `MUSIC_DATA` audio
@@ -186,6 +192,7 @@ chunks (`0x20`) are a separate concern you can ignore for a display-only panel.
 | `timezone_changed` | `{timezone}`, sent to each of the user's browser connections after every My Settings save (it may repeat the zone in use). Aurora switches every time and day on screen to it (the clock, calendar and its "today" window, picker day groups, each panel's dates) without a reload. Days are worked out in that zone, so a clock-change day runs 23 or 25 hours and a skipped midnight starts at the jump (`src/util/time.ts` `dayStart`). |
 | `config` | WebUI config (`audio_chunk_ms`, `music_enabled`/`music_port`). Sent after `session`. |
 | `force_logout` | Server revoked your session. Reason in payload. |
+| `error` `UNAUTHORIZED` | A revoked login, but DAWN also sends it for any failed login lookup, including every authed verb in the shutdown window after its database closes (before the WebUI stops). The status reply says "not logged in" in that window too, so Aurora signs out only when `/api/auth/status` keeps saying so, asked again 3 times 3 s apart while the socket stays open (a shutdown closes it or stops answering first). Unreachable or still logged in = reconnect (bounded, reset by a pong). If the page couldn't reload after such a sign-out, the login card keeps re-checking the cookie and resumes the same user. A page load that can't reach DAWN waits for it quietly for about a minute, then says "Can't reach DAWN. Still trying…" on the card while it keeps retrying. **`login_unavailable`** (DAWN PR #92): UNAUTHORIZED, `authenticated:false` and `4002` then always mean the login ended (Aurora signs out at once, no re-ask); a login DAWN can't check gets `error` **`SERVICE_UNAVAILABLE`** (connection stays logged in, no pong; Aurora treats it as passing, except that a typed turn it names comes back to the composer like any refusal, and the heartbeat keeps probing until a pong or a second miss reconnects), HTTP 503 (key on the status, the body may be lws's HTML page), and a connect in that state closes `1013`; a shutdown closes every socket `1012` first, then answers HTTP with 503 until it exits. All of those are "DAWN unavailable, reconnect", never a sign-out. While the link is retried, the corner chip reads **Disconnected** (alert tone, pulsing) instead of vanishing. |
 | `session_superseded` | Another connection took over this session (one-connection-per-session). Sent to the evicted connection **just before a WS close code `4001`**; the frame is the reliable signal since the dev proxy strips the `4001` code to `1006`. Back off, show the takeover, reconnect only on a user gesture. See §6 / CLAUDE.md gotcha. |
 | `conversation_reset` | Context was reset via a tool. |
 | `image_url` | NOT a browser frame - it is an internal LLM content-part type. Attached images reach the client as inline `[IMAGE:img_id]` markers in a message's text (fetched from `GET /api/images/:id`); documents as `[ATTACHED DOCUMENT: … blob:id]…[END DOCUMENT]` marker blocks. See §9.6. |
