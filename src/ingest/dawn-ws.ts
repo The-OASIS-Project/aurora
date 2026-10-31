@@ -4739,10 +4739,11 @@ export class DawnIngest implements Ingest {
          this.micMuteCooldown = 0;
          return;
       }
-      /* Always-on RECORDING overrides the speaking-mute: DAWN plays the greeting
-         (state:speaking) while it records the user's command, so muting on dawnSpeaking here
-         would gag the command. Keep the mic open and let the AEC-referenced TTS playback
-         (tts.ts) cancel the greeting from the capture instead. */
+      /* Always-on RECORDING overrides the speaking-mute: nothing may gag the user's command.
+         DAWN speaks no greeting while it records (it dropped the "Hello." that once echoed
+         into the capture); the only sound here is Aurora's ready ding, a tone DAWN's speech
+         detector doesn't take for speech. The browser's echo cancellation stays on for
+         anything else. */
       if (this.alwaysOnRecording) {
          window.clearTimeout(this.micMuteCooldown);
          this.micMuteCooldown = 0;
