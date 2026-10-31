@@ -12,7 +12,22 @@
  */
 
 import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
-import type { Ingest, IngestSinks, LibraryItem, OutImage, StockPosition, StockPortfolio, StockStatus, StockWatchlist, StockWatchSymbol, UploadedDoc, UploadedImage, WatchItem, WatchCatalogEntry, WatchFields } from "./ingest.ts";
+import type {
+   Ingest,
+   IngestSinks,
+   LibraryItem,
+   OutImage,
+   StockPosition,
+   StockPortfolio,
+   StockStatus,
+   StockWatchlist,
+   StockWatchSymbol,
+   UploadedDoc,
+   UploadedImage,
+   WatchItem,
+   WatchCatalogEntry,
+   WatchFields
+} from "./ingest.ts";
 import type { ReactorState } from "../anchor/anchor.ts";
 import type { Store } from "../state/store.ts";
 import { IMPORTANCE } from "../state/types.ts";
@@ -33,14 +48,7 @@ const CANNED_REPLIES = [
 
 /* DEMO ONLY: idle reactor state cycle so all states are visible without typing.
    The real client drives reactor state from DAWN's conversation-state stream. */
-const DEMO_STATES: ReactorState[] = [
-   "listening",
-   "thinking",
-   "speaking",
-   "idle",
-   "error",
-   "idle"
-];
+const DEMO_STATES: ReactorState[] = ["listening", "thinking", "speaking", "idle", "error", "idle"];
 
 export class StubIngest implements Ingest {
    private sinks!: IngestSinks;
@@ -100,22 +108,177 @@ export class StubIngest implements Ingest {
    /* A fake SAGE watch set so the Watches panel is exercised offline (stat/suit/component,
       mixed enabled, one with no live reading, one absence rule). */
    private fakeWatches: WatchItem[] = [
-      { id: 1, name: "", metric: "stat.system_temp", label: "system temperature", unit: "°C", ruleType: "threshold", direction: "above", threshold: 80, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 61 },
-      { id: 2, name: "", metric: "stat.battery.soc", label: "battery level", unit: "%", ruleType: "threshold", direction: "below", threshold: 15, absenceAfterSec: 0, notify: "alert", enabled: true, source: "stat", hasCurrent: true, current: 88 },
-      { id: 3, name: "", metric: "stat.cpu_usage", label: "CPU usage", unit: "%", ruleType: "threshold", direction: "above", threshold: 90, absenceAfterSec: 0, notify: "ambient", enabled: false, source: "stat", hasCurrent: true, current: 34 },
-      { id: 4, name: "CO2 danger", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1500, absenceAfterSec: 0, notify: "alert", enabled: true, named: true, source: "suit", hasCurrent: false },
-      { id: 7, name: "CO2 elevated", metric: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", direction: "above", threshold: 1000, absenceAfterSec: 0, notify: "ambient", enabled: true, named: true, source: "suit", hasCurrent: false },
-      { id: 5, name: "", metric: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", direction: "above", absenceAfterSec: 120, notify: "alert", enabled: true, source: "component", hasCurrent: true, current: 3 },
-      { id: 6, name: "helmet warming fast", metric: "suit.temp", label: "helmet temperature", unit: "°C", ruleType: "slope", direction: "rising", slopePerMin: 2, slopeWindowSec: 120, absenceAfterSec: 0, notify: "ambient", enabled: true, named: true, source: "suit", hasCurrent: true, current: 24 }
+      {
+         id: 1,
+         name: "",
+         metric: "stat.system_temp",
+         label: "system temperature",
+         unit: "°C",
+         ruleType: "threshold",
+         direction: "above",
+         threshold: 80,
+         absenceAfterSec: 0,
+         notify: "alert",
+         enabled: true,
+         source: "stat",
+         hasCurrent: true,
+         current: 61
+      },
+      {
+         id: 2,
+         name: "",
+         metric: "stat.battery.soc",
+         label: "battery level",
+         unit: "%",
+         ruleType: "threshold",
+         direction: "below",
+         threshold: 15,
+         absenceAfterSec: 0,
+         notify: "alert",
+         enabled: true,
+         source: "stat",
+         hasCurrent: true,
+         current: 88
+      },
+      {
+         id: 3,
+         name: "",
+         metric: "stat.cpu_usage",
+         label: "CPU usage",
+         unit: "%",
+         ruleType: "threshold",
+         direction: "above",
+         threshold: 90,
+         absenceAfterSec: 0,
+         notify: "ambient",
+         enabled: false,
+         source: "stat",
+         hasCurrent: true,
+         current: 34
+      },
+      {
+         id: 4,
+         name: "CO2 danger",
+         metric: "suit.co2_ppm",
+         label: "CO2",
+         unit: "ppm",
+         ruleType: "threshold",
+         direction: "above",
+         threshold: 1500,
+         absenceAfterSec: 0,
+         notify: "alert",
+         enabled: true,
+         named: true,
+         source: "suit",
+         hasCurrent: false
+      },
+      {
+         id: 7,
+         name: "CO2 elevated",
+         metric: "suit.co2_ppm",
+         label: "CO2",
+         unit: "ppm",
+         ruleType: "threshold",
+         direction: "above",
+         threshold: 1000,
+         absenceAfterSec: 0,
+         notify: "ambient",
+         enabled: true,
+         named: true,
+         source: "suit",
+         hasCurrent: false
+      },
+      {
+         id: 5,
+         name: "",
+         metric: "component.hud",
+         label: "helmet HUD link",
+         unit: "s",
+         ruleType: "absence",
+         direction: "above",
+         absenceAfterSec: 120,
+         notify: "alert",
+         enabled: true,
+         source: "component",
+         hasCurrent: true,
+         current: 3
+      },
+      {
+         id: 6,
+         name: "helmet warming fast",
+         metric: "suit.temp",
+         label: "helmet temperature",
+         unit: "°C",
+         ruleType: "slope",
+         direction: "rising",
+         slopePerMin: 2,
+         slopeWindowSec: 120,
+         absenceAfterSec: 0,
+         notify: "ambient",
+         enabled: true,
+         named: true,
+         source: "suit",
+         hasCurrent: true,
+         current: 24
+      }
    ];
    private fakeCatalog: WatchCatalogEntry[] = [
-      { key: "stat.cpu_usage", label: "CPU usage", unit: "%", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 90 },
-      { key: "stat.system_temp", label: "system temperature", unit: "°C", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 80 },
-      { key: "stat.battery.soc", label: "battery level", unit: "%", ruleType: "threshold", defaultDirection: "below", defaultThreshold: 15 },
-      { key: "stat.memory_usage", label: "memory usage", unit: "%", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 85 },
-      { key: "suit.co2_ppm", label: "CO2", unit: "ppm", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 1500 },
-      { key: "suit.temp", label: "helmet temperature", unit: "°C", ruleType: "threshold", defaultDirection: "above", defaultThreshold: 35 },
-      { key: "component.hud", label: "helmet HUD link", unit: "s", ruleType: "absence", defaultDirection: "above", defaultThreshold: 120 }
+      {
+         key: "stat.cpu_usage",
+         label: "CPU usage",
+         unit: "%",
+         ruleType: "threshold",
+         defaultDirection: "above",
+         defaultThreshold: 90
+      },
+      {
+         key: "stat.system_temp",
+         label: "system temperature",
+         unit: "°C",
+         ruleType: "threshold",
+         defaultDirection: "above",
+         defaultThreshold: 80
+      },
+      {
+         key: "stat.battery.soc",
+         label: "battery level",
+         unit: "%",
+         ruleType: "threshold",
+         defaultDirection: "below",
+         defaultThreshold: 15
+      },
+      {
+         key: "stat.memory_usage",
+         label: "memory usage",
+         unit: "%",
+         ruleType: "threshold",
+         defaultDirection: "above",
+         defaultThreshold: 85
+      },
+      {
+         key: "suit.co2_ppm",
+         label: "CO2",
+         unit: "ppm",
+         ruleType: "threshold",
+         defaultDirection: "above",
+         defaultThreshold: 1500
+      },
+      {
+         key: "suit.temp",
+         label: "helmet temperature",
+         unit: "°C",
+         ruleType: "threshold",
+         defaultDirection: "above",
+         defaultThreshold: 35
+      },
+      {
+         key: "component.hud",
+         label: "helmet HUD link",
+         unit: "s",
+         ruleType: "absence",
+         defaultDirection: "above",
+         defaultThreshold: 120
+      }
    ];
    requestWatches(): void {
       this.sinks.watches.setWatches([...this.fakeWatches], this.fakeCatalog);
@@ -134,8 +297,14 @@ export class StubIngest implements Ingest {
       const named = !!fields?.name;
       this.fakeWatches.push({
          id,
-         name: named ? (fields as WatchFields).name! : isAbsence ? `${cat?.label ?? metric} silent` : `${cat?.label ?? metric} ${dir} ${thr}`,
-         metric, label: cat?.label ?? metric, unit: cat?.unit ?? "",
+         name: named
+            ? fields.name!
+            : isAbsence
+              ? `${cat?.label ?? metric} silent`
+              : `${cat?.label ?? metric} ${dir} ${thr}`,
+         metric,
+         label: cat?.label ?? metric,
+         unit: cat?.unit ?? "",
          ruleType,
          direction: dir,
          threshold: isAbsence || ruleType === "slope" ? undefined : thr, // a slope rule has no threshold
@@ -143,7 +312,10 @@ export class StubIngest implements Ingest {
          slopeWindowSec: fields?.slopeWindowSec,
          absenceAfterSec: isAbsence ? (fields?.threshold ?? cat?.defaultThreshold ?? 120) : 0,
          notify: fields?.notify ?? "alert",
-         enabled: true, named, source: metric.split(".")[0], hasCurrent: false
+         enabled: true,
+         named,
+         source: metric.split(".")[0],
+         hasCurrent: false
       });
       this.requestWatches();
    }
@@ -190,7 +362,11 @@ export class StubIngest implements Ingest {
             const t = w.threshold;
             const breaching =
                typeof t === "number" &&
-               (w.ruleType === "absence" ? next > t : w.direction === "below" ? next < t : next > t);
+               (w.ruleType === "absence"
+                  ? next > t
+                  : w.direction === "below"
+                    ? next < t
+                    : next > t);
             return { id: w.id, hasCurrent: true, current: Math.round(next * 10) / 10, breaching };
          });
          this.sinks.watches.setReadings(readings);
@@ -203,22 +379,105 @@ export class StubIngest implements Ingest {
    /* cash_equivalent (SWVXX) is a labeled position; settled cash is separate (below), so the
       rows + cash line reconcile to total_value with no double-count (the P0 disjoint assumption). */
    private fakeStockPositions: StockPosition[] = [
-      { symbol: "AAPL", description: "Apple Inc.", assetType: "equity", qty: 120, price: 232.1, value: 27852, unrealizedPl: 8110, unrealizedPlPct: 41.1, dayChange: -312, dayChangePct: -1.11 },
-      { symbol: "NVDA", description: "NVIDIA Corporation", assetType: "equity", qty: 60, price: 184.2, value: 11052, unrealizedPl: 5230, unrealizedPlPct: 89.8, dayChange: 402, dayChangePct: 3.77 },
-      { symbol: "VTI", description: "Vanguard Total Stock Market ETF", assetType: "etf", qty: 200, price: 298.5, value: 59700, unrealizedPl: 9400, unrealizedPlPct: 18.7, dayChange: 118, dayChangePct: 0.2 },
-      { symbol: "AAPL  260116C00250000", description: "AAPL Jan 16 2026 250 Call", assetType: "option", qty: 5, price: 12.4, value: 6200, unrealizedPl: -800, unrealizedPlPct: -11.4, dayChange: 210, dayChangePct: 3.5 },
-      { symbol: "SWVXX", description: "Schwab Value Advantage Money Fund", assetType: "cash_equivalent", qty: 20000, price: 1, value: 20000, unrealizedPl: 0, unrealizedPlPct: 0, dayChange: 0, dayChangePct: 0 }
+      {
+         symbol: "AAPL",
+         description: "Apple Inc.",
+         assetType: "equity",
+         qty: 120,
+         price: 232.1,
+         value: 27852,
+         unrealizedPl: 8110,
+         unrealizedPlPct: 41.1,
+         dayChange: -312,
+         dayChangePct: -1.11
+      },
+      {
+         symbol: "NVDA",
+         description: "NVIDIA Corporation",
+         assetType: "equity",
+         qty: 60,
+         price: 184.2,
+         value: 11052,
+         unrealizedPl: 5230,
+         unrealizedPlPct: 89.8,
+         dayChange: 402,
+         dayChangePct: 3.77
+      },
+      {
+         symbol: "VTI",
+         description: "Vanguard Total Stock Market ETF",
+         assetType: "etf",
+         qty: 200,
+         price: 298.5,
+         value: 59700,
+         unrealizedPl: 9400,
+         unrealizedPlPct: 18.7,
+         dayChange: 118,
+         dayChangePct: 0.2
+      },
+      {
+         symbol: "AAPL  260116C00250000",
+         description: "AAPL Jan 16 2026 250 Call",
+         assetType: "option",
+         qty: 5,
+         price: 12.4,
+         value: 6200,
+         unrealizedPl: -800,
+         unrealizedPlPct: -11.4,
+         dayChange: 210,
+         dayChangePct: 3.5
+      },
+      {
+         symbol: "SWVXX",
+         description: "Schwab Value Advantage Money Fund",
+         assetType: "cash_equivalent",
+         qty: 20000,
+         price: 1,
+         value: 20000,
+         unrealizedPl: 0,
+         unrealizedPlPct: 0,
+         dayChange: 0,
+         dayChangePct: 0
+      }
    ];
    private readonly FAKE_CASH = 5000;
 
    /* --- Watchlist (fake feed: non-held tracked symbols, quote-only) ------------ */
    private watchTimer = 0;
    private fakeWatchSymbols: StockWatchSymbol[] = [
-      { symbol: "TSLA", description: "Tesla Inc.", assetType: "equity", price: 251.4, dayChange: 6.2, dayChangePct: 2.53 },
-      { symbol: "AMD", description: "Advanced Micro Devices", assetType: "equity", price: 168.9, dayChange: -3.1, dayChangePct: -1.8 },
-      { symbol: "QQQ", description: "Invesco QQQ Trust", assetType: "etf", price: 512.7, dayChange: 1.4, dayChangePct: 0.27 },
+      {
+         symbol: "TSLA",
+         description: "Tesla Inc.",
+         assetType: "equity",
+         price: 251.4,
+         dayChange: 6.2,
+         dayChangePct: 2.53
+      },
+      {
+         symbol: "AMD",
+         description: "Advanced Micro Devices",
+         assetType: "equity",
+         price: 168.9,
+         dayChange: -3.1,
+         dayChangePct: -1.8
+      },
+      {
+         symbol: "QQQ",
+         description: "Invesco QQQ Trust",
+         assetType: "etf",
+         price: 512.7,
+         dayChange: 1.4,
+         dayChangePct: 0.27
+      },
       // A stored-but-unquotable ticker (bad symbol), to exercise the dimmed "no quote" row.
-      { symbol: "ZVXX", assetType: "other", price: 0, dayChange: 0, dayChangePct: 0, quotable: false }
+      {
+         symbol: "ZVXX",
+         assetType: "other",
+         price: 0,
+         dayChange: 0,
+         dayChangePct: 0,
+         quotable: false
+      }
    ];
    private watchExtHours = false; // last Extended-Hours choice from the watch subscribe/get
    private buildFakeWatchlist(status: StockStatus, asOf: number): StockWatchlist {
@@ -226,21 +485,33 @@ export class StubIngest implements Ingest {
          const row = { ...s };
          if (this.watchExtHours && s.quotable !== false && s.price > 0) {
             const change = +(s.price * (s.dayChange >= 0 ? 0.0021 : -0.0014)).toFixed(2);
-            row.ext = { price: +(s.price + change).toFixed(2), change, changePct: +((change / s.price) * 100).toFixed(2) };
+            row.ext = {
+               price: +(s.price + change).toFixed(2),
+               change,
+               changePct: +((change / s.price) * 100).toFixed(2)
+            };
          }
          return row;
       });
       return { status, market: this.watchExtHours ? "post" : "regular", asOf, symbols };
    }
 
-   private buildFakePortfolio(status: StockStatus, asOf: number, extHours: boolean): StockPortfolio {
+   private buildFakePortfolio(
+      status: StockStatus,
+      asOf: number,
+      extHours: boolean
+   ): StockPortfolio {
       // With Extended Hours on, pretend it's post-market and overlay a small per-share ext move on
       // the equities (cash gets none), so the ext-hours render is exercisable offline.
       const positions = this.fakeStockPositions.map((p) => {
          const row = { ...p };
          if (extHours && p.assetType !== "cash_equivalent") {
             const change = +(p.price * (p.dayChange >= 0 ? 0.0018 : -0.0012)).toFixed(2);
-            row.ext = { price: +(p.price + change).toFixed(2), change, changePct: +((change / p.price) * 100).toFixed(2) };
+            row.ext = {
+               price: +(p.price + change).toFixed(2),
+               change,
+               changePct: +((change / p.price) * 100).toFixed(2)
+            };
          }
          return row;
       });
@@ -261,7 +532,8 @@ export class StubIngest implements Ingest {
             totalDayChange,
             totalDayChangePct: (totalDayChange / Math.max(1, totalValue - totalDayChange)) * 100,
             totalUnrealizedPl,
-            totalUnrealizedPlPct: (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
+            totalUnrealizedPlPct:
+               (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
             accounts: [
                {
                   label: "Brokerage …4417",
@@ -269,7 +541,8 @@ export class StubIngest implements Ingest {
                   cash: this.FAKE_CASH,
                   dayChange: totalDayChange,
                   unrealizedPl: totalUnrealizedPl,
-                  unrealizedPlPct: (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
+                  unrealizedPlPct:
+                     (totalUnrealizedPl / Math.max(1, totalValue - totalUnrealizedPl)) * 100,
                   positions
                }
             ]
@@ -296,7 +569,11 @@ export class StubIngest implements Ingest {
          const now = Math.floor(Date.now() / 1000);
          const phase = Math.floor(this.stocksTick / 6) % 4;
          if (phase === 3) {
-            this.sinks.stocks.setPortfolio({ status: "token_expired", market: "regular", extHours });
+            this.sinks.stocks.setPortfolio({
+               status: "token_expired",
+               market: "regular",
+               extHours
+            });
             return;
          }
          const status: StockStatus = phase === 2 ? "rate_limited" : "ok";
@@ -307,7 +584,9 @@ export class StubIngest implements Ingest {
       this.stocksTimer = window.setInterval(push, 3000);
    }
    refreshStocks(extHours: boolean): void {
-      this.sinks.stocks.setPortfolio(this.buildFakePortfolio("ok", Math.floor(Date.now() / 1000), extHours));
+      this.sinks.stocks.setPortfolio(
+         this.buildFakePortfolio("ok", Math.floor(Date.now() / 1000), extHours)
+      );
    }
 
    /* Watchlist feed: jitter the quotes, push on cadence. Independent of the portfolio feed. */
@@ -324,21 +603,45 @@ export class StubIngest implements Ingest {
             s.dayChange += drift;
             s.dayChangePct = (s.dayChange / Math.max(1, s.price - s.dayChange)) * 100;
          }
-         this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
+         this.sinks.watchlist.setWatchlist(
+            this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000))
+         );
       };
       push(); // immediate snapshot on subscribe, like DAWN
       this.watchTimer = window.setInterval(push, 3000);
    }
    refreshWatchlist(extHours: boolean): void {
       this.watchExtHours = extHours;
-      this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
+      this.sinks.watchlist.setWatchlist(
+         this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000))
+      );
    }
    /* A small allowlist of "real" tickers; anything else an offline add treats as nonexistent and
       returns unquotable (quotable:false), mirroring DAWN's requested-minus-returned logic so the
       dimmed "no quote" row is testable without the live daemon. */
    private readonly KNOWN_TICKERS = new Set([
-      "NVDA", "AAPL", "TSLA", "AMD", "QQQ", "SPY", "MSFT", "GOOG", "GOOGL", "AMZN",
-      "META", "VTI", "INTC", "MU", "TSM", "ARM", "AVGO", "NFLX", "DIS", "BA", "MRVL", "ALAB"
+      "NVDA",
+      "AAPL",
+      "TSLA",
+      "AMD",
+      "QQQ",
+      "SPY",
+      "MSFT",
+      "GOOG",
+      "GOOGL",
+      "AMZN",
+      "META",
+      "VTI",
+      "INTC",
+      "MU",
+      "TSM",
+      "ARM",
+      "AVGO",
+      "NFLX",
+      "DIS",
+      "BA",
+      "MRVL",
+      "ALAB"
    ]);
    stocksWatchSet(add: string[], remove: string[]): void {
       const rm = new Set(remove.map((s) => s.toUpperCase()));
@@ -347,13 +650,29 @@ export class StubIngest implements Ingest {
          const sym = raw.toUpperCase().trim();
          if (!sym || this.fakeWatchSymbols.some((s) => s.symbol === sym)) continue;
          if (this.KNOWN_TICKERS.has(sym)) {
-            this.fakeWatchSymbols.push({ symbol: sym, description: sym, assetType: "equity", price: 50 + Math.random() * 400, dayChange: 0, dayChangePct: 0 });
+            this.fakeWatchSymbols.push({
+               symbol: sym,
+               description: sym,
+               assetType: "equity",
+               price: 50 + Math.random() * 400,
+               dayChange: 0,
+               dayChangePct: 0
+            });
          } else {
             // Unknown -> nonexistent ticker: comes back unquotable, like a real typo.
-            this.fakeWatchSymbols.push({ symbol: sym, assetType: "other", price: 0, dayChange: 0, dayChangePct: 0, quotable: false });
+            this.fakeWatchSymbols.push({
+               symbol: sym,
+               assetType: "other",
+               price: 0,
+               dayChange: 0,
+               dayChangePct: 0,
+               quotable: false
+            });
          }
       }
-      this.sinks.watchlist.setWatchlist(this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000)));
+      this.sinks.watchlist.setWatchlist(
+         this.buildFakeWatchlist("ok", Math.floor(Date.now() / 1000))
+      );
    }
 
    /* --- Conversation picker (fake data so offline dev shows the panel) ------- */
@@ -375,7 +694,11 @@ export class StubIngest implements Ingest {
          isPinned: Boolean((c as { isPinned?: boolean }).isPinned),
          origin: (c as { origin?: string }).origin ?? "webui"
       }));
-      this.sinks.conversationList.setList(fake, { total: fake.length, append: false, searching: false });
+      this.sinks.conversationList.setList(fake, {
+         total: fake.length,
+         append: false,
+         searching: false
+      });
    }
    searchConversations(_query: string, _content: boolean): void {
       this.sinks.conversationList.setList([], { append: false, searching: true });
@@ -395,7 +718,11 @@ export class StubIngest implements Ingest {
    /* --- Library (fake notes + documents so offline dev shows the panel) ------ */
    private libraryItems: LibraryItem[] = [];
    refreshLibrary(): void {
-      this.sinks.library.setItems(this.libraryItems, { append: false, searching: false, hasMore: false });
+      this.sinks.library.setItems(this.libraryItems, {
+         append: false,
+         searching: false,
+         hasMore: false
+      });
    }
    searchLibrary(query: string): void {
       const q = query.toLowerCase();
@@ -407,54 +734,60 @@ export class StubIngest implements Ingest {
    loadMoreLibrary(_offset: number): void {}
    /* No real files behind the stub: hand back a small markdown blob so the reader has
       something to render for a txt/md stub doc (a pdf stub just "downloads" this). */
-   async fetchDocumentOriginal(_blobId: string): Promise<{ blob: Blob; contentType: string }> {
-      const text = "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
-      return { blob: new Blob([text], { type: "text/markdown" }), contentType: "text/markdown" };
+   fetchDocumentOriginal(_blobId: string): Promise<{ blob: Blob; contentType: string }> {
+      const text =
+         "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
+      return Promise.resolve({
+         blob: new Blob([text], { type: "text/markdown" }),
+         contentType: "text/markdown"
+      });
    }
    /* No DAWN vendor scripts behind the stub: a chart visual renders without its library. */
-   async fetchVendorScript(_path: string): Promise<string> {
-      throw new Error("no vendor scripts in the stub");
+   fetchVendorScript(_path: string): Promise<string> {
+      return Promise.reject(new Error("no vendor scripts in the stub"));
    }
    /* No real images behind the stub. */
-   async fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
-      return { blob: new Blob(), contentType: "" };
+   fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
+      return Promise.resolve({ blob: new Blob(), contentType: "" });
    }
    /* Fake a document upload: echo the file with a bit of extracted text. */
-   async uploadDocument(file: File): Promise<UploadedDoc> {
-      return {
+   uploadDocument(file: File): Promise<UploadedDoc> {
+      return Promise.resolve({
          filename: file.name,
          content: `Stub extracted text for ${file.name}.`,
          size: file.size,
          type: (file.name.split(".").pop() ?? "").toLowerCase()
-      };
+      });
    }
    /* Fake an image upload. */
-   async uploadImage(_image: Blob): Promise<UploadedImage> {
-      return { id: "img_stubstub0001", mimeType: "image/jpeg", size: 0 };
+   uploadImage(_image: Blob): Promise<UploadedImage> {
+      return Promise.resolve({ id: "img_stubstub0001", mimeType: "image/jpeg", size: 0 });
    }
    /* The stub pretends to be vision-capable so the attach path can be exercised offline. */
    isVisionCapable(): boolean {
       return true;
    }
    /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
-   async getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null> {
+   getDocumentText(
+      id: number
+   ): Promise<{ text: string; filename: string; filetype: string } | null> {
       const item = this.libraryItems.find((i) => i.id === id);
-      if (!item) return null;
-      return {
+      if (!item) return Promise.resolve(null);
+      return Promise.resolve({
          text: `# ${item.filename}\n\nReassembled full text (stub) for offline dev.\n\nThis stands in for a generated document's body fetched via doc_library_get.`,
          filename: item.filename,
          filetype: item.filetype
-      };
+      });
    }
 
-   async updateNote(id: number, _label: string, text: string): Promise<string | null> {
+   updateNote(id: number, _label: string, text: string): Promise<string | null> {
       const item = this.libraryItems.find((i) => i.id === id);
       if (item) item.text = text; // reflect the edit offline so the reader/list stay consistent
-      return null;
+      return Promise.resolve(null);
    }
 
-   async updateDocText(_id: number, _text: string): Promise<string | null> {
-      return null; // stub: no persistence, report success so the dev editor flow works
+   updateDocText(_id: number, _text: string): Promise<string | null> {
+      return Promise.resolve(null); // stub: no persistence, report success so the dev editor flow works
    }
 
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */
@@ -628,7 +961,11 @@ export class StubIngest implements Ingest {
             createdAt: now - 1000000
          }
       ];
-      this.sinks.library.setItems(this.libraryItems, { append: false, searching: false, hasMore: false });
+      this.sinks.library.setItems(this.libraryItems, {
+         append: false,
+         searching: false,
+         hasMore: false
+      });
    }
 
    /* Borrow a panel to announce, then hand it back to its resting summary. */

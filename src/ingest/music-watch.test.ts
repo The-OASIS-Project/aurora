@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MUSIC_CONNECT_TIMEOUT_MS, MUSIC_STALL_MS, MusicSocketWatch, type MusicDeadReason } from "./music-watch.ts";
+import {
+   MUSIC_CONNECT_TIMEOUT_MS,
+   MUSIC_STALL_MS,
+   MusicSocketWatch,
+   type MusicDeadReason
+} from "./music-watch.ts";
 
 function setup() {
    const dead: MusicDeadReason[] = [];

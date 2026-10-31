@@ -13,7 +13,8 @@ function setup() {
       conversationList: { setTimezone: () => {} }
    };
    ing.ws = { readyState: WebSocket.OPEN, send: (m: string) => sent.push(JSON.parse(m)) };
-   const frame = (type: string, payload: Record<string, unknown>): void => ing.onFrame(JSON.stringify({ type, payload }));
+   const frame = (type: string, payload: Record<string, unknown>): void =>
+      ing.onFrame(JSON.stringify({ type, payload }));
    const calendarAsks = () => sent.filter((m) => m.type === "calendar_upcoming_events");
    return { zones, frame, calendarAsks };
 }

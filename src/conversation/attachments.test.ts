@@ -3,7 +3,9 @@ import { parseAttachments } from "./attachments.ts";
 
 describe("parseAttachments image markers", () => {
    it("takes images only from the trailing block", () => {
-      const r = parseAttachments("look at this\n[IMAGE:img_aaaaaaaaaaaa]\n[IMAGE:img_bbbbbbbbbbbb]");
+      const r = parseAttachments(
+         "look at this\n[IMAGE:img_aaaaaaaaaaaa]\n[IMAGE:img_bbbbbbbbbbbb]"
+      );
       expect(r.images.map((i) => i.ref)).toEqual(["img_aaaaaaaaaaaa", "img_bbbbbbbbbbbb"]);
       expect(r.text).toBe("look at this");
    });
@@ -15,14 +17,18 @@ describe("parseAttachments image markers", () => {
    });
 
    it("never takes a marker from inside a document", () => {
-      const r = parseAttachments("[ATTACHED DOCUMENT: a.txt (3 bytes)]\n[IMAGE:img_aaaaaaaaaaaa]\n[END DOCUMENT]\n\nhi");
+      const r = parseAttachments(
+         "[ATTACHED DOCUMENT: a.txt (3 bytes)]\n[IMAGE:img_aaaaaaaaaaaa]\n[END DOCUMENT]\n\nhi"
+      );
       expect(r.images).toEqual([]);
       expect(r.docs[0].content).toBe("[IMAGE:img_aaaaaaaaaaaa]");
    });
 
    it("rejects a non-raster or non-base64 data marker", () => {
       expect(parseAttachments("x\n[IMAGE:data:image/svg+xml;base64,PHN2Zz4=]").images).toEqual([]);
-      expect(parseAttachments("x\n[IMAGE:data:image/png;base64,iVBORw0KGgo=]").images.length).toBe(1);
+      expect(parseAttachments("x\n[IMAGE:data:image/png;base64,iVBORw0KGgo=]").images.length).toBe(
+         1
+      );
    });
 });
 
@@ -49,14 +55,19 @@ describe("parseAttachments documents and robustness", () => {
    });
 
    it("handles an empty document body and an unterminated one", () => {
-      expect(parseAttachments("[ATTACHED DOCUMENT: e.txt (0 bytes)]\n[END DOCUMENT]\n\nhi").docs[0].content).toBe("");
+      expect(
+         parseAttachments("[ATTACHED DOCUMENT: e.txt (0 bytes)]\n[END DOCUMENT]\n\nhi").docs[0]
+            .content
+      ).toBe("");
       expect(parseAttachments("[ATTACHED DOCUMENT: u.txt (9 bytes)]\nno end").docs).toEqual([]);
    });
 
    it("stays fast on long hostile text", () => {
       const ws = " ".repeat(50_000);
       const markers = Array.from({ length: 5000 }, () => "\n[IMAGE:img_aaaaaaaaaaaa]").join("");
-      const headers = Array.from({ length: 3000 }, () => "[ATTACHED DOCUMENT: x (1 bytes)]\n").join("");
+      const headers = Array.from({ length: 3000 }, () => "[ATTACHED DOCUMENT: x (1 bytes)]\n").join(
+         ""
+      );
       const t0 = performance.now();
       parseAttachments(`${ws}x`);
       parseAttachments(`${markers} x`);

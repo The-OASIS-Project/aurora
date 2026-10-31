@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearUserState, isDifferentUser, rememberUser, stashEndReason, takeEndReason } from "./user-state.ts";
+import {
+   clearUserState,
+   isDifferentUser,
+   rememberUser,
+   stashEndReason,
+   takeEndReason
+} from "./user-state.ts";
 
 /* Node has no Web Storage: a minimal in-memory stand-in for localStorage + sessionStorage. */
 class MemStorage {
@@ -27,7 +33,13 @@ beforeEach(() => {
 
 describe("user state", () => {
    it("clears every per-user key but keeps layout prefs", () => {
-      for (const k of ["dawn.hero.sessionToken", "dawn.hero.convId", "dawn.hero.hud", "dawn.hero.sessionKeepalive", "dawn.hero.mailPrefs"]) {
+      for (const k of [
+         "dawn.hero.sessionToken",
+         "dawn.hero.convId",
+         "dawn.hero.hud",
+         "dawn.hero.sessionKeepalive",
+         "dawn.hero.mailPrefs"
+      ]) {
          localStorage.setItem(k, "x");
       }
       localStorage.setItem("dawn.hero.contextPos", "keep");

@@ -326,7 +326,7 @@ wraps, and stores the content itself.
    image would fire mid-stream and exfiltrate. Off-origin images in replies render as a click-to-load
    placeholder showing the host. This applies to every conversation, since an injection can arrive
    through any tool, not only this chip.
-   **Built (2026-10-09):** `src/conversation/format.ts` renders markdown through its own DOMPurify
+   **Built (2026-10-09):** `src/conversation/format.ts` (now `src/render/markdown.ts`) renders markdown through its own DOMPurify
    instance that removes everything that fetches by itself (srcset, picture/video/audio/source/
    track, input, form/button, inline style, table background, svg/math, href except on links, src
    except on images); an off-origin `<img>` becomes a placeholder naming its host, loaded only by a
@@ -662,9 +662,9 @@ updates every open panel.
 ### 8.3 Markdown module
 
 The email pipeline (6.1 step 4) lives in `src/email/` and builds its own Marked and DOMPurify
-instances; it shares nothing with the chat's `renderMarkdown`. (Moving `renderMarkdown` out of
-`src/conversation/format.ts` to a neutral module, since the doc viewer and library reach into the
-conversation view for it, is a separate cleanup: Mail is not a consumer.)
+instances; it shares nothing with the chat's `renderMarkdown`. (`renderMarkdown` has since moved out
+of `src/conversation/format.ts` to `src/render/markdown.ts`, so the doc viewer no longer reaches into
+the conversation view for it. Mail is not a consumer.)
 
 ### 8.4 Feature gate
 

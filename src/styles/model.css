@@ -44,7 +44,9 @@
    border: none;
    border-left: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
    cursor: pointer;
-   transition: background 120ms ease, color 120ms ease;
+   transition:
+      background 120ms ease,
+      color 120ms ease;
 }
 .model-seg-btn:first-child {
    border-left: none;
@@ -124,7 +126,9 @@
    font-size: 0.95rem;
    line-height: 1;
    color: var(--text-dim);
-   transition: transform 140ms ease, color 140ms ease;
+   transition:
+      transform 140ms ease,
+      color 140ms ease;
 }
 .model-dd.open .model-dd-caret {
    transform: rotate(180deg);
@@ -144,7 +148,7 @@
    max-height: 14rem;
    overflow-y: auto;
    /* Dark surface (near-black), inverted from the now-transparent closed control. */
-   background: color-mix(in srgb, var(--ground) 95%, #000);
+   background: var(--ground);
    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
    border-radius: 3px;
    box-shadow: 0 10px 30px color-mix(in srgb, var(--ground) 74%, transparent);

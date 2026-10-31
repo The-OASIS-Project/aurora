@@ -66,7 +66,7 @@ replays history then streams live. This is the entry point for any observe clien
 
 ---
 
-## 3. Tier A — pushed signals (the ambient stream)
+## 3. Tier A - pushed signals (the ambient stream)
 
 These land without a request. This is the material a JARVIS-style dashboard is
 made of. Grouped by what they feed.
@@ -93,7 +93,7 @@ The center visualization and the conversation console live on these.
 > *its own* turns. To visualize another session's generation you would attach to
 > that conversation and read its `conversation_event` stream instead.
 
-### 3.2 Proactive attention (SAGE) — the ambient-notice heart
+### 3.2 Proactive attention (SAGE) - the ambient-notice heart
 
 This is the system purpose-built for exactly what the hero UI does: surface a
 thing, briefly, without being asked. It is wired and live in
@@ -199,14 +199,14 @@ chunks (`0x20`) are a separate concern you can ignore for a display-only panel.
 
 ---
 
-## 4. Tier B — poll (request/response)
+## 4. Tier B - poll (request/response)
 
 No push. Send the request, get the `*_response`. Use these to fill panel bodies.
 Convention: every response is `{type: "<request>_response", payload: {success, error?, ...}}`.
 
 | Concern | Request | Response | What you get |
 |---------|---------|----------|--------------|
-| **Home Assistant** | `ha_list_entities` | `ha_entities_response` | **Live entity states**. Each entity is `{entity_id, friendly_name, domain, state, area?}` — the `domain` (light/lock/climate/sensor…) and the optional `area` (room; present only when assigned in HA) are real fields the earlier docs omitted; verified in `serialize_entity_list()` (`webui_homeassistant.c`). `state` is a bare string with no units/attributes. `ha_refresh_entities` bypasses DAWN's 5-min cache and forces a live re-poll (returns the same shape). Cap 512, server-filtered to supported domains. **Admin-only** (all `ha_*` verbs call `conn_require_admin`). |
+| **Home Assistant** | `ha_list_entities` | `ha_entities_response` | **Live entity states**. Each entity is `{entity_id, friendly_name, domain, state, area?}` - the `domain` (light/lock/climate/sensor…) and the optional `area` (room; present only when assigned in HA) are real fields the earlier docs omitted; verified in `serialize_entity_list()` (`webui_homeassistant.c`). `state` is a bare string with no units/attributes. `ha_refresh_entities` bypasses DAWN's 5-min cache and forces a live re-poll (returns the same shape). Cap 512, server-filtered to supported domains. **Admin-only** (all `ha_*` verbs call `conn_require_admin`). |
 | **System metrics** | `get_metrics` | `get_metrics_response` | Uptime, sessions, last/avg TTFT, etc. Snapshot to pair with the live `metrics_update` stream. |
 | **Scheduler queue** | `scheduler_events` | `scheduler_events_response` | The pending alarm/timer/reminder list. Refetch on `scheduler_events_changed`. |
 | **Attention watches** | `watch_list` | `watch_list_response` | The user's SAGE watch rules (what DAWN is proactively watching for). |
@@ -219,7 +219,7 @@ Convention: every response is `{type: "<request>_response", payload: {success, e
 
 ---
 
-## 5. Panel feasibility — what you can actually build today
+## 5. Panel feasibility - what you can actually build today
 
 This is the payoff. For each ambient panel the hero UI scaffolds, what does the
 current WebSocket actually support?
@@ -232,8 +232,8 @@ current WebSocket actually support?
 | **Background jobs / tasks** | `job_notification`, `job_update` push | `jobs_request`, `list_jobs` | ✅ **Fully wireable now.** Best-supported observe surface in DAWN. |
 | **Alarms / timers / reminders** | `scheduler_notification` push | `scheduler_events` | ✅ **Fully wireable now.** |
 | **Ambient notices / attention** | `attention_alert`, `silent_observation` push | `watch_list` for config | ✅ **Fully wireable now.** This is the ambient-spike engine. `level` maps to tone. |
-| **Calendar** | `calendar_events_changed` push | `calendar_upcoming_events` + `calendar_list_my_calendars` | ✅ **Wireable now — built.** Hero UI's calendar card consumes it (today's window, per-event color, refetch on the push). §9.1g. |
-| **Email** | *(none)* | *(none — WS exposes only account management, not an inbox/message feed)* | ⚠️ **Not wireable as an inbox today.** See gap below. |
+| **Calendar** | `calendar_events_changed` push | `calendar_upcoming_events` + `calendar_list_my_calendars` | ✅ **Wireable now - built.** Hero UI's calendar card consumes it (today's window, per-event color, refetch on the push). §9.1g. |
+| **Email** | *(none)* | *(none - WS exposes only account management, not an inbox/message feed)* | ⚠️ **Not wireable as an inbox today.** See gap below. |
 
 ### The two gaps (important for the wiring plan)
 
@@ -261,7 +261,7 @@ tell you, and defers the server work.
 
 ---
 
-## 6. Tier C — control / mutation (the user-vs-operator line)
+## 6. Tier C - control / mutation (the user-vs-operator line)
 
 The charter (CLAUDE.md - "user surface, not operator console") draws its line
 **through** Tier C, not around it: Aurora wires the verbs where the **user acts on
@@ -294,7 +294,7 @@ on the init/reconnect handshake for the connect-already-muted case.
 The conversation picker (`src/conversation-picker/`) adds three more sanctioned,
 user-initiated exceptions in the same class as `text` submit / `set_private`:
 `rename_conversation` and `set_pinned` (benign metadata flips), and
-**`delete_conversation`** — the one write in the whole UI that permanently destroys
+**`delete_conversation`** - the one write in the whole UI that permanently destroys
 DAWN-side data. Per `webui_history.c`, delete cascade-deletes the conversation's images
 and child background jobs and refuses with `"Cancel the background job before deleting it."`
 while a job is running; if the deleted conversation was active, DAWN clears the session
@@ -358,24 +358,24 @@ better, so they belong in the backend. Ordered roughly by effort.
 **Status (updated 2026-07-30, DAWN side).** All four actionable items landed in DAWN
 (implemented + live-verified on the wire, committed); the two remaining are proactive-alert
 work parked under SAGE. **Read §9.1 for the exact shapes you can now consume and §9.2 for
-behaviour you must handle** — several of these changed the wire contract.
+behaviour you must handle** - several of these changed the wire contract.
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | `llm_runtime` reasoning fields | ✅ **Shipped + consumed** — hero UI reads `thinking_mode`/`reasoning_effort` from `llm_runtime` on connect and reflects the `set_session_llm_response` echo; the old localStorage reasoning/effort workaround is deleted. §9.1a/d/e |
-| 2 | `error` frame severity | ✅ **Shipped + consumed** — hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
-| 5 | Advertise music port | ✅ **Shipped + consumed** — hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
-| 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** — a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
-| 3 | Home Assistant `state_changed` push | ✅ **SHIPPED (backend, 2026-08-01)** — DAWN now subscribes to HA's own `/api/websocket` `state_changed` stream and pushes a coalesced **`ha_state_changed` delta** (only changed entities) to admin browsers. Real-time board updates, no poll. **Needs a small client merge-by-`entity_id`** (delta shape in §9.4). The 30s poll stays as a backstop. Realtime defaults ON (requires an admin HA token; falls back to REST poll if the WS can't connect). *(The SAGE proactive-alert side of #3 is still deferred — this is the board-push half.)* |
-| 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** — hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
-| 7 | Rich HA entity attributes in `ha_entities_response` | ✅ **SHIPPED (backend)** — per-entity `attributes` object, **domain-switched** (only the keys relevant to the entity's domain, not a flat superset): `brightness` (light), `percentage` (fan), `current_position` (cover), `hvac_mode`/`hvac_modes`/`current_temperature`/`temperature` (climate), `unit_of_measurement`/`device_class` (sensor). Emitted on all three `ha_entities_response` sources (list/refresh/reconcile). Additive; absent ⇒ on/off fallback. Exact per-domain shape in §9.4 |
-| 8 | HA entity control verb — `ha_call_service` | ✅ **SHIPPED (backend)** — admin-only general verb (`entity_id`/`domain`/`service`/`data`). Server enforces a **write allowlist** (only the board's widget services; anything else ⇒ `"Service not permitted"`) and does **server-authoritative reconcile** (re-polls HA on success and broadcasts a fresh `ha_entities_response` — the UI just renders it, no client re-poll). `data` passed verbatim to HA. UI can flip its stubbed `send()` to live. Full contract + error strings + allowlist in §9.4. **NB:** adding a controllable domain to the UI requires extending the server allowlist (`HA_BOARD_SERVICES[]`) in the same change |
-| 9 | Make documents readable over the WS + a real size (Library panel) | ✅ **SHIPPED (backend + consumed, 2026-08-13)** — (a) **`original_blob_id` + `has_original`** now on each `doc_library_list` document row → txt/md **uploads** render inline (via `GET /api/documents/original/<blob_id>`), any type downloads; (b) **`doc_library_get {id}`** full-text verb (owner-scoped, v63+ stored full text) → DAWN-**generated** docs (research reports etc) read inline. Aurora consumes both (blob-id map in `dawn-ws.ts`, promise-correlated get for the reader). ⏳ **still deferred: (c) `size_bytes`** — the panel shows `num_chunks` ("N parts") as a proxy; a real byte size needs a schema migration, held out of this change. Detail in §9.5 |
+| 1 | `llm_runtime` reasoning fields | ✅ **Shipped + consumed** - hero UI reads `thinking_mode`/`reasoning_effort` from `llm_runtime` on connect and reflects the `set_session_llm_response` echo; the old localStorage reasoning/effort workaround is deleted. §9.1a/d/e |
+| 2 | `error` frame severity | ✅ **Shipped + consumed** - hero UI routes on `severity` (INFO_ prefix kept as older-server fallback); info notices surface as an ambient spike, never a reactor flash. §9.1b |
+| 5 | Advertise music port | ✅ **Shipped + consumed** - hero UI skips the dedicated music socket when `music_enabled:false`; opens it from the `config` frame. `music_port` is informational (the UI reaches DAWN through the `/music-ws` dev proxy). §9.1c |
+| 6 | `music_control` bare `play` starts a stopped session | ✅ **Shipped** - a bare `play` on a stopped-with-queue session now starts the current queue track; the `play_index`-from-stopped workaround is no longer required (harmless to keep). §9.1f |
+| 3 | Home Assistant `state_changed` push | ✅ **SHIPPED (backend, 2026-08-01)** - DAWN now subscribes to HA's own `/api/websocket` `state_changed` stream and pushes a coalesced **`ha_state_changed` delta** (only changed entities) to admin browsers. Real-time board updates, no poll. **Needs a small client merge-by-`entity_id`** (delta shape in §9.4). The 30s poll stays as a backstop. Realtime defaults ON (requires an admin HA token; falls back to REST poll if the WS can't connect). *(The SAGE proactive-alert side of #3 is still deferred - this is the board-push half.)* |
+| 4 | Calendar / email content feeds | ✅ **Calendar shipped + consumed** - hero UI's calendar card reads `calendar_upcoming_events` (today's window in the user's tz) + `calendar_list_my_calendars` for the color map, and refetches on the `calendar_events_changed` push. §9.1g. **Email pull still deferred**; calendar *proactive* push (vs. this refetch nudge) is still SAGE |
+| 7 | Rich HA entity attributes in `ha_entities_response` | ✅ **SHIPPED (backend)** - per-entity `attributes` object, **domain-switched** (only the keys relevant to the entity's domain, not a flat superset): `brightness` (light), `percentage` (fan), `current_position` (cover), `hvac_mode`/`hvac_modes`/`current_temperature`/`temperature` (climate), `unit_of_measurement`/`device_class` (sensor). Emitted on all three `ha_entities_response` sources (list/refresh/reconcile). Additive; absent ⇒ on/off fallback. Exact per-domain shape in §9.4 |
+| 8 | HA entity control verb - `ha_call_service` | ✅ **SHIPPED (backend)** - admin-only general verb (`entity_id`/`domain`/`service`/`data`). Server enforces a **write allowlist** (only the board's widget services; anything else ⇒ `"Service not permitted"`) and does **server-authoritative reconcile** (re-polls HA on success and broadcasts a fresh `ha_entities_response` - the UI just renders it, no client re-poll). `data` passed verbatim to HA. UI can flip its stubbed `send()` to live. Full contract + error strings + allowlist in §9.4. **NB:** adding a controllable domain to the UI requires extending the server allowlist (`HA_BOARD_SERVICES[]`) in the same change |
+| 9 | Make documents readable over the WS + a real size (Library panel) | ✅ **SHIPPED (backend + consumed, 2026-08-13)** - (a) **`original_blob_id` + `has_original`** now on each `doc_library_list` document row → txt/md **uploads** render inline (via `GET /api/documents/original/<blob_id>`), any type downloads; (b) **`doc_library_get {id}`** full-text verb (owner-scoped, v63+ stored full text) → DAWN-**generated** docs (research reports etc) read inline. Aurora consumes both (blob-id map in `dawn-ws.ts`, promise-correlated get for the reader). ⏳ **still deferred: (c) `size_bytes`** - the panel shows `num_chunks` ("N parts") as a proxy; a real byte size needs a schema migration, held out of this change. Detail in §9.5 |
 
 (Original item write-ups #1–#6 with source cites are preserved below the two new
 subsections for reference.)
 
-### 9.1 What shipped — new/changed wire contracts
+### 9.1 What shipped - new/changed wire contracts
 
 All additive and back-compat (older servers just omit the fields; keep your fallbacks).
 
@@ -388,7 +388,7 @@ reasoning state.** Two new fields alongside the existing `type`/`provider`/`mode
 "llm_runtime": { …, "thinking_mode": "disabled", "reasoning_effort": "low" }
 ```
 `thinking_mode` ∈ `disabled | auto | enabled`; `reasoning_effort` ∈ `none | low | medium |
-high | xhigh`. These are the resolved session values, not the config default — a fresh
+high | xhigh`. These are the resolved session values, not the config default - a fresh
 connection can now show the real Reasoning/Effort state. (Previously unavailable except
 after a `switch_llm` tool call.)
 
@@ -399,8 +399,8 @@ after a `switch_llm` tool call.)
 ```json
 "payload": { "code": "…", "message": "…", "severity": "info|warning|error", "recoverable": true }
 ```
-`severity:"info"` = benign notice — do **not** flash the reactor red. Known info codes:
-`INFO_THINKING_DISABLED`, `INFO_THINKING_KEPT_ON` (both about reasoning — see §9.2).
+`severity:"info"` = benign notice - do **not** flash the reactor red. Known info codes:
+`INFO_THINKING_DISABLED`, `INFO_THINKING_KEPT_ON` (both about reasoning - see §9.2).
 `recoverable` is retained but frozen `true`; treat it as legacy, prefer `severity`. Absent
 `severity` ⇒ treat as `error`.
 
@@ -413,13 +413,13 @@ entirely when `music_enabled` is `false`. (Fall back to `main+1` only for older 
 
 **d. The `set_session_llm` response now echoes effective `thinking_mode` +
 `reasoning_effort`** (alongside `type`/`provider`/`model`). If your UI lets the user change
-reasoning, **reflect the value the server *returns*, not the one the user picked** — the
+reasoning, **reflect the value the server *returns*, not the one the user picked** - the
 server may clamp it (see §9.2). This is the authoritative post-change state.
 
 **e. Per-conversation LLM settings are never NULL.** `load_conversation`'s `llm_settings`
 object and `get_config`'s `llm_runtime` always carry concrete `thinking_mode` /
 `reasoning_effort` / `model` (effective defaults are substituted server-side for legacy
-rows that predate this). You can trust these fields are populated — no more empty strings
+rows that predate this). You can trust these fields are populated - no more empty strings
 to special-case.
 
 **f. `music_control {action:"play"}` with no `path`/`query` now restarts a *stopped*
@@ -427,13 +427,13 @@ session.** Previously a bare `play` only resumed a pause; on a stopped session (
 `stop`) it silently echoed state, so a "press play" button looked dead until the client
 sent `play_index`. Now, if the shared queue is non-empty, a bare `play` starts the current
 `queue_index` track (clamped into range) and you get the normal `music_state` + audio
-stream. No wire-shape change — same request, same `music_state` response; only the stopped
+stream. No wire-shape change - same request, same `music_state` response; only the stopped
 case behaves. An empty queue still just echoes state. **You can drop the
-`play_index`-from-stopped workaround** (keeping it is harmless — `play_index` still works).
+`play_index`-from-stopped workaround** (keeping it is harmless - `play_index` still works).
 
 **g. Calendar panel: pull + live refetch.** Two new surfaces for a calendar/agenda board:
 
-- **Pull** — request `calendar_upcoming_events`, response `calendar_upcoming_events_response`:
+- **Pull** - request `calendar_upcoming_events`, response `calendar_upcoming_events_response`:
   ```json
   { "type": "calendar_upcoming_events", "payload": { "days": 7, "calendar_name": "Work" } }
   ```
@@ -442,16 +442,16 @@ case behaves. An empty queue still just echoes state. **You can drop the
   `{ success, start, end, truncated, events:[…] }`; each event carries
   `{ id, calendar_id, uid, summary, location, start, end, all_day, start_date, end_date, cancelled,
   is_override }`. Includes **all-day** events (holidays/PTO), ordered by start, capped at 256 with
-  `truncated:true` when the cap trips (show a "+N more" affordance). Reads the offline cache — no network.
+  `truncated:true` when the cap trips (show a "+N more" affordance). Reads the offline cache - no network.
   - **`calendar_id`** is the per-event grouping/coloring key you asked for. The response intentionally does
     **not** carry the calendar *name* (that needs an extra join); `calendar_id` is the stable key (names
     change/collide).
-- **The id→{name,color} map is now one call — `calendar_list_my_calendars`** (no payload), response
-  `{ success, calendars:[{ id, account_id, name, color }] }`. This is your grouping map — no more two-hop
+- **The id→{name,color} map is now one call - `calendar_list_my_calendars`** (no payload), response
+  `{ success, calendars:[{ id, account_id, name, color }] }`. This is your grouping map - no more two-hop
   `calendar_list_accounts` + per-account `calendar_list_calendars` bootstrap. Returns **active** calendars
   only, which is exactly the set the pull emits events from (every `calendar_id` you'll see is in the map).
   Fetch once on connect; re-fetch on `calendar_events_changed` (a newly-synced calendar can appear).
-- **Push** — `calendar_events_changed` (empty payload, browsers-only, owner-scoped): a background CalDAV
+- **Push** - `calendar_events_changed` (empty payload, browsers-only, owner-scoped): a background CalDAV
   sync pulled changes; **refetch** via the pull. Signal-only, no event data on the wire. This is a UI-sync
   nudge, **not** a proactive "your standup moved" notice (that stays SAGE, on `silent_observation`/
   `attention_alert`).
@@ -464,7 +464,7 @@ case behaves. An empty queue still just echoes state. **You can drop the
 > **Superseded by §9.13 (P1.1b, 2026-09-28):** modes are now `disabled | adaptive | enabled` per model capabilities, and the `INFO_THINKING_*` notices are gone. The ratchet below no longer applies.
 
 DAWN now allows changing Reasoning **mode** and **effort** mid-conversation (only *tool
-mode* stays frozen after the first message). Two server-authoritative behaviours follow —
+mode* stays frozen after the first message). Two server-authoritative behaviours follow - 
 your control should **display the effective value, not the picked one**:
 
 - **Effort** is freely changeable mid-conversation on every provider; it never errors.
@@ -474,12 +474,12 @@ your control should **display the effective value, not the picked one**:
   on**, returns `thinking_mode:"enabled"` in the `set_session_llm` response (§9.1d), and emits
   an `INFO_THINKING_KEPT_ON` `severity:"info"` notice. **Reflect the returned `enabled` and
   surface the info toast; don't hard-block the control.** The inverse (`INFO_THINKING_DISABLED`)
-  fires when enabling thinking is incompatible with prior-provider history — same pattern,
+  fires when enabling thinking is incompatible with prior-provider history - same pattern,
   opposite direction. Both are Claude-only; other providers accept either direction freely.
 
 ### 9.3 Validation tool
 
-`dawn/scripts/ws_observer.py` — a read-only client that logs in like the WebUI (CSRF →
+`dawn/scripts/ws_observer.py` - a read-only client that logs in like the WebUI (CSRF →
 login → cookie), opens the `dawn-1.0` socket, and dumps every pushed frame. Use it to see
 the exact shapes above:
 ```
@@ -488,20 +488,20 @@ DAWN_OBSERVER_PASSWORD=… python3 dawn/scripts/ws_observer.py \
 ```
 Password via `$DAWN_OBSERVER_PASSWORD` or a prompt; `--only`/`--attach`/`--compact` flags.
 Note it caught a real gotcha we relied on: the `config` frame is emitted from
-`queue_init_messages` on connect (a former `send_config_impl` was dead code) — so `config`
+`queue_init_messages` on connect (a former `send_config_impl` was dead code) - so `config`
 is a Tier-A on-connect push, exactly as §3.7 lists it.
 
-### 9.4 Interactive HA board — control verb (#8) + rich attributes (#7) — ✅ SHIPPED (backend)
+### 9.4 Interactive HA board - control verb (#8) + rich attributes (#7) - ✅ SHIPPED (backend)
 
-**Status: both landed on the DAWN backend (`src/webui/webui_homeassistant.c`, `src/tools/homeassistant_service.c`).** The write verb, the rich attributes, and a server-authoritative reconcile are live. The UI can flip its stubbed `send()` to a live one and consume the frames below as specified. Everything is additive/back-compat — an older server just omits `attributes` and rejects the verb.
+**Status: both landed on the DAWN backend (`src/webui/webui_homeassistant.c`, `src/tools/homeassistant_service.c`).** The write verb, the rich attributes, and a server-authoritative reconcile are live. The UI can flip its stubbed `send()` to a live one and consume the frames below as specified. Everything is additive/back-compat - an older server just omits `attributes` and rejects the verb.
 
 This section is the **as-built contract**. Where it differs from the original request, the delta is called out inline.
 
-#### #8 — `ha_call_service` (the write path) ✅
+#### #8 - `ha_call_service` (the write path) ✅
 
 One general verb, Admin-only (`conn_require_admin`), same gate as the read verbs.
 
-**Request** — unchanged from the original spec:
+**Request** - unchanged from the original spec:
 ```json
 { "type": "ha_call_service",
   "payload": {
@@ -512,7 +512,7 @@ One general verb, Admin-only (`conn_require_admin`), same gate as the read verbs
   } }
 ```
 
-**Response** — `ha_call_service_response`:
+**Response** - `ha_call_service_response`:
 ```json
 { "success": true, "entity_id": "light.kitchen_table", "error": null }
 ```
@@ -529,18 +529,18 @@ the UI can branch or surface them):
 | `"Invalid service data"` | the `data` object failed to parse server-side (rare; malformed payload) |
 | an HA error string | HA itself rejected the call (transport/entity/HA-side failure) |
 
-**`data` is passed to HA verbatim — use HA's own data keys.** The server does not remap;
+**`data` is passed to HA verbatim - use HA's own data keys.** The server does not remap;
 whatever you put in `data` becomes the HA service body. So send `{ "position": 40 }` for
 `cover.set_cover_position`, `{ "brightness": 180 }` for `light.turn_on`, `{ "percentage":
 60 }` for `fan.set_percentage`, `{ "hvac_mode": "heat" }` / `{ "temperature": 72 }` for
-climate. (`entity_id` is added server-side — don't put it in `data`.)
+climate. (`entity_id` is added server-side - don't put it in `data`.)
 
-**⚠️ Server-side write allowlist — the UI can ONLY invoke these `(domain, service)`
+**⚠️ Server-side write allowlist - the UI can ONLY invoke these `(domain, service)`
 pairs.** Anything else HA exposes (`shell_command.*`, `python_script.*`, arbitrary
 `automation.trigger`, …) is refused with `error: "Service not permitted"` before any call.
 This is a deliberate blast-radius control (a compromised admin session can drive the board
 but not run arbitrary HA services). The permitted set **exactly matches the widget map
-below** — if you add a controllable domain/service to the UI, the server table
+below** - if you add a controllable domain/service to the UI, the server table
 (`HA_BOARD_SERVICES[]` in `webui_homeassistant.c`) **must be extended in the same change**,
 or the new widget's `send()` will come back `"Service not permitted"`. Coordinate that edit.
 
@@ -549,19 +549,19 @@ Permitted pairs: `light.turn_on/turn_off`, `switch.turn_on/turn_off`,
 `lock.lock/unlock`, `cover.open_cover/close_cover/set_cover_position`,
 `climate.set_hvac_mode/set_temperature`, `media_player.media_play/media_pause`.
 
-**State reconciliation — DONE server-side; the UI does NOT re-poll.** The server closes
+**State reconciliation - DONE server-side; the UI does NOT re-poll.** The server closes
 the loop on its own. **When realtime (#3) is live (default), a control action produces a
-`ha_state_changed` delta** (below) for the changed entity — the same push that reflects an
-*external* HA change — so nothing extra is sent on the reconcile path. When realtime is
+`ha_state_changed` delta** (below) for the changed entity - the same push that reflects an
+*external* HA change - so nothing extra is sent on the reconcile path. When realtime is
 off/disconnected, the server instead re-polls HA and broadcasts a fresh full
 `ha_entities_response`. Either way: keep the optimistic widget flip for snappiness if you
-like, but the authoritative truth arrives unsolicited — **just render it**; no
+like, but the authoritative truth arrives unsolicited - **just render it**; no
 client-orchestrated `ha_refresh_entities` follow-up.
 
-#### Realtime deltas — `ha_state_changed` (#3, SHIPPED backend)
+#### Realtime deltas - `ha_state_changed` (#3, SHIPPED backend)
 
 When realtime is on, DAWN pushes an **unsolicited** `ha_state_changed` frame to admin
-browsers whenever HA state changes (from any source — a control action, a physical switch,
+browsers whenever HA state changes (from any source - a control action, a physical switch,
 an HA automation), coalesced (~200 ms) so a scene flip of many entities is **one** frame:
 
 ```json
@@ -581,7 +581,7 @@ an HA automation), coalesced (~200 ms) so a scene flip of many entities is **one
   `type`; a client that ignores it still stays correct via the retained poll backstop.
 - **⚠ Bind every string via `textContent` / escaped templating, never `innerHTML`.** These
   fields (`friendly_name`, `state`, `area`, attribute values) are HA-controlled and now
-  arrive **unsolicited** (auto-push, no admin gesture) — the daemon JSON-escapes the frame,
+  arrive **unsolicited** (auto-push, no admin gesture) - the daemon JSON-escapes the frame,
   but a hostile HA entity name is still attacker-influenceable text on your DOM.
 
 **Widget map (what the UI sends), by domain:**
@@ -589,27 +589,27 @@ an HA automation), coalesced (~200 ms) so a scene flip of many entities is **one
 | Domain | Widget | `service` | `data` |
 |--------|--------|-----------|--------|
 | `light` | toggle (+ brightness slider) | `turn_on` / `turn_off` | `{ brightness: 0-255 }` on a slider change |
-| `switch`, `input_boolean` | toggle | `turn_on` / `turn_off` | — |
+| `switch`, `input_boolean` | toggle | `turn_on` / `turn_off` | - |
 | `fan` | toggle (+ % slider) | `turn_on` / `turn_off` / `set_percentage` | `{ percentage: 0-100 }` |
-| `lock` | toggle | `lock` / `unlock` | — |
+| `lock` | toggle | `lock` / `unlock` | - |
 | `cover` | open/close (+ position slider) | `open_cover` / `close_cover` / `set_cover_position` | `{ position: 0-100 }` |
 | `climate` | mode dropdown (+ target temp) | `set_hvac_mode` / `set_temperature` | `{ hvac_mode }` / `{ temperature }` |
-| `media_player` | play/pause | `media_play` / `media_pause` | — |
-| `sensor`, `binary_sensor`, `weather` | none (display-only) | — | — |
+| `media_player` | play/pause | `media_play` / `media_pause` | - |
+| `sensor`, `binary_sensor`, `weather` | none (display-only) | - | - |
 
-#### #7 — rich `attributes` on `ha_entities_response` ✅
+#### #7 - rich `attributes` on `ha_entities_response` ✅
 
 Every `ha_entities_response` entity (from `ha_list_entities`, `ha_refresh_entities`, AND
-the reconcile broadcast) now carries a per-entity `attributes` object — **but only the keys
+the reconcile broadcast) now carries a per-entity `attributes` object - **but only the keys
 relevant to that entity's domain**, not the flat superset the original spec sketched. If
 the whole `attributes` object is absent, render a plain on/off toggle or display row.
 
-**What actually gets emitted, by domain** (this is the real shape — code it against this,
+**What actually gets emitted, by domain** (this is the real shape - code it against this,
 not the original all-keys-in-one-object example):
 
 | Domain | `attributes` emitted | Notes |
 |--------|----------------------|-------|
-| `light` | `{ "brightness": 0-255 }` | always present for lights. (color_temp/rgb are parsed server-side but **not** emitted yet — brightness only) |
+| `light` | `{ "brightness": 0-255 }` | always present for lights. (color_temp/rgb are parsed server-side but **not** emitted yet - brightness only) |
 | `fan` | `{ "percentage": 0-100 }` | always present for fans |
 | `cover` | `{ "current_position": 0-100 }` | always present for covers |
 | `climate` | `{ "hvac_mode"?, "hvac_modes"?: string[], "current_temperature": number, "temperature": number }` | `hvac_mode` omitted if empty; `hvac_modes` (the dropdown options) omitted if none, **capped at 12 entries**; the two temps are always present (doubles) |
@@ -628,28 +628,28 @@ Example (a climate entity):
   } }
 ```
 
-Treat every `attributes` key as optional and feature-detect — presence is domain- and
+Treat every `attributes` key as optional and feature-detect - presence is domain- and
 value-dependent per the table. An older server omits `attributes` entirely (falls back to
 the on/off board).
 
 ---
 
-### 9.5 Document library — the Library panel (#9) — consumer contract + backend ask
+### 9.5 Document library - the Library panel (#9) - consumer contract + backend ask
 
 > ⚠️ **Undocumented family.** The entire `doc_library_*` request family is implemented in
 > DAWN (`src/webui/webui_doc_library.c`, dispatch `webui_message_dispatch.c`) but is **absent
 > from `WEBSOCKET_PROTOCOL.md`**. Everything below was read from that C source, not the
-> protocol doc — flag the gap to whoever owns the protocol doc.
+> protocol doc - flag the gap to whoever owns the protocol doc.
 
 The Library panel (`src/library/`) consumes exactly one verb, **read-only**:
 
-**Request** `doc_library_list` — `{ limit?, offset?, scope?, query? }`. Omitting `scope`
+**Request** `doc_library_list` - `{ limit?, offset?, scope?, query? }`. Omitting `scope`
 returns notes + documents together; `query` runs a BM25 label/body search. (The panel omits
 `show_all`, the admin-only all-users extension.) The panel does **not** wire any of the
 library WRITE verbs (`doc_library_note_save`/`note_update`, `doc_library_delete`,
 `doc_library_index`, `doc_library_toggle_global`, `doc_library_version_restore`).
 
-**Response** `doc_library_list_response` — `{ success, count, has_more, documents[] }`. Each
+**Response** `doc_library_list_response` - `{ success, count, has_more, documents[] }`. Each
 `documents[]` row (as read from the serializer):
 
 | Field | Meaning |
@@ -658,7 +658,7 @@ library WRITE verbs (`doc_library_note_save`/`note_update`, `doc_library_delete`
 | `filename` | note label, or the document's filename |
 | `filetype` | `"note"` for notes, else the extension (`pdf`/`txt`/`md`/`docx`/…) |
 | `is_note` | bool |
-| `text` | **notes only** — the full note body inline (single chunk, ≤4096 B). Absent for documents. |
+| `text` | **notes only** - the full note body inline (single chunk, ≤4096 B). Absent for documents. |
 | `num_chunks` | int |
 | `is_global` | bool (shared) |
 | `created_at` | int64 epoch seconds |
@@ -671,19 +671,19 @@ carries the blob id**, so the client cannot construct that URL.
 
 **Size:** the row carries `num_chunks` but **no byte size**. The panel shows `num_chunks`
 as a rough proxy (e.g. "28 parts") for documents and the exact body byte size for notes. A
-real per-row **`size_bytes`** is still deferred (it needs a schema migration) — the two
+real per-row **`size_bytes`** is still deferred (it needs a schema migration) - the two
 readability pieces below shipped without it.
 
 **Shipped (#9a/#9b, additive + read-only, 2026-08-13):**
 - **`original_blob_id` + `has_original`** on each document row of `doc_library_list_response`
   (`webui_doc_library.c` reads it via `document_db_get_original_blob_id()`, an isolated query
   that leaves the shared `row_to_document`/list SELECTs untouched). **Emitted only for docs
-  the requester owns** — the blob download (`doc_can_read`) is owner-only, so advertising it on
+  the requester owns** - the blob download (`doc_can_read`) is owner-only, so advertising it on
   a listed *global* doc would offer a download the server always refuses.
 - **`doc_library_get {id}`** → `doc_library_get_response` `{ success, id, filename, filetype,
   text }`; owner-scoped and requires stored full text (v63+). A missing, non-owned/global, or
   legacy doc returns one generic `success:false` `error:"Document unavailable"` (id echoed on
-  every branch for correlation) — deliberately indistinguishable, so the verb is not a
+  every branch for correlation) - deliberately indistinguishable, so the verb is not a
   document-existence oracle. A payload-less frame gets `"Missing document id"` (never silently
   dropped).
 
@@ -700,17 +700,17 @@ text is untrusted (markdown → `renderMarkdown`/DOMPurify, plain text → `text
 
 **Why both shipped (live finding, 2026-08-13).** Verified against a real library: the bulk of
 documents are DAWN-*generated* text (research reports, agendas) with **no uploaded original**, so
-`original_blob_id` alone would leave them metadata-only — `doc_library_get` (reassembled full
+`original_blob_id` alone would leave them metadata-only - `doc_library_get` (reassembled full
 text) is what makes them readable. `original_blob_id`/`has_original` covers uploaded files (exact
 original: txt/md render, any-type download). Together they cover both classes.
 
 ---
 
-### 9.6 Consumed this session (Context panel, attachments, session-continuity) — 2026-08-21
+### 9.6 Consumed this session (Context panel, attachments, session-continuity) - 2026-08-21
 
 Three consumer surfaces wired against DAWN, all verified live.
 
-**a. Context panel (`src/context/`) — the "why did it say that" surface.** Consumes the pushed
+**a. Context panel (`src/context/`) - the "why did it say that" surface.** Consumes the pushed
 `context_injection` frame (§3.2), which is **FLAT AT THE ROOT** (no `payload` wrapper - the earlier
 doc implied one; verified in `webui_broadcasts.c`). Scoped server-side to the connection's active
 conversation, so it only ever shows the conversation on screen. Each item's unique key is
@@ -831,7 +831,7 @@ Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin pane
 1. **`llm_runtime` should include `thinking_mode` and `reasoning_effort`.** ✅ Done (§9.1a).
    `get_config`'s `payload.llm_runtime` (`webui_config.c`) carried the session's resolved
    `type` / `provider` / `model` / `*_available` / `context_max`, but NOT the two reasoning
-   fields — so a UI could only show the *config default*. Now serialized from the resolved
+   fields - so a UI could only show the *config default*. Now serialized from the resolved
    config.
 
 2. **A Home Assistant state-change push** (e.g. an `ha_state_changed` broadcast). ⏸ Deferred
@@ -839,12 +839,12 @@ Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin pane
    poll + diff. DAWN does not subscribe to HA's own `state_changed` stream; rebroadcasting it
    would give crisp, low-latency ambient spikes. See the alerts scope below.
 
-3. **Calendar / email content feeds.** ✅ **Calendar done** (§9.1g) — `calendar_upcoming_events`
+3. **Calendar / email content feeds.** ✅ **Calendar done** (§9.1g) - `calendar_upcoming_events`
    pull + `calendar_events_changed` refetch push; a live calendar/agenda panel is buildable now.
    **Email pull still deferred** (`email_recent`-style request not yet added); calendar *proactive*
    notices (vs. the refetch nudge) remain SAGE. §5.
 
-4. **The `error` frame needs a real severity.** ✅ Done via option (b) — added a `severity`
+4. **The `error` frame needs a real severity.** ✅ Done via option (b) - added a `severity`
    field (§9.1b). DAWN sent purely informational notices as `error` frames with hardcoded
    `recoverable: true`; the hero UI had to sniff the `INFO_` code prefix. Now `severity` ∈
    `info | warning | error`; `recoverable` retained for back-compat.
@@ -860,8 +860,8 @@ Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin pane
    current `queue_index` track (clamped into range), following the same queue→state lock
    discipline as `next`/`previous`. Empty queue still echoes state.
 
-The broad version of #2/#3 — a backend proactive-alert system feeding one alert
-channel — is scoped on the DAWN side as an extension of SAGE.
+The broad version of #2/#3 - a backend proactive-alert system feeding one alert
+channel - is scoped on the DAWN side as an extension of SAGE.
 
 ### 9.8 Watches panel (SAGE watch rules) - consumed 2026-08-24 (Phase 1)
 
@@ -1142,12 +1142,12 @@ validation tool. Hero UI consumed #1/#2/#5 (verified against `webui_config.c` /
 `attributes`, admin-only write verb with a server-side `(domain,service)` allowlist +
 server-authoritative reconcile broadcast). **#3 HA `ha_state_changed` realtime push shipped
 2026-08-01** (§9.4; live delta, merge-by-`entity_id`, admin-only). **WS Origin/CSRF check
-shipped 2026-08-01** — the WS upgrade is same-origin-checked, closing the cross-origin
+shipped 2026-08-01** - the WS upgrade is same-origin-checked, closing the cross-origin
 admin-cookie ride into the allowlisted `lock`/`cover` writes (browser-shaped origins matched
 vs Host; `null`/opaque rejected; native no-Origin clients allowed). The HA board is fully
 real-time + hardened. Still deferred: the SAGE *proactive-alert* side of #2/#3 (vs the board
 push, which shipped). **Library panel wired 2026-08-13** (§4 + §9.5; consumes the
-undocumented `doc_library_list` — notes read inline, documents list as metadata; **#9
+undocumented `doc_library_list` - notes read inline, documents list as metadata; **#9
 requested**: add `original_blob_id`/`has_original` so document bodies render/download).*
 **Context panel + cited-gold, conversation attachments (image/document upload + inline
 display), and the Tier-1 one-connection-per-session takeover + fresh-session context restore

@@ -25,7 +25,9 @@ describe("per-app login tagging", () => {
       expect(tagIfDawnApi("https://dawn.local:3000/api/documents/original/b?x=1")).toBe(
          "/api/documents/original/b?x=1&app=aurora"
       );
-      expect(tagIfDawnApi("https://example.com/api/images/x")).toBe("https://example.com/api/images/x");
+      expect(tagIfDawnApi("https://example.com/api/images/x")).toBe(
+         "https://example.com/api/images/x"
+      );
       expect(tagIfDawnApi("/aurora/logo.png")).toBe("/aurora/logo.png");
       expect(tagIfDawnApi("/api/images/x?app=aurora")).toBe("/api/images/x?app=aurora");
    });

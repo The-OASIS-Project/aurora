@@ -19,14 +19,59 @@ import { designWidth } from "./fit-images.ts";
 
 /* Subtrees dropped entirely (with their text). */
 const DROP = new Set([
-   "script", "style", "head", "title", "noscript", "template", "svg", "math", "iframe", "frame",
-   "frameset", "object", "embed", "applet", "link", "meta", "base", "form", "input", "button",
-   "select", "textarea", "option", "picture", "source", "video", "audio", "canvas", "map", "area"
+   "script",
+   "style",
+   "head",
+   "title",
+   "noscript",
+   "template",
+   "svg",
+   "math",
+   "iframe",
+   "frame",
+   "frameset",
+   "object",
+   "embed",
+   "applet",
+   "link",
+   "meta",
+   "base",
+   "form",
+   "input",
+   "button",
+   "select",
+   "textarea",
+   "option",
+   "picture",
+   "source",
+   "video",
+   "audio",
+   "canvas",
+   "map",
+   "area"
 ]);
 
 const BLOCK = new Set([
-   "p", "div", "section", "article", "header", "footer", "main", "aside", "nav", "center",
-   "address", "figure", "figcaption", "body", "html", "dl", "dt", "dd", "details", "summary"
+   "p",
+   "div",
+   "section",
+   "article",
+   "header",
+   "footer",
+   "main",
+   "aside",
+   "nav",
+   "center",
+   "address",
+   "figure",
+   "figcaption",
+   "body",
+   "html",
+   "dl",
+   "dt",
+   "dd",
+   "details",
+   "summary"
 ]);
 
 const MAX_DEPTH = 120;
@@ -47,19 +92,23 @@ export function safeUrl(raw: string | null | undefined, kind: "link" | "image"):
    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
    /* Never Aurora's own host, on any port or scheme: the login cookie is host-scoped (cookies
       ignore the port), so another port on this host still rides it. */
-   if (typeof location !== "undefined" && location.hostname && u.hostname === location.hostname) return null;
+   if (typeof location !== "undefined" && location.hostname && u.hostname === location.hostname)
+      return null;
    return u.href;
 }
 
 /* Text -> markdown-inert text. Backslash-escape the markdown metacharacters (CommonMark
    unescapes any escaped ASCII punctuation back to the literal), then entity-encode < > &. */
 export function escapeMd(s: string): string {
-   return s
-      .replace(/\u0000/g, "")
-      .replace(/[\\`*_{}[\]()#+\-.!|~=]/g, "\\$&")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+   return (
+      s
+         // eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
+         .replace(/\u0000/g, "")
+         .replace(/[\\`*_{}[\]()#+\-.!|~=]/g, "\\$&")
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+   );
 }
 
 /* A URL inside markdown's (...) destination: parens and spaces must not end it early. */
@@ -95,7 +144,8 @@ function px(v: string | null | undefined): number {
 /* The width and height the sender asked for (attributes first, then simple pixel styles). */
 export function intendedSize(img: Element): { w: number; h: number } {
    const s = styleOf(img);
-   const fromStyle = (side: string): number => px(new RegExp(`(?:^|;)${side}:([^;]*)`).exec(s)?.[1]);
+   const fromStyle = (side: string): number =>
+      px(new RegExp(`(?:^|;)${side}:([^;]*)`).exec(s)?.[1]);
    return {
       w: px(img.getAttribute("width")) || fromStyle("width"),
       h: px(img.getAttribute("height")) || fromStyle("height")
@@ -172,22 +222,32 @@ interface Ctx {
    images: number; // real remote images emitted (https; tracking pixels excluded)
 }
 
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const PRE_RE = /\u0000PRE(\d+)\u0000/g;
 const PRE_TOKEN = (n: number): string => `\u0000PRE${n}\u0000`;
 
 /* Raw text for code: visible text only, never NUL (the PRE token's delimiter). */
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const codeText = (el: Element): string => flatText(el).replace(/\u0000/g, "");
 
 /* In an inline context (a heading, emphasis, a link, a list item, ...) a code block can't be
    fenced, so it degrades to escaped single-line text. */
 function inlinePre(s: string, ctx: Ctx): string {
-   return s.replace(PRE_RE, (_m, n: string) => escapeMd((ctx.pre[Number(n)]?.raw ?? "").replace(/\s+/g, " ").trim()));
+   return s.replace(PRE_RE, (_m, n: string) =>
+      escapeMd((ctx.pre[Number(n)]?.raw ?? "").replace(/\s+/g, " ").trim())
+   );
 }
 
 /* Children as one line of inline markdown. Leading/trailing space is reported separately, so a
    wrapper (** or [..]) can sit inside it ("Hello<b> world</b>" keeps its space). */
-function inlineParts(node: Node, ctx: Ctx, depth: number): { text: string; lead: string; trail: string } {
-   const raw = inlinePre(children(node, ctx, depth), ctx).replace(/\\\n/g, " ").replace(/\s*\n+\s*/g, " ");
+function inlineParts(
+   node: Node,
+   ctx: Ctx,
+   depth: number
+): { text: string; lead: string; trail: string } {
+   const raw = inlinePre(children(node, ctx, depth), ctx)
+      .replace(/\\\n/g, " ")
+      .replace(/\s*\n+\s*/g, " ");
    return { text: raw.trim(), lead: /^\s/.test(raw) ? " " : "", trail: /\s$/.test(raw) ? " " : "" };
 }
 
@@ -221,7 +281,8 @@ function children(node: Node, ctx: Ctx, depth: number): string {
    let run: Array<{ raw: string; line: string }> = [];
    let gap = ""; // whitespace between run members, kept if the run turns out to be a single item
    const flush = (): void => {
-      if (run.length > 1 && run.some((r) => r.raw.includes("\n"))) out += `\n\n${run.map((r) => r.line).join(" ")}\n\n`;
+      if (run.length > 1 && run.some((r) => r.raw.includes("\n")))
+         out += `\n\n${run.map((r) => r.line).join(" ")}\n\n`;
       else out += run.map((r) => r.raw).join(gap);
       run = [];
       gap = "";
@@ -320,7 +381,10 @@ function walk(node: Node, ctx: Ctx, depth: number): string {
             plain-text reply quoting) stays inside the quote. */
          const inner = normalize(children(el, ctx, depth), ctx, true);
          if (!inner) return "";
-         return `\n\n${inner.split("\n").map((l) => (l ? `> ${l}` : ">")).join("\n")}\n\n`;
+         return `\n\n${inner
+            .split("\n")
+            .map((l) => (l ? `> ${l}` : ">"))
+            .join("\n")}\n\n`;
       }
       case "table":
       case "thead":
@@ -357,7 +421,10 @@ function list(el: Element, ctx: Ctx, depth: number, indent: string): string {
             text += walk(c, ctx, depth + 2);
          }
       }
-      const t = inlinePre(text, ctx).replace(/\\\n/g, " ").replace(/\s*\n+\s*/g, " ").trim();
+      const t = inlinePre(text, ctx)
+         .replace(/\\\n/g, " ")
+         .replace(/\s*\n+\s*/g, " ")
+         .trim();
       lines.push(`${indent}${marker} ${t}`);
       lines.push(...nested);
    }
@@ -366,6 +433,7 @@ function list(el: Element, ctx: Ctx, depth: number, indent: string): string {
 
 /* A cell whose markdown starts a block construct must not be joined onto one line with others
    (it would turn the whole row into a heading, quote, list, or fence). */
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const BLOCK_START = /^(#|>|- |\d+\. |`{3,}|\u0000PRE)/;
 
 /* A table row: short single-line cells share one line ("a · b"); anything bigger stacks. */
@@ -407,10 +475,16 @@ function normalize(md: string, ctx: Ctx, restorePre: boolean): string {
    });
    for (let i = 0; i < lines.length; i++) {
       const next = lines[i + 1];
-      if (endsInBreak(lines[i]) && (next === undefined || next.trim() === "")) lines[i] = lines[i].slice(0, -1).replace(/[ \t]+$/, "");
+      if (endsInBreak(lines[i]) && (next === undefined || next.trim() === ""))
+         lines[i] = lines[i].slice(0, -1).replace(/[ \t]+$/, "");
    }
-   const out = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-   return restorePre ? out.replace(PRE_RE, (_m, n: string) => ctx.pre[Number(n)]?.fenced ?? "") : out;
+   const out = lines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+   return restorePre
+      ? out.replace(PRE_RE, (_m, n: string) => ctx.pre[Number(n)]?.fenced ?? "")
+      : out;
 }
 
 export interface MdResult {

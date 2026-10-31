@@ -184,7 +184,13 @@ export class AlarmChime {
    /* One sine note with the daemon's linear ADSR: 10% attack to peak, 10% decay to the 0.7
       sustain, 60% sustain, 20% release to zero. Returns the oscillator so the caller can hang
       an onended on the final note. */
-   private tone(ctx: AudioContext, hz: number, start: number, dur: number, peak = PEAK): OscillatorNode {
+   private tone(
+      ctx: AudioContext,
+      hz: number,
+      start: number,
+      dur: number,
+      peak = PEAK
+   ): OscillatorNode {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
@@ -208,7 +214,13 @@ export class AlarmChime {
 
    private suspendIfIdle(ctx: AudioContext): void {
       try {
-         if (this.ctx === ctx && !this.loopTimer && !this.ringTimer && !this.chimePlaying() && ctx.state === "running") {
+         if (
+            this.ctx === ctx &&
+            !this.loopTimer &&
+            !this.ringTimer &&
+            !this.chimePlaying() &&
+            ctx.state === "running"
+         ) {
             void ctx.suspend().catch(() => {});
          }
       } catch {

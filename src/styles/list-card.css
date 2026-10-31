@@ -24,6 +24,7 @@
 }
 /* More below the fold: fade the bottom edge instead of showing a scrollbar. */
 .lcard.overflowing {
+   /* color-ok: a mask reads only alpha */
    -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent);
    mask-image: linear-gradient(to bottom, #000 78%, transparent);
 }

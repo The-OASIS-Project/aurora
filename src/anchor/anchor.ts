@@ -78,9 +78,30 @@ interface StateParams {
    reddens the core and quiets the rest. */
 const STATE_PARAMS: Record<ReactorState, StateParams> = {
    idle: { barGain: 0.45, coreBase: 0.48, corePulse: 0.14, pulseRate: 0.9, gaugeGain: 0.3, hue: 0 },
-   listening: { barGain: 1.0, coreBase: 0.8, corePulse: 0.26, pulseRate: 2.1, gaugeGain: 0.34, hue: 0 },
-   thinking: { barGain: 0.3, coreBase: 0.7, corePulse: 0.58, pulseRate: 3.4, gaugeGain: 1.0, hue: 0 },
-   speaking: { barGain: 1.0, coreBase: 0.92, corePulse: 0.42, pulseRate: 2.6, gaugeGain: 0.42, hue: 0 },
+   listening: {
+      barGain: 1.0,
+      coreBase: 0.8,
+      corePulse: 0.26,
+      pulseRate: 2.1,
+      gaugeGain: 0.34,
+      hue: 0
+   },
+   thinking: {
+      barGain: 0.3,
+      coreBase: 0.7,
+      corePulse: 0.58,
+      pulseRate: 3.4,
+      gaugeGain: 1.0,
+      hue: 0
+   },
+   speaking: {
+      barGain: 1.0,
+      coreBase: 0.92,
+      corePulse: 0.42,
+      pulseRate: 2.6,
+      gaugeGain: 0.42,
+      hue: 0
+   },
    error: { barGain: 0.16, coreBase: 0.46, corePulse: 0.5, pulseRate: 4.6, gaugeGain: 0.25, hue: 1 }
 };
 
@@ -334,10 +355,26 @@ export class Anchor {
       /* Two gimbal gauge arcs (throughput, hesitation), teal-family so they
          harmonize, each a partial ring with an orbiting head = purpose. */
       this.rings.push(
-         this.makeArc(1.5, 0.06, new THREE.Euler(1.15, 0.35, 0), 0.28, Math.PI * 1.35, this.cAccent, this.cAccentGlow)
+         this.makeArc(
+            1.5,
+            0.06,
+            new THREE.Euler(1.15, 0.35, 0),
+            0.28,
+            Math.PI * 1.35,
+            this.cAccent,
+            this.cAccentGlow
+         )
       );
       this.rings.push(
-         this.makeArc(1.95, 0.0525, new THREE.Euler(0.6, -0.5, 0.9), -0.16, Math.PI * 1.0, this.cCool, this.cCoolGlow)
+         this.makeArc(
+            1.95,
+            0.0525,
+            new THREE.Euler(0.6, -0.5, 0.9),
+            -0.16,
+            Math.PI * 1.0,
+            this.cCool,
+            this.cCoolGlow
+         )
       );
       this.createSparks();
 
@@ -396,10 +433,7 @@ export class Anchor {
          depthWrite: false,
          fog: true
       });
-      const mesh = new THREE.Mesh(
-         new THREE.TorusGeometry(radius, tube, 16, 180, arcLen),
-         arcMat
-      );
+      const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, tube, 16, 180, arcLen), arcMat);
       mesh.rotation.copy(tilt);
 
       /* The head is a bright ADDITIVE glow nucleus - blown-out bright so it reads as a solid
@@ -551,6 +585,7 @@ export class Anchor {
       cv.width = cv.height = s;
       const ctx = cv.getContext("2d")!;
       const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      /* color-ok: a white alpha sprite, tinted by the material's color (the palette) where drawn */
       g.addColorStop(0, "rgba(255,255,255,1)");
       g.addColorStop(0.4, "rgba(255,255,255,0.35)");
       g.addColorStop(1, "rgba(255,255,255,0)");
@@ -768,7 +803,10 @@ export class Anchor {
          (time-to-first-token), gated by gauge activity so an idle ring stays smooth, and
          capped so the head can near-stall but never reverse. The oscillation has zero mean,
          so the average orbit rate is unchanged - only its evenness reads the signal. */
-      const surgeDepth = Math.min(0.85, 1.4 * Math.max(0, this.p.gaugeGain - 0.4) * this.hesitation);
+      const surgeDepth = Math.min(
+         0.85,
+         1.4 * Math.max(0, this.p.gaugeGain - 0.4) * this.hesitation
+      );
       const surge = 1 + surgeDepth * Math.sin(mt * 5); // in [0.15, 1.85]: forward-only lurch
       this.rings.forEach((r, i) => {
          const speed = r.spin * (0.7 + this.p.gaugeGain * 0.95) * (i === 1 ? surge : 1) * bootSpin;

@@ -37,9 +37,11 @@ export interface ParsedAttachments {
 /* One image marker: an uploaded image id, or a legacy inline raster data URI (base64). Matched
    ANCHORED against a single candidate slice only (never scanned across the whole message), so the
    parse stays linear however long or hostile the text is. */
-const IMAGE_ONE = /^\[IMAGE:(img_[a-zA-Z0-9]{12}|data:image\/(?:jpeg|jpg|png|gif|webp);base64,[A-Za-z0-9+/]+={0,2})\]$/;
+const IMAGE_ONE =
+   /^\[IMAGE:(img_[a-zA-Z0-9]{12}|data:image\/(?:jpeg|jpg|png|gif|webp);base64,[A-Za-z0-9+/]+={0,2})\]$/;
 /* One document header line (filename is at most 255 bytes, so the line is bounded). */
-const DOC_HEADER = /^\[ATTACHED DOCUMENT:\s*(.+?)\s*\((\d+)\s*bytes\)(?:\s*blob:(blb_[a-zA-Z0-9]{12}))?\]$/;
+const DOC_HEADER =
+   /^\[ATTACHED DOCUMENT:\s*(.+?)\s*\((\d+)\s*bytes\)(?:\s*blob:(blb_[a-zA-Z0-9]{12}))?\]$/;
 const DOC_OPEN = "[ATTACHED DOCUMENT:";
 const DOC_END = "[END DOCUMENT]";
 const MAX_HEADER = 600;
@@ -71,7 +73,12 @@ function leadingDocs(text: string): { docs: ParsedDoc[]; rest: string } {
          content = text.slice(headerEnd + 1, endAt);
          after = endAt + 1 + DOC_END.length;
       }
-      docs.push({ filename: header[1], size: Number(header[2]), content, blobId: header[3] || undefined });
+      docs.push({
+         filename: header[1],
+         size: Number(header[2]),
+         content,
+         blobId: header[3] || undefined
+      });
       i = after;
    }
    return { docs, rest: docs.length ? text.slice(i) : text };
@@ -94,8 +101,12 @@ function trailingImages(text: string): { images: ParsedImage[]; rest: string } {
    return { images, rest: images.length ? rest : text };
 }
 
-export function parseAttachments(raw: string, role: "user" | "assistant" = "user"): ParsedAttachments {
-   const { docs, rest } = role === "user" ? leadingDocs(raw) : { docs: [] as ParsedDoc[], rest: raw };
+export function parseAttachments(
+   raw: string,
+   role: "user" | "assistant" = "user"
+): ParsedAttachments {
+   const { docs, rest } =
+      role === "user" ? leadingDocs(raw) : { docs: [] as ParsedDoc[], rest: raw };
    const { images, rest: text } = trailingImages(rest);
    return { text: text.trim(), images, docs };
 }
@@ -123,7 +134,12 @@ export function docTypeLabel(filename: string): string {
    the inverse of the leading-document parse above, and the same shape the existing WebUI emits.
    The daemon persists this text verbatim and the LLM reads the extracted content; on reload
    parseAttachments() turns it back into a chip. `blob:<id>` only when an original is stored. */
-export function buildDocMarker(d: { filename: string; size: number; content: string; blobId?: string }): string {
+export function buildDocMarker(d: {
+   filename: string;
+   size: number;
+   content: string;
+   blobId?: string;
+}): string {
    const blob = d.blobId ? ` blob:${d.blobId}` : "";
    return `[ATTACHED DOCUMENT: ${d.filename} (${d.size} bytes)${blob}]\n${d.content}\n[END DOCUMENT]`;
 }

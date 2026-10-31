@@ -139,7 +139,8 @@ export class MusicAudio {
          counts as secure over http, but a network origin (http://<ip>:5273) does not,
          so music decode silently dies there. Fail loudly and actionably instead. */
       if (!window.isSecureContext || typeof AudioDecoder === "undefined") {
-         const msg = "Music audio needs a secure context. Open the dashboard over https:// (or via localhost); a plain http://<ip> origin cannot decode audio.";
+         const msg =
+            "Music audio needs a secure context. Open the dashboard over https:// (or via localhost); a plain http://<ip> origin cannot decode audio.";
          console.error(
             `[music] ${msg} isSecureContext=${window.isSecureContext}, AudioDecoder=${typeof AudioDecoder}, origin=${window.location.origin}`
          );
@@ -149,7 +150,9 @@ export class MusicAudio {
 
       this.ctx = new AudioContext({ sampleRate: OPUS_RATE });
       if (this.ctx.sampleRate !== OPUS_RATE) {
-         console.warn(`[music] wanted 48kHz, got ${this.ctx.sampleRate}; playback may be off-speed`);
+         console.warn(
+            `[music] wanted 48kHz, got ${this.ctx.sampleRate}; playback may be off-speed`
+         );
       }
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this.muted ? 0 : this.volume;
@@ -189,9 +192,11 @@ export class MusicAudio {
       }
       this.worklet = new AudioWorkletNode(this.ctx, "music-processor", { outputChannelCount: [2] });
       this.worklet.connect(this.gain);
-      this.worklet.port.onmessage = (e: MessageEvent): void => {
+      this.worklet.port.onmessage = (
+         e: MessageEvent<{ type?: string; percent: number; bufferedMs?: number } | null>
+      ): void => {
          if (e.data?.type !== "buffer") return;
-         this.bufferPercent = e.data.percent as number;
+         this.bufferPercent = e.data.percent;
          if (typeof e.data.bufferedMs === "number") {
             /* Total buffered = worklet ring depth PLUS the WebCodecs decode-input
                backlog. Reporting worklet-only reads "empty" under main-thread load
@@ -199,7 +204,7 @@ export class MusicAudio {
                server's own ceiling so a runaway decode backlog can't over-report. */
             const dec = this.decoder;
             const backlogMs = dec && dec.decodeQueueSize ? dec.decodeQueueSize * MUSIC_FRAME_MS : 0;
-            this.bufferedMs = Math.min(BUFFERED_MS_MAX, (e.data.bufferedMs as number) + backlogMs);
+            this.bufferedMs = Math.min(BUFFERED_MS_MAX, e.data.bufferedMs + backlogMs);
             /* Gate the upstream send on activity: the worklet reports ~31/s for the whole
                life of the node, but while nothing plays that is just "0" the server can't
                use. Send every non-zero depth, plus the single 0 that marks a drain (so the
@@ -275,7 +280,10 @@ export class MusicAudio {
          /* Mono -> a DISTINCT copy for the right channel: left/right are transferred as
             separate buffers, and transferring one buffer twice would throw. */
          const right = chans[1] ?? left.slice();
-         this.worklet?.port.postMessage({ type: "audio", left, right }, [left.buffer, right.buffer]);
+         this.worklet?.port.postMessage({ type: "audio", left, right }, [
+            left.buffer,
+            right.buffer
+         ]);
       } catch (e) {
          console.warn("[music] decoded-audio handling failed:", e);
       } finally {
@@ -305,7 +313,8 @@ export class MusicAudio {
          "running" while the suspend is pending (and the reverse), so a state-guarded call can
          leave it suspended under "playing", or playing under "paused". */
       if (this.ctx.state === "closed") return;
-      if (paused) this.ctx.suspend().catch((e: unknown) => console.warn("[music] suspend failed:", e));
+      if (paused)
+         this.ctx.suspend().catch((e: unknown) => console.warn("[music] suspend failed:", e));
       else this.ctx.resume().catch((e: unknown) => console.warn("[music] resume failed:", e));
    }
 

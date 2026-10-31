@@ -38,7 +38,11 @@ describe("snapping a resized edge", () => {
    const neighbor = new DOMRect(600, 100, 300, 200); // left 600, right 900, top 100, bottom 300
 
    it("snaps a right edge flush against a neighbor, with the gap", () => {
-      expect(resizeSnapTarget("right", 580, [neighbor], vp)).toEqual({ pos: 588, guide: 588, screen: false });
+      expect(resizeSnapTarget("right", 580, [neighbor], vp)).toEqual({
+         pos: 588,
+         guide: 588,
+         screen: false
+      });
    });
 
    it("snaps a bottom edge flush above a neighbor, or level with its bottom", () => {
@@ -47,11 +51,19 @@ describe("snapping a resized edge", () => {
    });
 
    it("snaps to the screen edge", () => {
-      expect(resizeSnapTarget("right", 970, [], vp)).toEqual({ pos: 976, guide: 976, screen: true });
+      expect(resizeSnapTarget("right", 970, [], vp)).toEqual({
+         pos: 976,
+         guide: 976,
+         screen: true
+      });
    });
 
    it("leaves an edge alone when nothing is close", () => {
-      expect(resizeSnapTarget("left", 400, [neighbor], vp)).toEqual({ pos: 400, guide: null, screen: false });
+      expect(resizeSnapTarget("left", 400, [neighbor], vp)).toEqual({
+         pos: 400,
+         guide: null,
+         screen: false
+      });
    });
 
    it("ignores a stop the size limits wouldn't let the edge reach", () => {

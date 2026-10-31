@@ -73,9 +73,9 @@ export class Choreographer {
    private engaged = false;
    private engageAmt = 0;
 
-   private reducedMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+   /* The user's reduced-motion preference, read by the composition root (choreography never
+      touches the browser): no easing, no depth slide. */
+   constructor(private readonly reducedMotion = false) {}
 
    /*
     * Advance the choreography by dt seconds against the current state snapshot,
@@ -143,8 +143,7 @@ export class Choreographer {
          const node = this.nodeFor(el);
          const targetDepth = TIER_DEPTH[tier];
          const targetPresence = presenceFor(el.importance);
-         const targetEmphasis =
-            el.id === this.frontHolder ? emphasisFor(el.importance) : 0;
+         const targetEmphasis = el.id === this.frontHolder ? emphasisFor(el.importance) : 0;
 
          if (this.reducedMotion) {
             node.depth = targetDepth;
@@ -204,14 +203,10 @@ export class Choreographer {
             (e) => e.enabled !== false && !e.pinned && desiredTier(e.importance) === Tier.Front
          )
          .sort((a, b) =>
-            b.importance !== a.importance
-               ? b.importance - a.importance
-               : b.revision - a.revision
+            b.importance !== a.importance ? b.importance - a.importance : b.revision - a.revision
          );
 
-      const holder = this.frontHolder
-         ? state.find((e) => e.id === this.frontHolder)
-         : undefined;
+      const holder = this.frontHolder ? state.find((e) => e.id === this.frontHolder) : undefined;
       const holderStillWants = holder && desiredTier(holder.importance) === Tier.Front;
 
       if (!holderStillWants) {
@@ -229,11 +224,7 @@ export class Choreographer {
          but only after the holder has had its dwell: that pacing is what makes
          contention read as a sequence instead of a flicker. */
       const challenger = wants[0];
-      if (
-         challenger &&
-         challenger.id !== this.frontHolder &&
-         this.frontHeld >= FEEL.frontDwell
-      ) {
+      if (challenger && challenger.id !== this.frontHolder && this.frontHeld >= FEEL.frontDwell) {
          this.frontHolder = challenger.id;
          this.frontHeld = 0;
       }

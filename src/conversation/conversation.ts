@@ -15,12 +15,31 @@
  * presentation timing (the front/recede state machine). It never decides replies.
  */
 
-import type { ActivityStatus, ConversationItem, OutDocument, OutImage, ToolCall, UploadedDoc } from "../ingest/ingest.ts";
+import type {
+   ActivityStatus,
+   ConversationItem,
+   OutDocument,
+   OutImage,
+   ToolCall,
+   UploadedDoc
+} from "../ingest/ingest.ts";
 import type { EmailRef } from "../ingest/email.ts";
 import { addCorners } from "../render/corners.ts";
-import { openDocViewer, setDocBodyText, setDocBodyMessage, textDownload } from "../render/doc-viewer.ts";
-import { renderMarkdown, wireImageGate } from "./format.ts";
-import { hasVisual, splitVisualSegments, stripVisualsForStreaming, createVisualFrame, initVisuals, VISUAL_PROMPT_GAP_MS } from "./visual.ts";
+import {
+   openDocViewer,
+   setDocBodyText,
+   setDocBodyMessage,
+   textDownload
+} from "../render/doc-viewer.ts";
+import { renderMarkdown, wireImageGate } from "../render/markdown.ts";
+import {
+   hasVisual,
+   splitVisualSegments,
+   stripVisualsForStreaming,
+   createVisualFrame,
+   initVisuals,
+   VISUAL_PROMPT_GAP_MS
+} from "./visual.ts";
 import { emojify } from "../util/emoji.ts";
 import { compressImage } from "../util/image.ts";
 import { attachEmojiPicker } from "./emoji-picker.ts";
@@ -61,7 +80,12 @@ export interface ConversationController {
       stream (another viewer's turn) as a fresh bubble, deduped on message id. */
    linkStream(convId: number, streamId: number): void;
    adoptId(convId: number, streamId: number, messageId: number): boolean;
-   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void;
+   renderAppended(item: {
+      role: "user" | "assistant";
+      text: string;
+      messageId: number;
+      email?: EmailRef;
+   }): void;
    confirmTurn(text: string, ref?: string): void;
    noteRefusal(text: string): void;
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
@@ -262,7 +286,8 @@ export function mountConversation(
       pinned = !pinned;
       localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
       reflectPin();
-      if (pinned) summon(); // raise it now and hold
+      if (pinned)
+         summon(); // raise it now and hold
       else armIdle(); // release: resume the normal idle countdown
    });
 
@@ -382,7 +407,11 @@ export function mountConversation(
          d.blobId && opts.fetchDocument
             ? { filename: d.filename || "document", fetch: () => opts.fetchDocument!(d.blobId!) }
             : d.content && d.content.trim()
-              ? textDownload(d.filename || "document", d.content, isMarkdownDoc(d.filename) ? "text/markdown" : "text/plain")
+              ? textDownload(
+                   d.filename || "document",
+                   d.content,
+                   isMarkdownDoc(d.filename) ? "text/markdown" : "text/plain"
+                )
               : undefined;
       const subtitle = [docTypeLabel(d.filename), formatBytes(d.size)].filter(Boolean).join(" · ");
       openDocViewer({
@@ -390,7 +419,8 @@ export function mountConversation(
          subtitle,
          download,
          populate: (body) => {
-            if (d.content && d.content.trim()) setDocBodyText(body, d.content, isMarkdownDoc(d.filename));
+            if (d.content && d.content.trim())
+               setDocBodyText(body, d.content, isMarkdownDoc(d.filename));
             else setDocBodyMessage(body, "No extracted text for this document.");
          }
       });
@@ -578,7 +608,9 @@ export function mountConversation(
    };
 
    const capDetail = (s: string): string =>
-      s.length > TOOL_DETAIL_CAP ? `${s.slice(0, TOOL_DETAIL_CAP)}\n…(${s.length - TOOL_DETAIL_CAP} more chars)` : s;
+      s.length > TOOL_DETAIL_CAP
+         ? `${s.slice(0, TOOL_DETAIL_CAP)}\n…(${s.length - TOOL_DETAIL_CAP} more chars)`
+         : s;
 
    /* One labelled, colour-coded section of a pill's detail: the CALL (args, teal) vs the RESULT
       (cool-blue) so the two read distinctly. The value is untrusted -> bound via textContent. */
@@ -598,7 +630,8 @@ export function mountConversation(
    const renderToolDetail = (pill: ToolPill): void => {
       const parts: HTMLElement[] = [];
       if (pill.call.args) parts.push(buildToolPart("call", capDetail(pill.call.args)));
-      if (pill.call.result !== undefined) parts.push(buildToolPart("result", capDetail(pill.call.result)));
+      if (pill.call.result !== undefined)
+         parts.push(buildToolPart("result", capDetail(pill.call.result)));
       else if (pill.call.args) parts.push(buildToolPart("result", "(running…)"));
       if (parts.length) pill.detail.replaceChildren(...parts);
       else pill.detail.textContent = "(no detail)";
@@ -613,7 +646,10 @@ export function mountConversation(
    /* Reflect a contained failure on the group so a red pill hidden inside a collapsed "N tools"
       summary still surfaces (the summary reds too). */
    const updateGroupError = (g: ToolGroupEl): void => {
-      g.el.classList.toggle("has-error", g.pills.some((p) => p.call.error === true));
+      g.el.classList.toggle(
+         "has-error",
+         g.pills.some((p) => p.call.error === true)
+      );
    };
 
    const applyPillError = (pill: ToolPill): void => {
@@ -877,7 +913,12 @@ export function mountConversation(
    /* Non-origin render: a message_appended for the active conversation that we did NOT stream
       (another viewer's turn, or a server-side turn with no live stream here). Render a fresh
       bubble, deduped on message id (also guards against a reload + a late echo doubling). */
-   const renderAppended = (item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void => {
+   const renderAppended = (item: {
+      role: "user" | "assistant";
+      text: string;
+      messageId: number;
+      email?: EmailRef;
+   }): void => {
       if (item.messageId > 0 && renderedIds.has(item.messageId)) return; // already in the transcript
       if (item.role === "assistant" && hasVisual(item.text)) pendingVisuals = []; // that saved reply carries them
       const msg = appendMsg(item.role, item.text, item.email);
@@ -913,7 +954,6 @@ export function mountConversation(
       if (messageId > 0) renderedIds.add(messageId);
    };
    const hasMessage = (messageId: number): boolean => messageId > 0 && renderedIds.has(messageId);
-
 
    /* A red system error line in the transcript - a failed turn or a server error, shown
       in-context like the old WebUI (its DawnTranscript system 'Error: ...' entry) rather
@@ -1106,7 +1146,9 @@ export function mountConversation(
    };
    /* Turn refs are unique per page load: a reload resumes the same DAWN session, whose queued turns
       from the previous page may still echo or fail with THEIR refs. */
-   const pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)).replace(/-/g, "").slice(0, 8);
+   const pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2))
+      .replace(/-/g, "")
+      .slice(0, 8);
    let turnSeq = 0;
    const releaseTurn = (t: SentTurn): void => {
       for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
@@ -1121,7 +1163,10 @@ export function mountConversation(
    const renderPending = (): void => {
       if (!pendingRow) return;
       pendingRow.replaceChildren();
-      pendingRow.classList.toggle("shown", pendingDocs.length + pendingImages.length > 0 || !!pendingEmail);
+      pendingRow.classList.toggle(
+         "shown",
+         pendingDocs.length + pendingImages.length > 0 || !!pendingEmail
+      );
       if (pendingEmail) {
          const ref = pendingEmail;
          const c = document.createElement("span");
@@ -1193,7 +1238,21 @@ export function mountConversation(
 
    /* Accepted file types. Documents always; images only when the model can see them (vision
       gate). One source for both the picker's `accept` and the drag-drop filter. */
-   const DOC_EXTS = ["pdf", "txt", "md", "markdown", "doc", "docx", "csv", "json", "log", "rtf", "odt", "html", "xml"];
+   const DOC_EXTS = [
+      "pdf",
+      "txt",
+      "md",
+      "markdown",
+      "doc",
+      "docx",
+      "csv",
+      "json",
+      "log",
+      "rtf",
+      "odt",
+      "html",
+      "xml"
+   ];
    const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
    const DOC_EXT_SET = new Set(DOC_EXTS);
    const IMAGE_EXT_SET = new Set(IMAGE_EXTS);
@@ -1219,7 +1278,13 @@ export function mountConversation(
          files.map(async (f) => {
             const c = await compressImage(f);
             const { id } = await up(c.blob);
-            return { id, base64: c.base64, mimeType: c.mimeType, previewUrl: URL.createObjectURL(c.blob), blob: c.blob };
+            return {
+               id,
+               base64: c.base64,
+               mimeType: c.mimeType,
+               previewUrl: URL.createObjectURL(c.blob),
+               blob: c.blob
+            };
          })
       ).then((results) => {
          for (const r of results) if (r.status === "fulfilled") pendingImages.push(r.value);
@@ -1236,6 +1301,7 @@ export function mountConversation(
             renderPending();
             summon();
          })
+         .catch((e: unknown) => console.warn("[convo] attaching failed:", e)) // each upload settles on its own; this is the render after
          .finally(() => attachBtn?.classList.remove("busy"));
    };
    const onAttachClick = (): void => {
@@ -1364,13 +1430,22 @@ export function mountConversation(
       }
       /* An image with no message runs only on a DAWN that takes image-only turns
          (`image_only_turns`); an older one silently drops a turn with no text. */
-      if (!typed && pendingDocs.length === 0 && pendingImages.length > 0 && !(opts.imageOnlyTurns?.() ?? false)) {
+      if (
+         !typed &&
+         pendingDocs.length === 0 &&
+         pendingImages.length > 0 &&
+         !(opts.imageOnlyTurns?.() ?? false)
+      ) {
          opts.onImageNeedsText?.();
          return;
       }
       /* Without turn references, an image refusal can't say which turn it means, so only one image
          turn may be in flight at a time (keep this draft). With them (turn_refs) there's no limit. */
-      if (pendingImages.length && !(opts.turnRefs?.() ?? false) && held.some((t) => t.images.length > 0)) {
+      if (
+         pendingImages.length &&
+         !(opts.turnRefs?.() ?? false) &&
+         held.some((t) => t.images.length > 0)
+      ) {
          opts.onImageTurnBusy?.();
          return;
       }
@@ -1409,14 +1484,29 @@ export function mountConversation(
       const inlined = docMarkers ? (typed ? `${docMarkers}\n\n${typed}` : docMarkers) : typed;
       const sentText = structuredDocs ? typed : inlined;
       const documents = structuredDocs
-         ? pendingDocs.map((d) => ({ filename: d.filename, size: d.size, content: d.content, ...(d.blobId ? { blobId: d.blobId } : {}) }))
+         ? pendingDocs.map((d) => ({
+              filename: d.filename,
+              size: d.size,
+              content: d.content,
+              ...(d.blobId ? { blobId: d.blobId } : {})
+           }))
          : [];
       const displayedText = inlined + pendingImages.map((im) => `\n[IMAGE:${im.id}]`).join("");
-      const images: OutImage[] = pendingImages.map((im) => ({ data: im.base64, mime_type: im.mimeType }));
+      const images: OutImage[] = pendingImages.map((im) => ({
+         data: im.base64,
+         mime_type: im.mimeType
+      }));
       const imageIds = pendingImages.map((im) => im.id);
       const emailRefs: EmailRef[] = pendingEmail ? [pendingEmail] : [];
       const ref = `${pageTag}-${++turnSeq}`;
-      const snapshot = { ref, sentText, typed: input.value, docs: pendingDocs, images: pendingImages, email: pendingEmail };
+      const snapshot = {
+         ref,
+         sentText,
+         typed: input.value,
+         docs: pendingDocs,
+         images: pendingImages,
+         email: pendingEmail
+      };
       input.value = "";
       recallIndex = null; // the sent turn re-enters messages[]; next ArrowUp re-snapshots fresh
       autoGrow(); // collapse back to one line
@@ -1428,7 +1518,10 @@ export function mountConversation(
          back empty) and must not land in this one. */
       pendingVisuals = [];
       /* The chip shows from the draft: DAWN's echo of our own turn doesn't carry it (P1.4). */
-      held.push({ ...snapshot, msg: appendMsg("user", displayedText, snapshot.email ?? undefined) });
+      held.push({
+         ...snapshot,
+         msg: appendMsg("user", displayedText, snapshot.email ?? undefined)
+      });
       clearRefusal();
       summon();
       opts.onSubmit?.(sentText, {
@@ -1448,7 +1541,9 @@ export function mountConversation(
       already attachment-stripped (see appendMsg), so image-only / document-only turns
       come through empty and are skipped - matching WebUI's data-raw-text reader. */
    const userTurnTexts = (): string[] =>
-      messages.filter((m) => m.role === "user" && !m.visual && m.text.trim() !== "").map((m) => m.text);
+      messages
+         .filter((m) => m.role === "user" && !m.visual && m.text.trim() !== "")
+         .map((m) => m.text);
 
    /* Place a recalled entry into the composer: fill, resize, caret-to-end. A programmatic
       .value assignment does NOT fire the 'input' event, so this never trips the nav reset
@@ -1556,7 +1651,7 @@ export function mountConversation(
       never touches the person's draft or pending attachments. */
    let lastVisualSend = -Infinity;
    let lastVisualNotice = -Infinity;
-   /* Off-origin images in replies wait for a click (format.ts gateImages / 4.7). */
+   /* Off-origin images in replies wait for a click (render/markdown.ts gateImages / 4.7). */
    const disposeImageGate = wireImageGate(scroll);
    const disposeVisuals = initVisuals((text) => {
       const now = performance.now();
@@ -1575,7 +1670,16 @@ export function mountConversation(
       const ref = `${pageTag}-${++turnSeq}`;
       const msg = appendMsg("user", text);
       msg.visual = true;
-      held.push({ ref, sentText: text, typed: "", docs: [], images: [], email: null, msg, visual: true });
+      held.push({
+         ref,
+         sentText: text,
+         typed: "",
+         docs: [],
+         images: [],
+         email: null,
+         msg,
+         visual: true
+      });
       summon();
       opts.onSubmit?.(text, { turnRef: ref, fromVisual: true });
    });
@@ -1601,12 +1705,18 @@ export function mountConversation(
       adoptId,
       renderAppended,
       confirmTurn: (text: string, ref?: string) => {
-         const t = ref !== undefined ? held.find((x) => x.ref === ref) : held.find((x) => x.sentText.trim() === text.trim());
+         const t =
+            ref !== undefined
+               ? held.find((x) => x.ref === ref)
+               : held.find((x) => x.sentText.trim() === text.trim());
          if (t) releaseTurn(t);
       },
       releaseTurns: releaseAllTurns,
       noteRefusal,
-      rejectTurn: (which: "image" | "newest" | { ref: string }, reupload: boolean): string | null => {
+      rejectTurn: (
+         which: "image" | "newest" | { ref: string },
+         reupload: boolean
+      ): string | null => {
          const t =
             which === "image"
                ? held.find((x) => x.images.length > 0)
@@ -1626,13 +1736,16 @@ export function mountConversation(
             dropped), with its attachments. Restored together, so the text can't go out alone. */
          const restore = (imgs: PendingImage[]): void => {
             const draft = input.value.trim();
-            input.value = draft && t.typed.trim() ? `${t.typed.trim()}\n\n${draft}` : t.typed.trim() || draft;
+            input.value =
+               draft && t.typed.trim() ? `${t.typed.trim()}\n\n${draft}` : t.typed.trim() || draft;
             pendingDocs = [...t.docs, ...pendingDocs];
             /* The words asked about THIS email: it comes back with them, even over a chip attached
                since (only one email rides a message; the newer one is dropped with a note). */
             if (t.email) {
                if (pendingEmail && pendingEmail.messageId !== t.email.messageId) {
-                  opts.notify?.("The returned message's email replaced the one you attached since.");
+                  opts.notify?.(
+                     "The returned message's email replaced the one you attached since."
+                  );
                }
                pendingEmail = t.email;
             }
@@ -1645,7 +1758,9 @@ export function mountConversation(
                the same images again for fresh ids, so a retry doesn't fail the same way. */
             const up = opts.uploadImage;
             attachBtn?.classList.add("busy");
-            void Promise.allSettled(t.images.map((im) => up(im.blob).then(({ id }) => ({ ...im, id })))).then((results) => {
+            void Promise.allSettled(
+               t.images.map((im) => up(im.blob).then(({ id }) => ({ ...im, id })))
+            ).then((results) => {
                attachBtn?.classList.remove("busy");
                const ok: PendingImage[] = [];
                results.forEach((r, k) => {
@@ -1653,7 +1768,8 @@ export function mountConversation(
                   else URL.revokeObjectURL(t.images[k].previewUrl);
                });
                restore(ok);
-               if (ok.length < t.images.length) opts.notify?.("An image couldn't be re-attached. Attach it again.");
+               if (ok.length < t.images.length)
+                  opts.notify?.("An image couldn't be re-attached. Attach it again.");
             });
          } else {
             restore(t.images);

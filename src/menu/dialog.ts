@@ -116,10 +116,18 @@ export function openDialog(opts: DialogOptions): void {
       /* Modal: Tab cycles within the card, so focus can't leave it (or wander from a safe
          initial choice to a destructive one and then out of sight). */
       if (e.key === "Tab") {
-         const items = Array.from(card.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]"));
+         const items = Array.from(
+            card.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]")
+         );
          if (!items.length) return;
          const i = items.indexOf(document.activeElement as HTMLElement);
-         const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : i < 0 || i === items.length - 1 ? 0 : i + 1;
+         const next = e.shiftKey
+            ? i <= 0
+               ? items.length - 1
+               : i - 1
+            : i < 0 || i === items.length - 1
+              ? 0
+              : i + 1;
          e.preventDefault();
          items[next].focus();
       }

@@ -26,7 +26,12 @@ describe("parseReasoningCaps", () => {
          modes: [
             { mode: "disabled", efforts: [], budget: false },
             { mode: "bogus", efforts: ["low"] },
-            { mode: "enabled", efforts: ["none", "low", "medium"], budget: true, budget_tokens: { low: 1024, medium: 8192, bad: -1 } },
+            {
+               mode: "enabled",
+               efforts: ["none", "low", "medium"],
+               budget: true,
+               budget_tokens: { low: 1024, medium: 8192, bad: -1 }
+            },
             { mode: "enabled", efforts: ["high"] }
          ],
          default: { mode: "enabled", effort: "low" }
@@ -39,7 +44,12 @@ describe("parseReasoningCaps", () => {
    });
 
    it("tolerates a missing or invalid default", () => {
-      expect(parseReasoningCaps({ modes: [{ mode: "adaptive", efforts: ["low"] }], default: { mode: "x" } })?.default).toEqual({
+      expect(
+         parseReasoningCaps({
+            modes: [{ mode: "adaptive", efforts: ["low"] }],
+            default: { mode: "x" }
+         })?.default
+      ).toEqual({
          mode: "",
          effort: ""
       });
@@ -63,19 +73,49 @@ describe("reasoning labels", () => {
    });
 
    it("explains a pick the model doesn't offer, and stays quiet when it matches", () => {
-      const caps = parseReasoningCaps({ modes: [{ mode: "adaptive", efforts: ["low", "medium"] }] });
-      expect(reasoningNote({ mode: "disabled", effort: "low" }, { mode: "adaptive", effort: "low" }, caps)).toBe(
-         "Off isn't available on this model; running Adaptive."
-      );
-      expect(reasoningNote({ mode: "adaptive", effort: "xhigh" }, { mode: "adaptive", effort: "medium" }, caps)).toBe(
-         "Extra high isn't available on this model; running Medium."
-      );
-      expect(reasoningNote({ mode: "adaptive", effort: "low" }, { mode: "adaptive", effort: "low" }, caps)).toBe("");
-      expect(reasoningNote({ mode: null, effort: "" }, { mode: "adaptive", effort: "low" }, caps)).toBe("");
+      const caps = parseReasoningCaps({
+         modes: [{ mode: "adaptive", efforts: ["low", "medium"] }]
+      });
+      expect(
+         reasoningNote(
+            { mode: "disabled", effort: "low" },
+            { mode: "adaptive", effort: "low" },
+            caps
+         )
+      ).toBe("Off isn't available on this model; running Adaptive.");
+      expect(
+         reasoningNote(
+            { mode: "adaptive", effort: "xhigh" },
+            { mode: "adaptive", effort: "medium" },
+            caps
+         )
+      ).toBe("Extra high isn't available on this model; running Medium.");
+      expect(
+         reasoningNote(
+            { mode: "adaptive", effort: "low" },
+            { mode: "adaptive", effort: "low" },
+            caps
+         )
+      ).toBe("");
+      expect(
+         reasoningNote({ mode: null, effort: "" }, { mode: "adaptive", effort: "low" }, caps)
+      ).toBe("");
       /* A legacy "enabled" pick on an adaptive model is just "on" to DAWN: no note. */
-      expect(reasoningNote({ mode: "enabled", effort: "low" }, { mode: "adaptive", effort: "low" }, caps)).toBe("");
+      expect(
+         reasoningNote(
+            { mode: "enabled", effort: "low" },
+            { mode: "adaptive", effort: "low" },
+            caps
+         )
+      ).toBe("");
       /* Off keeps its effort pick; no effort note while disabled. */
-      expect(reasoningNote({ mode: "disabled", effort: "high" }, { mode: "disabled", effort: "low" }, caps)).toBe("");
+      expect(
+         reasoningNote(
+            { mode: "disabled", effort: "high" },
+            { mode: "disabled", effort: "low" },
+            caps
+         )
+      ).toBe("");
    });
 
    it("resolves the nearest offered effort, ties lower", () => {

@@ -31,7 +31,9 @@ export async function compressImage(file: File): Promise<CompressedImage> {
    ctx.drawImage(src, 0, 0, w, h);
    if (src instanceof ImageBitmap) src.close();
 
-   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
+   const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY)
+   );
    if (!blob) throw new Error("image encode failed");
    return { blob, base64: await blobToBase64(blob), mimeType: "image/jpeg" };
 }
@@ -65,7 +67,12 @@ function blobToBase64(blob: Blob): Promise<string> {
    return new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => {
-         const s = String(r.result);
+         /* readAsDataURL always yields a string; anything else is a failed read. */
+         if (typeof r.result !== "string") {
+            reject(new Error("base64 encode failed"));
+            return;
+         }
+         const s = r.result;
          const comma = s.indexOf(",");
          resolve(comma >= 0 ? s.slice(comma + 1) : s);
       };

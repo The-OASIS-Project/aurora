@@ -1,0 +1,5 @@
+# Commits git blame should skip: whole-tree formatting with no code change.
+# Use: git blame --ignore-revs-file .git-blame-ignore-revs (or set blame.ignoreRevsFile).
+
+# Format: Prettier, and a one-time reformat of the tree
+891ef89a6f82bbf40f1bc0ff8cbb61052d0f5ff1

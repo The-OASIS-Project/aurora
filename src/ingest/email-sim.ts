@@ -167,11 +167,36 @@ const PROMO_HTML = `<center><img src="https://promo.example.com/banner.png" alt=
 <base href="https://promo.example.com/"><a href="relative/path">Relative link</a></center>`;
 
 const SPECIALS: Array<{ from: [string, string]; subject: string; html: string; text: string }> = [
-   { from: ["The Weekly Build", "digest@news.example.net"], subject: "This week: calm UIs and fewer colors", html: NEWSLETTER_HTML, text: "The Weekly Build. Five things worth your time this week." },
-   { from: ["Example Shop", "orders@shop.example.com"], subject: "Your receipt for order #A-20931", html: RECEIPT_HTML, text: "Thanks for your order. Total $12.99." },
-   { from: ["Account Security", "security@examp1e-alerts.example.net"], subject: "New sign-in to your account", html: PHISH_HTML, text: "We noticed a sign-in from a new device." },
-   { from: ["Taylor Brooks", "taylor.brooks@example.org"], subject: "Quick favor", html: INJECTION_HTML, text: "Hi! Quick favor for the project. Thanks, see you Monday." },
-   { from: ["Example Promo", "deals@promo.example.com"], subject: "Fall sale: up to 40% off", html: PROMO_HTML, text: "Up to 40% off. Limited time." }
+   {
+      from: ["The Weekly Build", "digest@news.example.net"],
+      subject: "This week: calm UIs and fewer colors",
+      html: NEWSLETTER_HTML,
+      text: "The Weekly Build. Five things worth your time this week."
+   },
+   {
+      from: ["Example Shop", "orders@shop.example.com"],
+      subject: "Your receipt for order #A-20931",
+      html: RECEIPT_HTML,
+      text: "Thanks for your order. Total $12.99."
+   },
+   {
+      from: ["Account Security", "security@examp1e-alerts.example.net"],
+      subject: "New sign-in to your account",
+      html: PHISH_HTML,
+      text: "We noticed a sign-in from a new device."
+   },
+   {
+      from: ["Taylor Brooks", "taylor.brooks@example.org"],
+      subject: "Quick favor",
+      html: INJECTION_HTML,
+      text: "Hi! Quick favor for the project. Thanks, see you Monday."
+   },
+   {
+      from: ["Example Promo", "deals@promo.example.com"],
+      subject: "Fall sale: up to 40% off",
+      html: PROMO_HTML,
+      text: "Up to 40% off. Limited time."
+   }
 ];
 
 export class EmailSim implements EmailSource {
@@ -208,11 +233,19 @@ export class EmailSim implements EmailSource {
       return accountId === IMAP_ACCOUNT ? `INBOX:${n}` : n.toString(16).padStart(12, "0");
    }
 
-   private makeMessage(accountId: number, date: number, special?: (typeof SPECIALS)[number]): SimMessage {
+   private makeMessage(
+      accountId: number,
+      date: number,
+      special?: (typeof SPECIALS)[number]
+   ): SimMessage {
       const [fromName, fromAddr] = special ? special.from : this.pick(SENDERS);
-      const subject = special ? special.subject : this.pick(SUBJECTS).replace("%n", String(100 + Math.floor(this.rand() * 900)));
+      const subject = special
+         ? special.subject
+         : this.pick(SUBJECTS).replace("%n", String(100 + Math.floor(this.rand() * 900)));
       const lines = [this.pick(LINES), this.pick(LINES), this.pick(LINES)];
-      const bodyText = special ? special.text : `Hi,\n\n${lines.join(" ")}\n\nThanks,\n${fromName.split(" ")[0]}`;
+      const bodyText = special
+         ? special.text
+         : `Hi,\n\n${lines.join(" ")}\n\nThanks,\n${fromName.split(" ")[0]}`;
       const age = Date.now() / 1000 - date;
       return {
          row: {
@@ -295,7 +328,8 @@ export class EmailSim implements EmailSource {
       if (q.unreadOnly && !m.row.unread) return false;
       if (q.query) {
          const needle = q.query.toLowerCase();
-         const hay = `${m.row.subject} ${m.row.fromName} ${m.row.fromAddr} ${m.bodyText}`.toLowerCase();
+         const hay =
+            `${m.row.subject} ${m.row.fromName} ${m.row.fromAddr} ${m.bodyText}`.toLowerCase();
          if (!hay.includes(needle)) return false;
       }
       return true;
@@ -339,7 +373,9 @@ export class EmailSim implements EmailSource {
 
    async list(q: EmailListQuery): Promise<EmailListResult> {
       await this.wait();
-      const ids = (q.accountIds && q.accountIds.length ? q.accountIds : ACCOUNTS.map((a) => a.id)).slice().sort((a, b) => a - b);
+      const ids = (q.accountIds && q.accountIds.length ? q.accountIds : ACCOUNTS.map((a) => a.id))
+         .slice()
+         .sort((a, b) => a - b);
       ids.forEach((id) => this.account(id));
       const key = this.filterKey(q, ids);
       const limit = Math.min(50, Math.max(1, q.limit ?? 25));
@@ -353,7 +389,8 @@ export class EmailSim implements EmailSource {
          } catch {
             throw new EmailRequestError("CURSOR_STALE", "Invalid cursor");
          }
-         if (parsed.v !== 1 || parsed.f !== key || !parsed.pos) throw new EmailRequestError("CURSOR_STALE", "Cursor does not match this list");
+         if (parsed.v !== 1 || parsed.f !== key || !parsed.pos)
+            throw new EmailRequestError("CURSOR_STALE", "Cursor does not match this list");
          pos = parsed.pos;
       }
 
@@ -362,16 +399,28 @@ export class EmailSim implements EmailSource {
       let deferred = false; // a lane that failed this page but still has mail (the cursor must not end)
       for (const id of ids) {
          if (this.revoked(id)) {
-            partial.push({ accountId: id, code: "AUTH_REVOKED", message: "The sign-in for this account was revoked" });
+            partial.push({
+               accountId: id,
+               code: "AUTH_REVOKED",
+               message: "The sign-in for this account was revoked"
+            });
             continue;
          }
          if (this.flake(id)) {
-            partial.push({ accountId: id, code: "UNREACHABLE", message: "Couldn't reach the mail server" });
+            partial.push({
+               accountId: id,
+               code: "UNREACHABLE",
+               message: "Couldn't reach the mail server"
+            });
             const remaining = (this.inbox.get(id) ?? []).filter((m) => this.matches(m, q)).length;
             if ((pos[id] ?? 0) < remaining) deferred = true; // its position is kept for the next page
             continue;
          }
-         lanes.push({ id, items: (this.inbox.get(id) ?? []).filter((m) => this.matches(m, q)), at: pos[id] ?? 0 });
+         lanes.push({
+            id,
+            items: (this.inbox.get(id) ?? []).filter((m) => this.matches(m, q)),
+            at: pos[id] ?? 0
+         });
       }
 
       /* k-way merge, newest first. */
@@ -379,7 +428,11 @@ export class EmailSim implements EmailSource {
       while (rows.length < limit) {
          let best: (typeof lanes)[number] | null = null;
          for (const l of lanes) {
-            if (l.at < l.items.length && (!best || l.items[l.at].row.date > best.items[best.at].row.date)) best = l;
+            if (
+               l.at < l.items.length &&
+               (!best || l.items[l.at].row.date > best.items[best.at].row.date)
+            )
+               best = l;
          }
          if (!best) break;
          rows.push({ ...best.items[best.at].row });
@@ -395,17 +448,29 @@ export class EmailSim implements EmailSource {
       };
    }
 
-   async read(accountId: number, messageId: string, markRead: boolean): Promise<{ message: EmailMessage; unread: boolean }> {
+   async read(
+      accountId: number,
+      messageId: string,
+      markRead: boolean
+   ): Promise<{ message: EmailMessage; unread: boolean }> {
       await this.wait();
       this.account(accountId);
-      if (this.revoked(accountId)) throw new EmailRequestError("AUTH_REVOKED", "The sign-in for this account was revoked");
-      if (this.flake(accountId)) throw new EmailRequestError("TIMEOUT", "The mail server took too long");
+      if (this.revoked(accountId))
+         throw new EmailRequestError("AUTH_REVOKED", "The sign-in for this account was revoked");
+      if (this.flake(accountId))
+         throw new EmailRequestError("TIMEOUT", "The mail server took too long");
       const { list, index } = this.find(accountId, messageId);
       if (index < 0) throw new EmailRequestError("NOT_FOUND", "This message was moved or deleted");
       const m = list[index];
       if (markRead && m.row.unread) {
          m.row.unread = false;
-         this.emit({ accountId, state: this.bump(accountId), created: [], updated: [{ ...m.row }], destroyed: [] });
+         this.emit({
+            accountId,
+            state: this.bump(accountId),
+            created: [],
+            updated: [{ ...m.row }],
+            destroyed: []
+         });
       }
       return {
          message: {
@@ -422,14 +487,26 @@ export class EmailSim implements EmailSource {
             textTruncated: false,
             htmlTruncated: false,
             attachments: m.row.hasAttachments
-               ? [{ partId: "2", filename: "notes.pdf", mime: "application/pdf", size: 48213, inline: false }]
+               ? [
+                    {
+                       partId: "2",
+                       filename: "notes.pdf",
+                       mime: "application/pdf",
+                       size: 48213,
+                       inline: false
+                    }
+                 ]
                : []
          },
          unread: m.row.unread
       };
    }
 
-   async setFlags(accountId: number, messageIds: string[], flags: { unread?: boolean }): Promise<void> {
+   async setFlags(
+      accountId: number,
+      messageIds: string[],
+      flags: { unread?: boolean }
+   ): Promise<void> {
       await this.wait();
       this.account(accountId); // read state changes even on a read-only account (as DAWN allows)
       const updated: EmailRow[] = [];
@@ -439,21 +516,34 @@ export class EmailSim implements EmailSource {
          if (flags.unread !== undefined) list[index].row.unread = flags.unread;
          updated.push({ ...list[index].row });
       }
-      if (updated.length) this.emit({ accountId, state: this.bump(accountId), created: [], updated, destroyed: [] });
+      if (updated.length)
+         this.emit({ accountId, state: this.bump(accountId), created: [], updated, destroyed: [] });
    }
 
-   private async move(accountId: number, messageIds: string[], kind: "trash" | "archive"): Promise<EmailMoveResult> {
+   private async move(
+      accountId: number,
+      messageIds: string[],
+      kind: "trash" | "archive"
+   ): Promise<EmailMoveResult> {
       await this.wait();
       const acct = this.account(accountId);
       const result: EmailMoveResult = { done: [], failed: [] };
       for (const id of messageIds) {
          if (acct.readOnly) {
-            result.failed.push({ messageId: id, code: "READ_ONLY", message: "This account is read-only" });
+            result.failed.push({
+               messageId: id,
+               code: "READ_ONLY",
+               message: "This account is read-only"
+            });
             continue;
          }
          const { list, index } = this.find(accountId, id);
          if (index < 0) {
-            result.failed.push({ messageId: id, code: "NOT_FOUND", message: "This message was moved or deleted" });
+            result.failed.push({
+               messageId: id,
+               code: "NOT_FOUND",
+               message: "This message was moved or deleted"
+            });
             continue;
          }
          const [msg] = list.splice(index, 1);
@@ -462,7 +552,15 @@ export class EmailSim implements EmailSource {
          result.done.push({ messageId: id, undo });
       }
       if (result.done.length) {
-         this.emit({ accountId, state: this.bump(accountId), created: [], updated: [], destroyed: result.done.map((d) => d.messageId), kind, undo: false });
+         this.emit({
+            accountId,
+            state: this.bump(accountId),
+            created: [],
+            updated: [],
+            destroyed: result.done.map((d) => d.messageId),
+            kind,
+            undo: false
+         });
       }
       return result;
    }
@@ -483,11 +581,19 @@ export class EmailSim implements EmailSource {
          const h = this.held.get(t);
          this.held.delete(t); // single use
          if (!h || h.accountId !== accountId) {
-            result.failed.push({ undo: t, code: "NOT_FOUND", message: "It's no longer in Trash or Archive" });
+            result.failed.push({
+               undo: t,
+               code: "NOT_FOUND",
+               message: "It's no longer in Trash or Archive"
+            });
             continue;
          }
          if (h.expires < Date.now()) {
-            result.failed.push({ undo: t, code: "UNDO_EXPIRED", message: "It's too late to undo that" });
+            result.failed.push({
+               undo: t,
+               code: "UNDO_EXPIRED",
+               message: "It's too late to undo that"
+            });
             continue;
          }
          kind = h.kind;
@@ -500,7 +606,15 @@ export class EmailSim implements EmailSource {
       }
       if (result.restored.length) {
          const created = result.restored.flatMap((r) => (r.row ? [r.row] : []));
-         this.emit({ accountId, state: this.bump(accountId), created, updated: [], destroyed: [], kind, undo: true });
+         this.emit({
+            accountId,
+            state: this.bump(accountId),
+            created,
+            updated: [],
+            destroyed: [],
+            kind,
+            undo: true
+         });
       }
       return result;
    }
@@ -509,7 +623,9 @@ export class EmailSim implements EmailSource {
       await this.wait();
       return ACCOUNTS.map((a) => ({
          accountId: a.id,
-         inboxUnread: this.revoked(a.id) ? 0 : (this.inbox.get(a.id) ?? []).filter((m) => m.row.unread).length,
+         inboxUnread: this.revoked(a.id)
+            ? 0
+            : (this.inbox.get(a.id) ?? []).filter((m) => m.row.unread).length,
          status: this.revoked(a.id) ? "auth_revoked" : "ok"
       }));
    }
@@ -536,14 +652,32 @@ export class EmailSim implements EmailSource {
          const msg = this.makeMessage(acct.id, Math.floor(Date.now() / 1000));
          msg.row.unread = true;
          list.unshift(msg);
-         this.emit({ accountId: acct.id, state: this.bump(acct.id), created: [{ ...msg.row }], updated: [], destroyed: [] });
+         this.emit({
+            accountId: acct.id,
+            state: this.bump(acct.id),
+            created: [{ ...msg.row }],
+            updated: [],
+            destroyed: []
+         });
       } else if (roll < 0.85) {
          const m = list[Math.floor(this.rand() * Math.min(15, list.length))];
          m.row.unread = !m.row.unread;
-         this.emit({ accountId: acct.id, state: this.bump(acct.id), created: [], updated: [{ ...m.row }], destroyed: [] });
+         this.emit({
+            accountId: acct.id,
+            state: this.bump(acct.id),
+            created: [],
+            updated: [{ ...m.row }],
+            destroyed: []
+         });
       } else {
          const [m] = list.splice(Math.floor(this.rand() * Math.min(15, list.length)), 1);
-         this.emit({ accountId: acct.id, state: this.bump(acct.id), created: [], updated: [], destroyed: [m.row.messageId] });
+         this.emit({
+            accountId: acct.id,
+            state: this.bump(acct.id),
+            created: [],
+            updated: [],
+            destroyed: [m.row.messageId]
+         });
       }
    }
 }

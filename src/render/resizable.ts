@@ -63,7 +63,11 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
    }
 
    const edge = (): number => cssMovableEdge();
-   const maxW = (): number => Math.max(opts.minWidth, Math.min(window.innerWidth - 2 * edge(), opts.maxWidth?.() ?? Infinity));
+   const maxW = (): number =>
+      Math.max(
+         opts.minWidth,
+         Math.min(window.innerWidth - 2 * edge(), opts.maxWidth?.() ?? Infinity)
+      );
    const maxH = (): number => Math.max(opts.minHeight, window.innerHeight - 2 * edge());
    const clampW = (w: number): number => Math.round(Math.min(maxW(), Math.max(opts.minWidth, w)));
    const clampH = (h: number): number => Math.round(Math.min(maxH(), Math.max(opts.minHeight, h)));
@@ -162,26 +166,38 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       /* The moving edge snaps to the screen edges and other views' edges (movable.ts). */
       if (a.edges.right) {
          /* Pin the left edge, so a view placed by CSS `right:` grows toward the pointer. */
-         const right = a.snap.snap("right", a.left + a.w + dx, [a.left + opts.minWidth, a.left + a.maxW]);
+         const right = a.snap.snap("right", a.left + a.w + dx, [
+            a.left + opts.minWidth,
+            a.left + a.maxW
+         ]);
          width = cW(Math.min(right - a.left, W - a.edge - a.left));
          el.style.left = `${Math.round(a.left)}px`;
          el.style.right = "auto";
       }
       if (a.edges.left) {
          /* Growing left: the right edge stays put; never past the viewport's left gutter. */
-         const left = a.snap.snap("left", a.left + dx, [a.left + a.w - a.maxW, a.left + a.w - opts.minWidth]);
+         const left = a.snap.snap("left", a.left + dx, [
+            a.left + a.w - a.maxW,
+            a.left + a.w - opts.minWidth
+         ]);
          width = cW(Math.min(a.left + a.w - left, a.left + a.w - a.edge));
          el.style.left = `${Math.round(a.left + a.w - width)}px`;
          el.style.right = "auto";
       }
       if (a.edges.bottom) {
-         const bottom = a.snap.snap("bottom", a.top + a.h + dy, [a.top + opts.minHeight, a.top + a.maxH]);
+         const bottom = a.snap.snap("bottom", a.top + a.h + dy, [
+            a.top + opts.minHeight,
+            a.top + a.maxH
+         ]);
          height = cH(Math.min(bottom - a.top, H - a.edge - a.top));
          el.style.top = `${Math.round(a.top)}px`;
          el.style.bottom = "auto";
       }
       if (a.edges.top) {
-         const top = a.snap.snap("top", a.top + dy, [a.top + a.h - a.maxH, a.top + a.h - opts.minHeight]);
+         const top = a.snap.snap("top", a.top + dy, [
+            a.top + a.h - a.maxH,
+            a.top + a.h - opts.minHeight
+         ]);
          height = cH(Math.min(a.top + a.h - top, a.top + a.h - a.edge));
          el.style.top = `${Math.round(a.top + a.h - height)}px`;
          el.style.bottom = "auto";

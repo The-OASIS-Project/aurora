@@ -41,8 +41,32 @@ const md = new Marked({
 
 const purify = DOMPurify(window);
 const ALLOWED_TAGS = [
-   "p", "br", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "em", "del", "a", "ul", "ol", "li",
-   "blockquote", "pre", "code", "hr", "table", "thead", "tbody", "tr", "th", "td", "img"
+   "p",
+   "br",
+   "h1",
+   "h2",
+   "h3",
+   "h4",
+   "h5",
+   "h6",
+   "strong",
+   "em",
+   "del",
+   "a",
+   "ul",
+   "ol",
+   "li",
+   "blockquote",
+   "pre",
+   "code",
+   "hr",
+   "table",
+   "thead",
+   "tbody",
+   "tr",
+   "th",
+   "td",
+   "img"
 ];
 const ALLOWED_ATTR = ["href", "src", "alt", "title"];
 const FORBID_ATTR = ["style", "srcset", "background", "poster"];
@@ -92,7 +116,8 @@ purify.addHook("afterSanitizeAttributes", (node) => {
 /* Replace each blocked <img> with a placeholder showing its alt text, and unwrap any link
    whose URL was refused (it reads as plain text). */
 function placeholders(frag: DocumentFragment): void {
-   for (const a of Array.from(frag.querySelectorAll("a:not([href])"))) a.replaceWith(...Array.from(a.childNodes));
+   for (const a of Array.from(frag.querySelectorAll("a:not([href])")))
+      a.replaceWith(...Array.from(a.childNodes));
    for (const img of Array.from(frag.querySelectorAll("img[data-blocked]"))) {
       const ph = document.createElement("span");
       ph.className = "mail-img-blocked";
@@ -143,20 +168,29 @@ export interface RenderedBody {
 }
 
 /* Render one message body. `showImages` = the user pressed Show images for this message. */
-export function renderEmailBody(body: { html?: string; text: string }, showImages: boolean): RenderedBody {
+export function renderEmailBody(
+   body: { html?: string; text: string },
+   showImages: boolean
+): RenderedBody {
    if (body.html && body.html.trim()) {
       const { markdown, images, designWidth } = htmlToMarkdown(body.html);
       const html = md.parse(markdown, { async: false });
       showImagesNow = showImages;
       let clean: string;
       try {
-         clean = purify.sanitize(html, { ALLOWED_TAGS, ALLOWED_ATTR, FORBID_ATTR, ALLOW_DATA_ATTR: false });
+         clean = purify.sanitize(html, {
+            ALLOWED_TAGS,
+            ALLOWED_ATTR,
+            FORBID_ATTR,
+            ALLOW_DATA_ATTR: false
+         });
       } finally {
          showImagesNow = false;
       }
       /* Parse the sanitized HTML in an inert <template> (nothing loads or runs there), swap the
          blocked images for placeholders, and hand back its content. */
       const tpl = document.createElement("template");
+      // eslint-disable-next-line no-unsanitized/property -- `clean` is DOMPurify output, parsed in an inert <template>
       tpl.innerHTML = clean;
       const frag = tpl.content;
       placeholders(frag);

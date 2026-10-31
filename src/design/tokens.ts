@@ -108,6 +108,25 @@ export const PALETTE: Palette = {
 };
 
 /*
+ * The color ramps of DAWN's visual guidelines (the .c-purple ... .c-red classes a generated visual
+ * draws with, named in DAWN's prompt), [50, 200, 600, 800]. Aurora is always dark, so a visual
+ * fills with 800, strokes with 200 and sets its text in VISUAL_TEXT. Kept to DAWN's values so a
+ * visual looks as the model intended.
+ */
+export const VISUAL_RAMPS: Readonly<Record<string, readonly [string, string, string, string]>> = {
+   purple: ["#EEEDFE", "#AFA9EC", "#534AB7", "#3C3489"],
+   teal: ["#E1F5EE", "#5DCAA5", "#0F6E56", "#085041"],
+   coral: ["#FAECE7", "#F0997B", "#993C1D", "#712B13"],
+   pink: ["#FBEAF0", "#ED93B1", "#993556", "#72243E"],
+   gray: ["#F1EFE8", "#B4B2A9", "#5F5E5A", "#444441"],
+   blue: ["#E6F1FB", "#85B7EB", "#185FA5", "#0C447C"],
+   green: ["#EAF3DE", "#97C459", "#3B6D11", "#27500A"],
+   amber: ["#FAEEDA", "#EF9F27", "#854F0B", "#633806"],
+   red: ["#FCEBEB", "#F09595", "#A32D2D", "#791F1F"]
+};
+export const VISUAL_TEXT = { primary: "#F0F0F0", secondary: "#CCCCCC" } as const;
+
+/*
  * Type scale: the single source of truth for font size, named by ROLE the way the
  * palette is named by role. Every font-size in the stylesheets is one of these steps
  * (mirrored to --fs-* by applyType), so type stays consistent and retunes in one place.

@@ -16,6 +16,8 @@
  * Aurora's design tokens so a generated visual adopts the phosphor look.
  */
 
+import { PALETTE, VISUAL_RAMPS, VISUAL_TEXT } from "../design/tokens.ts";
+
 export interface VisualBlock {
    title: string;
    type: "svg" | "html";
@@ -23,8 +25,7 @@ export interface VisualBlock {
 }
 
 export type VisualSegment =
-   | { kind: "text"; content: string }
-   | { kind: "visual"; visual: VisualBlock };
+   { kind: "text"; content: string } | { kind: "visual"; visual: VisualBlock };
 
 /* One <dawn-visual> block. Title is attribute-quoted (no nested quotes), type is svg|html,
    body is everything up to the close tag (non-greedy so runs of visuals split cleanly). */
@@ -46,7 +47,10 @@ export function splitVisualSegments(text: string): VisualSegment[] {
    while ((m = VISUAL_TAG_RE.exec(text)) !== null) {
       const before = text.slice(last, m.index);
       if (before.trim()) segments.push({ kind: "text", content: before });
-      segments.push({ kind: "visual", visual: { title: m[1], type: m[2] as "svg" | "html", code: m[3].trim() } });
+      segments.push({
+         kind: "visual",
+         visual: { title: m[1], type: m[2] as "svg" | "html", code: m[3].trim() }
+      });
       last = m.index + m[0].length;
    }
    const after = text.slice(last);
@@ -58,7 +62,10 @@ export function splitVisualSegments(text: string): VisualSegment[] {
    mid-stream break) so raw XML never flashes in the bubble. The real iframes are built once
    the reply finalizes. */
 export function stripVisualsForStreaming(text: string): string {
-   return text.replace(VISUAL_TAG_RE, "").replace(/<dawn-visual[\s\S]*$/, "").trim();
+   return text
+      .replace(VISUAL_TAG_RE, "")
+      .replace(/<dawn-visual[\s\S]*$/, "")
+      .trim();
 }
 
 /* --- theme injected into every iframe -------------------------------------- */
@@ -71,8 +78,8 @@ let classCache: string | null = null;
 function buildThemeCss(): string {
    const s = getComputedStyle(document.documentElement);
    const v = (name: string): string => s.getPropertyValue(name).trim();
-   const ground = v("--ground") || "#05070a";
-   const raise = v("--ground-raise") || "#0b1016";
+   const ground = v("--ground") || PALETTE.ground;
+   const raise = v("--ground-raise") || PALETTE.groundRaise;
    return [
       ":root {",
       `  --color-bg-primary: ${ground};`,
@@ -96,25 +103,14 @@ function buildThemeCss(): string {
 /* The prebuilt class library the model draws against (DAWN's visual guidelines). Aurora is
    always dark, so only the dark ramp variant is emitted. */
 function buildVisualClasses(): string {
-   const ramps: Record<string, [string, string, string, string]> = {
-      purple: ["#EEEDFE", "#AFA9EC", "#534AB7", "#3C3489"],
-      teal: ["#E1F5EE", "#5DCAA5", "#0F6E56", "#085041"],
-      coral: ["#FAECE7", "#F0997B", "#993C1D", "#712B13"],
-      pink: ["#FBEAF0", "#ED93B1", "#993556", "#72243E"],
-      gray: ["#F1EFE8", "#B4B2A9", "#5F5E5A", "#444441"],
-      blue: ["#E6F1FB", "#85B7EB", "#185FA5", "#0C447C"],
-      green: ["#EAF3DE", "#97C459", "#3B6D11", "#27500A"],
-      amber: ["#FAEEDA", "#EF9F27", "#854F0B", "#633806"],
-      red: ["#FCEBEB", "#F09595", "#A32D2D", "#791F1F"]
-   };
    let ramp = "";
-   for (const [name, r] of Object.entries(ramps)) {
+   for (const [name, r] of Object.entries(VISUAL_RAMPS)) {
       const sel = `.c-${name}`;
       /* Dark: 800 fill, 200 stroke, light text. */
       ramp +=
          `${sel} rect, ${sel} ellipse, ${sel} circle, ${sel} polygon, ${sel} path:not([fill="none"]) { fill: ${r[3]}; stroke: ${r[1]}; }\n` +
-         `${sel} text, ${sel} .th, ${sel} .t { fill: #f0f0f0; }\n` +
-         `${sel} .ts { fill: #ccc; }\n`;
+         `${sel} text, ${sel} .th, ${sel} .t { fill: ${VISUAL_TEXT.primary}; }\n` +
+         `${sel} .ts { fill: ${VISUAL_TEXT.secondary}; }\n`;
    }
    return (
       ".t { font-family: var(--font-sans); font-size: 14px; fill: var(--color-text-primary); }\n" +
@@ -172,7 +168,7 @@ const BRIDGE_SCRIPT =
    image, fetch(), new Image()). Vendor code is inlined, so nothing legitimate needs a remote load.
    CSP only ever tightens: a meta the model writes later can't loosen this one. */
 const VISUAL_CSP =
-   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; ' +
+   "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; " +
    "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\">";
 
 /* Runs before the model's code: WebRTC isn't governed by CSP, and a STUN server name can carry data
@@ -194,30 +190,30 @@ export const VISUAL_PRELUDE =
    "<scr" +
    "ipt>(function(){try{delete window.RTCPeerConnection;delete window.webkitRTCPeerConnection;" +
    "window.RTCPeerConnection=undefined;window.webkitRTCPeerConnection=undefined}catch(e){}" +
-   `var TAG=/^(${FRAME_TAGS})$/i,SEL="${FRAME_TAGS.split("|").join(",")}",MARK=/<\s*(${FRAME_TAGS})[\s/>]/i;` +
+   `var TAG=/^(${FRAME_TAGS})$/i,SEL="${FRAME_TAGS.split("|").join(",")}",MARK=/<\\s*(${FRAME_TAGS})[\\s/>]/i;` + // \\s: a template literal would make a bare \s an "s"
    'function no(){throw new TypeError("Frames are not allowed in a visual")}' +
-   "function bad(n){if(!n||typeof n!==\"object\")return false;if(n.nodeType===1&&TAG.test(n.localName))return true;" +
+   'function bad(n){if(!n||typeof n!=="object")return false;if(n.nodeType===1&&TAG.test(n.localName))return true;' +
    "return!!(n.querySelector&&n.querySelector(SEL))}" +
    /* Fail closed: a guard that won't install falls back to a plain assignment of the guarded
       version; a property that refuses even that is replaced by a method that always refuses. */
    "function lock(o,k,v){try{Object.defineProperty(o,k,v)}catch(e){try{if(v.value)o[k]=v.value;else o[k]=undefined}catch(e2){try{o[k]=no}catch(e3){}}}}" +
-   "function guard(P,m){if(!P)return;var f=P[m];if(typeof f!==\"function\")return;" +
+   'function guard(P,m){if(!P)return;var f=P[m];if(typeof f!=="function")return;' +
    "lock(P,m,{value:function(){for(var i=0;i<arguments.length;i++)if(bad(arguments[i]))no();return f.apply(this,arguments)},writable:false,configurable:false})}" +
-   "function guardHTML(P,m){if(!P)return;var f=P[m];if(typeof f!==\"function\")return;" +
+   'function guardHTML(P,m){if(!P)return;var f=P[m];if(typeof f!=="function")return;' +
    "lock(P,m,{value:function(){for(var i=0;i<arguments.length;i++)if(arguments[i]!=null&&MARK.test(String(arguments[i])))no();return f.apply(this,arguments)},writable:false,configurable:false})}" +
    "function guardSet(P,k){if(!P)return;var d=Object.getOwnPropertyDescriptor(P,k);if(!d||!d.set)return;" +
    "lock(P,k,{get:d.get,set:function(v){if(MARK.test(String(v)))no();d.set.call(this,v)},enumerable:d.enumerable,configurable:false})}" +
    "var D=Document.prototype,ce=D.createElement,cens=D.createElementNS;" +
-   "lock(D,\"createElement\",{value:function(t){if(TAG.test(String(t)))no();return ce.apply(this,arguments)},writable:false,configurable:false});" +
-   "lock(D,\"createElementNS\",{value:function(ns,t){if(TAG.test(String(t).split(\":\").pop()))no();return cens.apply(this,arguments)},writable:false,configurable:false});" +
+   'lock(D,"createElement",{value:function(t){if(TAG.test(String(t)))no();return ce.apply(this,arguments)},writable:false,configurable:false});' +
+   'lock(D,"createElementNS",{value:function(ns,t){if(TAG.test(String(t).split(":").pop()))no();return cens.apply(this,arguments)},writable:false,configurable:false});' +
    "var N=window.Node&&Node.prototype,E=window.Element&&Element.prototype,F=window.DocumentFragment&&DocumentFragment.prototype,C=window.CharacterData&&CharacterData.prototype,S=window.ShadowRoot&&ShadowRoot.prototype;" +
-   "[\"appendChild\",\"insertBefore\",\"replaceChild\"].forEach(function(m){guard(N,m)});" +
-   "[\"append\",\"prepend\",\"before\",\"after\",\"replaceWith\",\"replaceChildren\",\"insertAdjacentElement\"].forEach(function(m){guard(E,m)});" +
-   "[\"append\",\"prepend\",\"replaceChildren\"].forEach(function(m){guard(F,m);guard(D,m)});" +
-   "[\"before\",\"after\",\"replaceWith\"].forEach(function(m){guard(C,m)});" +
-   "var R=window.Range&&Range.prototype;guard(R,\"insertNode\");guard(R,\"surroundContents\");guardHTML(D,\"execCommand\");" +
-   "guardSet(E,\"innerHTML\");guardSet(E,\"outerHTML\");guardSet(S,\"innerHTML\");" +
-   "guardHTML(E,\"insertAdjacentHTML\");guardHTML(E,\"setHTMLUnsafe\");guardHTML(S,\"setHTMLUnsafe\");guardHTML(E,\"setHTML\");guardHTML(S,\"setHTML\");guardHTML(D,\"write\");guardHTML(D,\"writeln\");guard(E,\"moveBefore\");" +
+   '["appendChild","insertBefore","replaceChild"].forEach(function(m){guard(N,m)});' +
+   '["append","prepend","before","after","replaceWith","replaceChildren","insertAdjacentElement"].forEach(function(m){guard(E,m)});' +
+   '["append","prepend","replaceChildren"].forEach(function(m){guard(F,m);guard(D,m)});' +
+   '["before","after","replaceWith"].forEach(function(m){guard(C,m)});' +
+   'var R=window.Range&&Range.prototype;guard(R,"insertNode");guard(R,"surroundContents");guardHTML(D,"execCommand");' +
+   'guardSet(E,"innerHTML");guardSet(E,"outerHTML");guardSet(S,"innerHTML");' +
+   'guardHTML(E,"insertAdjacentHTML");guardHTML(E,"setHTMLUnsafe");guardHTML(S,"setHTMLUnsafe");guardHTML(E,"setHTML");guardHTML(S,"setHTML");guardHTML(D,"write");guardHTML(D,"writeln");guard(E,"moveBefore");' +
    "})();</scr" +
    "ipt>";
 
@@ -234,7 +230,10 @@ export function neutralizeFrames(code: string): string {
    Quote-agnostic (single OR double): the model reaches for single-quoted HTML attributes to
    avoid escaping inside render_visual's JSON, so a "-only match would silently skip inlining
    and leave a dead external <script> - blanking the chart. (Mirrors DAWN's visual-render.js.) */
-async function inlineVendor(content: string, fetchVendor?: (path: string) => Promise<string>): Promise<string> {
+async function inlineVendor(
+   content: string,
+   fetchVendor?: (path: string) => Promise<string>
+): Promise<string> {
    const tags = content.match(/<script\s+src=(["'])(\/js\/vendor\/[^"']+)\1\s*>\s*<\/script>/gi);
    if (!tags) return content;
    let out = content;
@@ -246,12 +245,13 @@ async function inlineVendor(content: string, fetchVendor?: (path: string) => Pro
          pull the user's data into the visual's sandbox. Fetched through ingest with this app's
          login (DAWN serves /js/vendor only to a signed-in browser; a cookie-less fetch got its
          login page, which inlined as a script and blanked every chart). */
-      let path = "";
+      let path: string;
       try {
          path = new URL(src, window.location.origin).pathname;
       } catch {
          path = "";
       }
+      /* dawn-url-ok: inspects the path; the fetch goes through ingest's fetchVendorScript (dawnUrl) */
       if (!path.startsWith("/js/vendor/") || src.includes("\\") || !fetchVendor) {
          out = out.replace(tag, "");
          continue;
@@ -281,8 +281,11 @@ function triggerDownload(v: VisualBlock): void {
          standalone, add the xmlns + a ground-colored backdrop. */
       const style = `<defs><style>${themeCss()}${visualClasses()}</style></defs>`;
       body = v.code.replace(/(<svg[^>]*>)/, `$1\n${style}`);
-      if (body.indexOf("xmlns=") === -1) body = body.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
-      const bg = getComputedStyle(document.documentElement).getPropertyValue("--ground").trim() || "#05070a";
+      if (body.indexOf("xmlns=") === -1)
+         body = body.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+      const bg =
+         getComputedStyle(document.documentElement).getPropertyValue("--ground").trim() ||
+         PALETTE.ground;
       body = body.replace(/(<\/defs>\s*)/, `$1<rect width="100%" height="100%" fill="${bg}"/>\n`);
    } else {
       body = `<!DOCTYPE html><html><head><style>${themeCss()}${visualClasses()}</style></head><body>${v.code}</body></html>`;
@@ -298,7 +301,10 @@ function triggerDownload(v: VisualBlock): void {
 }
 
 /* Build the container (download button + sandboxed iframe) for one visual. */
-export function createVisualFrame(v: VisualBlock, fetchVendor?: (path: string) => Promise<string>): HTMLElement {
+export function createVisualFrame(
+   v: VisualBlock,
+   fetchVendor?: (path: string) => Promise<string>
+): HTMLElement {
    const container = document.createElement("div");
    container.className = "convo-visual";
    container.setAttribute("data-visual-title", v.title); // title is DAWN text; attribute, not HTML
@@ -333,7 +339,9 @@ export function createVisualFrame(v: VisualBlock, fetchVendor?: (path: string) =
          "</body></html>";
       const vb = parseViewBox(v.code);
       iframe.style.height =
-         vb && vb.width > 0 ? `${Math.min(Math.ceil((vb.height / vb.width) * 680), vb.height, 800)}px` : "400px";
+         vb && vb.width > 0
+            ? `${Math.min(Math.ceil((vb.height / vb.width) * 680), vb.height, 800)}px`
+            : "400px";
    } else {
       /* Chart.js sizing: a responsive chart locks to the canvas's default 300x150 ratio at
          construction, so wrap the canvas in a definite-height box and flip the chart to
@@ -349,7 +357,10 @@ export function createVisualFrame(v: VisualBlock, fetchVendor?: (path: string) =
             "html,body{height:100%}body{margin:0;padding:0;overflow:hidden}" +
             `.dawn-chart-box{position:relative;width:100%;height:${boxH}px}` +
             ".dawn-chart-box>canvas{display:block!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important}";
-         code = code.replace(/(<canvas\b[^>]*>\s*<\/canvas>)/gi, '<div class="dawn-chart-box">$1</div>');
+         code = code.replace(
+            /(<canvas\b[^>]*>\s*<\/canvas>)/gi,
+            '<div class="dawn-chart-box">$1</div>'
+         );
          chartFix =
             "<scr" +
             "ipt>\nfunction _dawnFill(){if(!window.Chart)return;var m=Chart.instances||{};" +
@@ -377,6 +388,7 @@ export function createVisualFrame(v: VisualBlock, fetchVendor?: (path: string) =
    /* Vendor scripts (Chart.js) must be inlined; fetch may be async, so attach the frame now
       and set srcdoc once ready. */
    void inlineVendor(content, fetchVendor).then((resolved) => {
+      // eslint-disable-next-line no-unsanitized/property -- model code by design: a sandboxed, opaque-origin frame under VISUAL_CSP, with VISUAL_PRELUDE run first
       iframe.srcdoc = resolved;
    });
    container.appendChild(iframe);
@@ -452,7 +464,10 @@ export function initVisuals(onPrompt: (text: string) => void): () => void {
       themeCache = null;
       classCache = null;
    });
-   observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
+   observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+   });
 
    return () => {
       window.removeEventListener("message", onMessage);

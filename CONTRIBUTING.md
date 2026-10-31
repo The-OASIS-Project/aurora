@@ -21,9 +21,12 @@ npm run dev        # https://localhost:5273
 Run the same checks CI runs, before every commit:
 
 ```bash
-npm run typecheck  # strict TypeScript: the render seam is enforced by the type system
-npm test           # the unit tests (vitest)
-npm run build      # the production bundle
+npm run format        # Prettier: rewrites code, so run it first
+npm run typecheck     # strict TypeScript: the render seam is enforced by the type system
+npm run lint          # ESLint: type-aware checks, HTML-sink safety, the layer rules
+npm run check:source  # colors from tokens, DAWN URLs tagged, no em dashes
+npm test              # the unit tests (vitest)
+npm run build         # the production bundle
 ```
 
 CI also runs CodeQL and an audit of the runtime dependencies. (`./install-git-hooks.sh` installs a
@@ -47,7 +50,14 @@ tried in a browser: for audio, the reactor or layout, a visual check is the only
 - **The user's surface, not the operator's console.** Aurora acts on the user's own data and session.
   It never sends DAWN's operator or admin requests, and a destructive action needs a named
   confirmation from a deliberate user gesture. [CLAUDE.md](CLAUDE.md) lists the requests Aurora makes.
-- 3-space indent, and no em dashes in prose.
+- 3-space indent and 100-column lines (Prettier enforces both), and no em dashes in prose.
+
+Most of these are checked, not just asked for. ESLint (`eslint.config.js`) holds the layer rules:
+Three.js only in `src/anchor/`; requests and sockets only in `src/ingest/`; state and choreography
+free of the browser and of the layers above them; render and util free of view code; the ingest
+reaching views only through its sinks; only `main.ts` picking the concrete client. It also refuses an
+unsanitized value reaching `innerHTML`, `srcdoc` and the other HTML sinks. `scripts/check-source.mjs`
+holds the color, DAWN-URL and em-dash rules.
 
 Some changes have a guide of their own:
 
@@ -64,6 +74,8 @@ should be tested with hostile input, not only the happy path.
 
 - `main` is protected: changes arrive by pull request, CI must pass, and pull requests land as merge
   commits.
+- `git blame` should skip the one-time reformat: `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+  (GitHub's blame view does this on its own).
 - One logical change per commit. The message says what changed and why, in plain language a reader
   without your context can follow.
 - By contributing you agree to license your contribution under GPLv3 or later.

@@ -95,7 +95,9 @@ applyUiScale();
 
 /* 2. The layers + views. */
 const store = new Store();
-const choreographer = new Choreographer();
+const choreographer = new Choreographer(
+   window.matchMedia("(prefers-reduced-motion: reduce)").matches
+);
 
 const field = document.getElementById("field") as HTMLElement;
 const docks = document.getElementById("docks") as HTMLElement;
@@ -148,9 +150,12 @@ const DISPLAY_KEY = "aurora.display";
 const display = ((): { starfield: boolean; clouds: boolean; bloom: boolean } => {
    const d = { starfield: true, clouds: true, bloom: true };
    try {
-      const saved = JSON.parse(localStorage.getItem(DISPLAY_KEY) ?? "{}") as Record<string, unknown>;
+      const saved = JSON.parse(localStorage.getItem(DISPLAY_KEY) ?? "{}") as Record<
+         string,
+         unknown
+      >;
       for (const k of Object.keys(d) as (keyof typeof d)[]) {
-         if (typeof saved[k] === "boolean") d[k] = saved[k] as boolean;
+         if (typeof saved[k] === "boolean") d[k] = saved[k];
       }
    } catch {
       /* corrupt/absent -> defaults (all on) */
@@ -320,7 +325,9 @@ const libraryPanel = mountLibraryPanel(stage, {
    fetchOriginal: (blobId) => ingest.fetchDocumentOriginal(blobId),
    getFullText: (id) => ingest.getDocumentText(id),
    saveEdit: (item, text) =>
-      item.isNote ? ingest.updateNote(item.id, item.filename, text) : ingest.updateDocText(item.id, text)
+      item.isNote
+         ? ingest.updateNote(item.id, item.filename, text)
+         : ingest.updateDocText(item.id, text)
 });
 
 /* The Context panel: a standalone movable view showing what DAWN pulled into context for
@@ -465,24 +472,31 @@ const menu = mountMenu(stage, {
    },
    model: dawn.getModelControl(),
    /* Store-backed panels, plus the standalone calendar + music views appended. */
-   getPanels: () => [
-      ...store
-         .snapshot()
-         .filter((e) => PANEL_LABELS[e.id])
-         .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
-      { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
-      { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
-      { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
-      { id: "stocks", label: "Stocks", enabled: stocksPanel.isVisible() },
-      { id: "mail", label: "Mail", enabled: emailPanel.isVisible() },
-      { id: "watchlist", label: "Watchlist", enabled: watchlistPanel.isVisible() },
-      { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
-      { id: "context", label: "Context", enabled: contextPanel.isVisible() },
-      { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
-      { id: "clock", label: "Clock", enabled: hud.clock.isVisible() },
-      { id: "telemetry", label: "Telemetry", enabled: hud.status.isVisible() }
-   ].sort((a, b) => a.label.localeCompare(b.label)),
-   panelToggles: [{ label: "Lock all panels", get: arePanelsLocked, toggle: () => setPanelsLocked(!arePanelsLocked()) }],
+   getPanels: () =>
+      [
+         ...store
+            .snapshot()
+            .filter((e) => PANEL_LABELS[e.id])
+            .map((e) => ({ id: e.id, label: PANEL_LABELS[e.id], enabled: e.enabled !== false })),
+         { id: "calendar", label: "Calendar", enabled: calendarPanel.isVisible() },
+         { id: "homeassistant", label: "Home Assistant", enabled: haPanel.isVisible() },
+         { id: "watches", label: "Watches", enabled: watchesPanel.isVisible() },
+         { id: "stocks", label: "Stocks", enabled: stocksPanel.isVisible() },
+         { id: "mail", label: "Mail", enabled: emailPanel.isVisible() },
+         { id: "watchlist", label: "Watchlist", enabled: watchlistPanel.isVisible() },
+         { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
+         { id: "context", label: "Context", enabled: contextPanel.isVisible() },
+         { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
+         { id: "clock", label: "Clock", enabled: hud.clock.isVisible() },
+         { id: "telemetry", label: "Telemetry", enabled: hud.status.isVisible() }
+      ].sort((a, b) => a.label.localeCompare(b.label)),
+   panelToggles: [
+      {
+         label: "Lock all panels",
+         get: arePanelsLocked,
+         toggle: () => setPanelsLocked(!arePanelsLocked())
+      }
+   ],
    onTogglePanel: (id) => {
       if (id === "music") musicPlayer.setVisible(!musicPlayer.isVisible());
       else if (id === "calendar") calendarPanel.setVisible(!calendarPanel.isVisible());
@@ -706,18 +720,21 @@ const conversation = mountConversation(stage, {
    onSubmitBlocked: () => dawn.notifyUser("Not connected to DAWN - message not sent."),
    /* An email chip rides the turn only once DAWN can take the reference (`email_refs`). */
    emailRefsSupported: () => dawn.supportsEmailRefs(),
-   onEmailRefBlocked: () => dawn.notifyUser("This DAWN can't take an email in chat yet - message not sent."),
+   onEmailRefBlocked: () =>
+      dawn.notifyUser("This DAWN can't take an email in chat yet - message not sent."),
    /* A chat bubble's email chip opens that message in the Mail panel (it shows + expands the panel;
       a message since moved reads "moved or deleted" there). */
    onOpenEmail: (ref) => emailPanel.openMessage(ref.accountId, ref.messageId),
    /* One image message in flight at a time (so a refusal can only mean that one): hold the next. */
-   onImageTurnBusy: () => dawn.notifyUser("Your last image message is still sending - try again in a moment."),
+   onImageTurnBusy: () =>
+      dawn.notifyUser("Your last image message is still sending - try again in a moment."),
    onImageNeedsText: () => dawn.notifyUser("Add a message to send with the image."),
    imageOnlyTurns: () => dawn.supportsImageOnlyTurns(),
    turnRefs: () => dawn.supportsTurnRefs(),
    /* A visual's prompt goes only to a DAWN that refuses confirms in it (`visual_prompt_guard`). */
    visualPrompts: () => dawn.supportsVisualPromptGuard(),
-   onVisualPromptBlocked: () => dawn.notifyUser("This DAWN can't safely take a prompt from a visual - type it instead."),
+   onVisualPromptBlocked: () =>
+      dawn.notifyUser("This DAWN can't safely take a prompt from a visual - type it instead."),
    structuredDocs: () => dawn.supportsStructuredDocs(),
    documentLimits: () => dawn.documentLimits(),
    notify: (m) => dawn.notifyUser(m),
@@ -861,7 +878,10 @@ if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
    const BOOT_ANIM_MS = 700; // MUST match the .boot-anim chrome fade DURATION in main.css
    const BOOT_STAGGER_MAX_MS = 520; // MUST match the LARGEST .boot-anim transition-delay in main.css (#console)
    bootLeadTimer = window.setTimeout(() => anchor.startBoot(), BOOT_LEAD_MS);
-   bootRevealTimer = window.setTimeout(() => document.body.classList.remove("boot-intro"), BOOT_REVEAL_MS);
+   bootRevealTimer = window.setTimeout(
+      () => document.body.classList.remove("boot-intro"),
+      BOOT_REVEAL_MS
+   );
    /* Drop the temporary intro transition once the LAST staggered tier has finished fading
       (reveal + max stagger delay + fade), so each chrome element returns to its own opacity
       transition (e.g. the console's engage-recede) instead of being snapped mid-fade. */

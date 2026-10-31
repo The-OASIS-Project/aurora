@@ -36,13 +36,22 @@ const hits = (l: number, t: number, w: number, h: number, b: Box): boolean =>
    l < b.right + GAP && l + w > b.left - GAP && t < b.bottom + GAP && t + h > b.top - GAP;
 
 /* Top-left for a w x h card. `exclude` is the card itself (already in the movable set). */
-export function findOpenSpot(w: number, h: number, exclude?: HTMLElement): { left: number; top: number } {
+export function findOpenSpot(
+   w: number,
+   h: number,
+   exclude?: HTMLElement
+): { left: number; top: number } {
    const W = window.innerWidth;
    const H = window.innerHeight;
    const edge = cssMovableEdge();
    const menubar = boxOf(document.getElementById("menubar"));
    const obstacles: Box[] = [
-      ...visibleMovableRects(exclude).map((r) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom })),
+      ...visibleMovableRects(exclude).map((r) => ({
+         left: r.left,
+         top: r.top,
+         right: r.right,
+         bottom: r.bottom
+      })),
       reactorBox(W, H)
    ];
    if (menubar) obstacles.push(menubar);
@@ -56,7 +65,8 @@ export function findOpenSpot(w: number, h: number, exclude?: HTMLElement): { lef
    const maxTop = Math.max(edge, H - h - edge);
 
    /* The common case first: top center is free. */
-   if (!obstacles.some((b) => hits(prefLeft, prefTop, w, h, b))) return { left: prefLeft, top: prefTop };
+   if (!obstacles.some((b) => hits(prefLeft, prefTop, w, h, b)))
+      return { left: prefLeft, top: prefTop };
 
    let best: { left: number; top: number; d: number } | null = null;
    for (let top = edge; top <= maxTop; top += STEP) {
@@ -66,5 +76,7 @@ export function findOpenSpot(w: number, h: number, exclude?: HTMLElement): { lef
          if (!best || d < best.d) best = { left, top, d };
       }
    }
-   return best ? { left: best.left, top: best.top } : { left: Math.min(prefLeft, maxLeft), top: Math.min(prefTop, maxTop) };
+   return best
+      ? { left: best.left, top: best.top }
+      : { left: Math.min(prefLeft, maxLeft), top: Math.min(prefTop, maxTop) };
 }

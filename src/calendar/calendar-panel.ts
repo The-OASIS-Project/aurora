@@ -102,7 +102,9 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
       if (events.length === 0) {
          const empty = document.createElement("div");
          empty.className = "calendar-empty";
-         empty.textContent = unsupported ? "Calendar isn't available on this DAWN" : "Nothing scheduled";
+         empty.textContent = unsupported
+            ? "Calendar isn't available on this DAWN"
+            : "Nothing scheduled";
          list.appendChild(empty);
          card.refresh();
          return;
@@ -143,7 +145,10 @@ export function mountCalendarPanel(root: HTMLElement): CalendarPanelController {
                comma ("... Forsyth 12," / "350 Peachtree Pkwy," / ...) rather than mid
                phrase. The comma stays with its segment; the space between segments is
                the only break opportunity. */
-            const parts = ev.location.split(",").map((s) => s.trim()).filter(Boolean);
+            const parts = ev.location
+               .split(",")
+               .map((s) => s.trim())
+               .filter(Boolean);
             parts.forEach((part, i) => {
                const seg = document.createElement("span");
                seg.className = "calendar-loc-seg";

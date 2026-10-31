@@ -72,6 +72,10 @@ export interface MicControl {
    setDevice(id: string): void;
 }
 
+/* What the Opus encode worker (opus-encode-worker.js) posts back. */
+type EncoderMessage =
+   { type: "encoded"; data: ArrayBuffer } | { type: "end" } | { type: "error"; message: string };
+
 export class MicCapture {
    private ctx: AudioContext | null = null;
    private stream: MediaStream | null = null;
@@ -127,7 +131,7 @@ export class MicCapture {
    private async probeOpus(): Promise<void> {
       try {
          if (typeof AudioEncoder === "undefined") return;
-         const s = await AudioEncoder.isConfigSupported(OPUS_CONFIG as unknown as AudioEncoderConfig);
+         const s = await AudioEncoder.isConfigSupported(OPUS_CONFIG);
          this.opusSupported = s.supported === true;
       } catch {
          this.opusSupported = false;
@@ -153,9 +157,9 @@ export class MicCapture {
          type: "module"
       });
       this.encoder.postMessage({ type: "config", config: OPUS_CONFIG });
-      this.encoder.onmessage = (e: MessageEvent): void => {
+      this.encoder.onmessage = (e: MessageEvent<EncoderMessage | null>): void => {
          const m = e.data;
-         if (m?.type === "encoded") this.handlePayload(new Uint8Array(m.data as ArrayBuffer));
+         if (m?.type === "encoded") this.handlePayload(new Uint8Array(m.data));
          else if (m?.type === "end") this.cb.onEnd?.();
          else if (m?.type === "error") console.warn("[mic] opus encode error:", m.message);
       };
@@ -177,7 +181,8 @@ export class MicCapture {
       try {
          const devs = await navigator.mediaDevices.enumerateDevices();
          for (const d of devs) {
-            if (d.kind === "audioinput") out.push({ id: d.deviceId, label: d.label || "Microphone" });
+            if (d.kind === "audioinput")
+               out.push({ id: d.deviceId, label: d.label || "Microphone" });
          }
       } catch {
          /* enumeration blocked -> just the default */
@@ -436,9 +441,11 @@ export class MicCapture {
          this.workletLoaded = true;
       }
       this.worklet = new AudioWorkletNode(ctx, "mic-capture-processor");
-      this.worklet.port.onmessage = (e: MessageEvent): void => {
+      this.worklet.port.onmessage = (
+         e: MessageEvent<{ type?: string; data: Int16Array } | null>
+      ): void => {
          if (e.data?.type !== "audio") return;
-         const pcm = e.data.data as Int16Array;
+         const pcm = e.data.data;
          /* Opus: hand the raw PCM to the encode worker; its length-prefixed Opus frames
             come back on the encoder's onmessage and flow through handlePayload. Raw PCM:
             the chunk is the payload as-is. */
@@ -531,7 +538,7 @@ export class MicCapture {
       const tick = (): void => {
          if (!this.analyser) return;
          this.analyser.getByteFrequencyData(this.freq);
-         for (let i = 0; i < this.levels.length; i++) this.levels[i] = this.freq[i]! / 255;
+         for (let i = 0; i < this.levels.length; i++) this.levels[i] = this.freq[i] / 255;
          this.cb.onLevels(this.levels);
          this.raf = requestAnimationFrame(tick);
       };

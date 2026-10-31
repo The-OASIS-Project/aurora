@@ -20,6 +20,7 @@
 
 import type { AlarmChime } from "../audio/alarm-chime.ts";
 import type { NoticeAction, NotificationsSink } from "./ingest.ts";
+import { str } from "./wire.ts";
 
 export const PHONE_NOTICE_ID = "phone-call";
 const FALLBACK_MS = 30_000; // clear a card stuck waiting for a frame that never came (then re-ask)
@@ -69,7 +70,7 @@ export class PhoneCalls {
 
    /* A phone_call_notification frame (a live event, or the reply to phone_status). */
    onFrame(p: Record<string, unknown>): void {
-      const status = String(p.status ?? "");
+      const status = str(p.status);
       if (status === "ended") {
          this.clear();
          return;
@@ -77,16 +78,23 @@ export class PhoneCalls {
       if (status !== "ringing" && status !== "active") return;
       const name = typeof p.name === "string" ? p.name : "";
       const number = typeof p.number === "string" ? p.number : "";
-      const photo = p.photo && typeof p.photo === "object" ? (p.photo as { data?: unknown; mime?: unknown }) : null;
+      const photo =
+         p.photo && typeof p.photo === "object"
+            ? (p.photo as { data?: unknown; mime?: unknown })
+            : null;
       const photoUri =
-         photo && typeof photo.data === "string" && typeof photo.mime === "string" ? `data:${photo.mime};base64,${photo.data}` : undefined;
+         photo && typeof photo.data === "string" && typeof photo.mime === "string"
+            ? `data:${photo.mime};base64,${photo.data}`
+            : undefined;
       const elapsed = Number(p.elapsed_sec ?? 0);
       const callId = Number(p.call_id ?? -1);
       /* The same call (by id) keeps what a later frame omits (the active frame has no photo); a
          DIFFERENT call never inherits the last caller's name or photo. */
       const sameCall =
          !!this.call &&
-         ((callId >= 0 && this.call.callId === callId) || (!!number && this.call.number === number) || (!number && !name));
+         ((callId >= 0 && this.call.callId === callId) ||
+            (!!number && this.call.number === number) ||
+            (!number && !name));
       const prev = sameCall ? this.call : null;
       const newCall = !prev;
       this.call = {
@@ -95,7 +103,8 @@ export class PhoneCalls {
          name: name || prev?.name || "",
          number: number || prev?.number || "",
          photo: photoUri ?? prev?.photo,
-         startedAt: performance.now() - (Number.isFinite(elapsed) && elapsed > 0 ? elapsed * 1000 : 0)
+         startedAt:
+            performance.now() - (Number.isFinite(elapsed) && elapsed > 0 ? elapsed * 1000 : 0)
       };
       if (status === "ringing") {
          /* A ringing frame ends any in-call display (a second call while one was active): stop the
@@ -191,7 +200,11 @@ export class PhoneCalls {
          image: this.minimized ? undefined : c.photo,
          actions: [
             { id: "hangup", label: "Hang Up", keepOpen: true, disabled: hanging },
-            { id: this.minimized ? "expand" : "minimize", label: this.minimized ? "Expand" : "Minimize", keepOpen: true }
+            {
+               id: this.minimized ? "expand" : "minimize",
+               label: this.minimized ? "Expand" : "Minimize",
+               keepOpen: true
+            }
          ]
       });
    }

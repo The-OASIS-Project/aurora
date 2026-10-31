@@ -112,7 +112,10 @@ self.onmessage = async (e) => {
          encoder.encode(audio);
          audio.close();
       } catch (err) {
-         self.postMessage({ type: "error", message: String(err && err.message ? err.message : err) });
+         self.postMessage({
+            type: "error",
+            message: String(err && err.message ? err.message : err)
+         });
       }
       return;
    }

@@ -58,12 +58,14 @@ export function mountHud(root: HTMLElement): HudController {
       });
       /* The cache state's one problem value (a warm call that missed) is flagged, not just named. */
       if (values.cachestate_flag !== undefined) {
-         root.querySelector(".tel-cachestate")?.classList.toggle("tel-flag", values.cachestate_flag === "1");
+         root
+            .querySelector(".tel-cachestate")
+            ?.classList.toggle("tel-flag", values.cachestate_flag === "1");
       }
    };
 
    /* Cache the last values so a refresh shows them immediately instead of "--"
-      until fresh data arrives. Uptime is excluded — it is live and re-syncs within
+      until fresh data arrives. Uptime is excluded - it is live and re-syncs within
       a second, and caching it would thrash storage every tick. */
    let cache: Record<string, string> = {};
    try {
@@ -98,16 +100,20 @@ export function mountHud(root: HTMLElement): HudController {
    const statusEl = root.querySelector<HTMLElement>("#hud-status");
    /* raise:false - they live inside #hud's own stacking context, so click-to-front couldn't lift
       them over a panel anyway. */
-   const disposeClockMove = clockEl ? makeMovable(clockEl, {
+   const disposeClockMove = clockEl
+      ? makeMovable(clockEl, {
            storageKey: CLOCK_POS_KEY,
            raise: false,
            lockSlot: (btn) => (clockEl.querySelector(".clk-mark") ?? clockEl).append(btn) // after "D.A.W.N."
-        }) : noop;
-   const disposeStatusMove = statusEl ? makeMovable(statusEl, {
+        })
+      : noop;
+   const disposeStatusMove = statusEl
+      ? makeMovable(statusEl, {
            storageKey: STATUS_POS_KEY,
            raise: false,
            lockSlot: (btn) => statusEl.append(btn) // below the readout rows, right-aligned
-        }) : noop;
+        })
+      : noop;
    const clockVis = clockEl
       ? makeVisibility(clockEl, { storageKey: CLOCK_SHOWN_KEY, offClass: "hud-clock-off" })
       : null;

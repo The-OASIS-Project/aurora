@@ -16,7 +16,9 @@ beforeAll(() => {
    Object.assign(globalThis, { IntersectionObserver: NoopObserver, ResizeObserver: NoopObserver });
    Element.prototype.scrollIntoView ??= function () {};
    if (!window.matchMedia) {
-      Object.assign(window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+      Object.assign(window, {
+         matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
+      });
    }
 });
 
@@ -44,7 +46,13 @@ describe("assignMonograms", () => {
 
 async function mounted() {
    const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-   const panel = mountEmailPanel(document.body, { source: sim, prefs: new LocalUserPrefs(), onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+   const panel = mountEmailPanel(document.body, {
+      source: sim,
+      prefs: new LocalUserPrefs(),
+      onDiscuss: () => {},
+      notify: () => {},
+      removeNotice: () => {}
+   });
    panel.setVisible(true);
    await flush();
    return panel;
@@ -76,17 +84,22 @@ describe("Mail panel behaviour", () => {
       const rows = Array.from(document.querySelectorAll<HTMLElement>(".mail-row"));
       rows[0].click();
       await flush();
-      const subject = (): string | undefined => document.querySelector(".mail-reader-subject")?.textContent ?? undefined;
+      const subject = (): string | undefined =>
+         document.querySelector(".mail-reader-subject")?.textContent ?? undefined;
       const first = subject();
       expect(document.querySelector<HTMLButtonElement>(".mail-prev")?.disabled).toBe(true);
       (document.querySelector(".mail-next") as HTMLButtonElement).click();
       await flush();
       const second = subject();
       expect(second).not.toBe(first);
-      document.querySelector(".mail-reader-subject")!.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+      document
+         .querySelector(".mail-reader-subject")!
+         .dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
       await flush();
       expect(subject()).toBe(first);
-      document.querySelector(".mail-reader-subject")!.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+      document
+         .querySelector(".mail-reader-subject")!
+         .dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
       await flush();
       expect(subject()).toBe(second);
       panel.destroy();
@@ -97,7 +110,11 @@ describe("Mail panel storage", () => {
    it("writes no localStorage key outside its allowlist, and never mail content", async () => {
       const writes: Array<[string, string]> = [];
       const real = Storage.prototype.setItem;
-      vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, k: string, v: string) {
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+         this: Storage,
+         k: string,
+         v: string
+      ) {
          writes.push([k, v]);
          real.call(this, k, v);
       });
@@ -137,16 +154,26 @@ describe("Mail panel storage", () => {
 describe("Mail options (3.9)", () => {
    const mountWith = async (prefs: LocalUserPrefs) => {
       const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-      const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      const panel = mountEmailPanel(document.body, {
+         source: sim,
+         prefs,
+         onDiscuss: () => {},
+         notify: () => {},
+         removeNotice: () => {}
+      });
       panel.setVisible(true);
       await flush();
       return panel;
    };
    const rowBySubject = (text: string): HTMLElement =>
-      Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.textContent?.includes(text))!;
+      Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) =>
+         r.textContent?.includes(text)
+      )!;
    const bar = (): string => document.querySelector(".mail-images-bar")?.textContent ?? "";
    const link = (label: string): HTMLButtonElement =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>(".mail-images-bar .mail-link")).find((b) => b.textContent?.startsWith(label))!;
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".mail-images-bar .mail-link")).find(
+         (b) => b.textContent?.startsWith(label)
+      )!;
 
    it("trusts a sender from the images bar, shows their images, and Stop takes it back", async () => {
       const prefs = new LocalUserPrefs();
@@ -170,21 +197,32 @@ describe("Mail options (3.9)", () => {
    });
 
    it("marks read after 3 s on screen, or only when chosen", async () => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+      vi.useFakeTimers({
+         toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"]
+      });
       try {
          const prefs = new LocalUserPrefs();
          prefs.set(MARK_READ, "delayed");
          const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-         const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+         const panel = mountEmailPanel(document.body, {
+            source: sim,
+            prefs,
+            onDiscuss: () => {},
+            notify: () => {},
+            removeNotice: () => {}
+         });
          panel.setVisible(true);
          await vi.advanceTimersByTimeAsync(10);
          const first = (): HTMLElement => document.querySelector<HTMLElement>(".mail-row.unread")!;
          const key = first().dataset.key!;
          first().click();
          await vi.advanceTimersByTimeAsync(10);
-         const row = (): HTMLElement => document.querySelector<HTMLElement>(`.mail-row[data-key="${key}"]`)!;
+         const row = (): HTMLElement =>
+            document.querySelector<HTMLElement>(`.mail-row[data-key="${key}"]`)!;
          expect(row().classList.contains("unread")).toBe(true);
-         expect(document.querySelector(".mail-r-mark")?.getAttribute("aria-label")).toBe("Mark read");
+         expect(document.querySelector(".mail-r-mark")?.getAttribute("aria-label")).toBe(
+            "Mark read"
+         );
          await vi.advanceTimersByTimeAsync(3100);
          expect(row().classList.contains("unread")).toBe(false);
 
@@ -193,7 +231,8 @@ describe("Mail options (3.9)", () => {
          const nextKey = next.dataset.key!;
          next.click();
          await vi.advanceTimersByTimeAsync(5000);
-         const nextRow = (): HTMLElement => document.querySelector<HTMLElement>(`.mail-row[data-key="${nextKey}"]`)!;
+         const nextRow = (): HTMLElement =>
+            document.querySelector<HTMLElement>(`.mail-row[data-key="${nextKey}"]`)!;
          expect(nextRow().classList.contains("unread")).toBe(true);
          (document.querySelector(".mail-r-mark") as HTMLButtonElement).click(); // the reader's toggle
          await vi.advanceTimersByTimeAsync(10);
@@ -226,7 +265,9 @@ describe("Mail options (3.9)", () => {
       (document.querySelector(".mail-filter-btn") as HTMLButtonElement).click();
       (document.querySelector(".mail-pop-more") as HTMLButtonElement).click();
       expect(document.querySelector(".mail-popover")?.textContent).toContain("Mark as read");
-      const delayed = document.querySelector<HTMLInputElement>('input[name="mail-markread"][value="delayed"]')!;
+      const delayed = document.querySelector<HTMLInputElement>(
+         'input[name="mail-markread"][value="delayed"]'
+      )!;
       delayed.click();
       expect(prefs.get(MARK_READ)).toBe("delayed");
       /* Always show images asks before it turns on. */
@@ -249,7 +290,9 @@ describe("Mail options (3.9)", () => {
       const panel = await mountWith(prefs);
       const before = document.querySelectorAll(".mail-row").length;
       const archiveFirstOf = (acct: string): void => {
-         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) =>
+            r.dataset.key?.startsWith(`${acct}/`)
+         )!;
          row.querySelector<HTMLButtonElement>('[data-act="archive"]')!.click();
       };
       archiveFirstOf("1");
@@ -270,7 +313,13 @@ describe("Mail options (3.9)", () => {
    it("keeps both Undos when the second click comes before the first move has answered", async () => {
       const prefs = new LocalUserPrefs();
       const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-      const panel = mountEmailPanel(document.body, { source: sim, prefs, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      const panel = mountEmailPanel(document.body, {
+         source: sim,
+         prefs,
+         onDiscuss: () => {},
+         notify: () => {},
+         removeNotice: () => {}
+      });
       panel.setVisible(true);
       await flush();
       const before = document.querySelectorAll(".mail-row").length;
@@ -278,7 +327,9 @@ describe("Mail options (3.9)", () => {
       const archive = sim.archive.bind(sim);
       sim.archive = (a, ids) => new Promise((r) => setTimeout(() => r(archive(a, ids)), 600));
       const archiveFirstOf = (acct: string): void => {
-         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) =>
+            r.dataset.key?.startsWith(`${acct}/`)
+         )!;
          row.querySelector<HTMLButtonElement>('[data-act="archive"]')!.click();
       };
       archiveFirstOf("1");
@@ -298,7 +349,9 @@ describe("Mail options (3.9)", () => {
       const panel = await mountWith(prefs);
       const before = document.querySelectorAll(".mail-row").length;
       const act = (acct: string, what: "archive" | "trash"): void => {
-         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) => r.dataset.key?.startsWith(`${acct}/`))!;
+         const row = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).find((r) =>
+            r.dataset.key?.startsWith(`${acct}/`)
+         )!;
          row.querySelector<HTMLButtonElement>(`[data-act="${what}"]`)!.click();
       };
       const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 450)); // past the reflow lock
@@ -308,7 +361,9 @@ describe("Mail options (3.9)", () => {
       await settle();
       act("1", "archive");
       await flush();
-      expect(document.querySelector(".mail-toast-text")?.textContent).toBe("2 archived, 1 moved to Trash");
+      expect(document.querySelector(".mail-toast-text")?.textContent).toBe(
+         "2 archived, 1 moved to Trash"
+      );
       expect(document.querySelectorAll(".mail-row").length).toBe(before - 3);
       (document.querySelector(".mail-toast-undo") as HTMLButtonElement).click();
       await flush();
@@ -322,7 +377,14 @@ describe("Mail options (3.9)", () => {
       for (const can of [false, true]) {
          const prefs = new LocalUserPrefs();
          const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-         const panel = mountEmailPanel(document.body, { source: sim, prefs, canDiscuss: () => can, onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+         const panel = mountEmailPanel(document.body, {
+            source: sim,
+            prefs,
+            canDiscuss: () => can,
+            onDiscuss: () => {},
+            notify: () => {},
+            removeNotice: () => {}
+         });
          panel.setVisible(true);
          await flush();
          document.querySelector<HTMLElement>(".mail-row")!.click();
@@ -345,7 +407,13 @@ describe("Mail and tab switches", () => {
       hidden = false;
       Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
       const sim = new EmailSim({ latency: [0, 0], changeEverySec: 0, flakyRate: 0 });
-      const panel = mountEmailPanel(document.body, { source: sim, prefs: new LocalUserPrefs(), onDiscuss: () => {}, notify: () => {}, removeNotice: () => {} });
+      const panel = mountEmailPanel(document.body, {
+         source: sim,
+         prefs: new LocalUserPrefs(),
+         onDiscuss: () => {},
+         notify: () => {},
+         removeNotice: () => {}
+      });
       panel.setVisible(true);
       await flush();
       return { sim, panel, list: vi.spyOn(sim, "list") };
@@ -386,11 +454,19 @@ describe("Mail and tab switches", () => {
 
    it("the refresh drops mail that went away and adds new mail, keeping the rest", async () => {
       const { sim, panel, list } = await mountWithSim();
-      const keys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+      const keys = (): string[] =>
+         Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map(
+            (r) => r.dataset.key ?? ""
+         );
       const before = keys();
       const real = await sim.list({ limit: 1000 });
       const gone = real.rows[1];
-      const newest = { ...real.rows[0], messageId: "fresh-1", subject: "Brand new", date: real.rows[0].date + 60 };
+      const newest = {
+         ...real.rows[0],
+         messageId: "fresh-1",
+         subject: "Brand new",
+         date: real.rows[0].date + 60
+      };
       list.mockImplementationOnce(async (q) => {
          const r = await EmailSim.prototype.list.call(sim, q);
          return { ...r, rows: [newest, ...r.rows.filter((x) => x.messageId !== gone.messageId)] };
@@ -410,13 +486,25 @@ describe("Mail and tab switches", () => {
 
    it("keeps reading pages after lots of new mail, so no messages go missing in between", async () => {
       const { sim, panel, list } = await mountWithSim();
-      const keys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+      const keys = (): string[] =>
+         Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map(
+            (r) => r.dataset.key ?? ""
+         );
       const before = keys();
       const first = await sim.list({ limit: 25 });
       const top = first.rows[0];
-      const burst = Array.from({ length: 25 }, (_, i) => ({ ...top, messageId: `burst-${i}`, subject: `Burst ${i}`, date: top.date + 1000 - i }));
+      const burst = Array.from({ length: 25 }, (_, i) => ({
+         ...top,
+         messageId: `burst-${i}`,
+         subject: `Burst ${i}`,
+         date: top.date + 1000 - i
+      }));
       list.mockClear(); // the setup read above isn't the panel's
-      list.mockImplementationOnce(async () => ({ rows: burst, cursor: "after-burst", partial: [] }));
+      list.mockImplementationOnce(async () => ({
+         rows: burst,
+         cursor: "after-burst",
+         partial: []
+      }));
       list.mockImplementationOnce(async (q) => {
          expect(q.cursor).toBe("after-burst");
          return EmailSim.prototype.list.call(sim, { ...q, cursor: undefined });
@@ -463,9 +551,13 @@ describe("Mail and tab switches", () => {
 
    it("reads through an empty page that has more after it", async () => {
       const { sim, panel, list } = await mountWithSim();
-      const before = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key);
+      const before = Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map(
+         (r) => r.dataset.key
+      );
       list.mockImplementationOnce(async () => ({ rows: [], cursor: "more", partial: [] }));
-      list.mockImplementationOnce(async (q) => EmailSim.prototype.list.call(sim, { ...q, cursor: undefined }));
+      list.mockImplementationOnce(async (q) =>
+         EmailSim.prototype.list.call(sim, { ...q, cursor: undefined })
+      );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       setHidden(true);
       vi.advanceTimersByTime(3 * 60_000);
@@ -474,7 +566,9 @@ describe("Mail and tab switches", () => {
       await flush();
       await flush();
       expect(list).toHaveBeenCalledTimes(2);
-      expect(Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key)).toEqual(before);
+      expect(
+         Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key)
+      ).toEqual(before);
       panel.destroy();
    });
 
@@ -505,7 +599,10 @@ describe("Mail and tab switches", () => {
       vi.useRealTimers();
       setHidden(false);
    };
-   const shownKeys = (): string[] => Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map((r) => r.dataset.key ?? "");
+   const shownKeys = (): string[] =>
+      Array.from(document.querySelectorAll<HTMLElement>(".mail-row")).map(
+         (r) => r.dataset.key ?? ""
+      );
 
    it("keeps the list when the refresh only finds empty pages", async () => {
       const { panel, list } = await mountWithSim();
@@ -528,7 +625,9 @@ describe("Mail and tab switches", () => {
       await flush();
       await flush();
       expect(shownKeys()).toEqual(before);
-      expect(document.querySelector(".mail-status")?.textContent ?? "").not.toContain("didn't answer");
+      expect(document.querySelector(".mail-status")?.textContent ?? "").not.toContain(
+         "didn't answer"
+      );
       panel.destroy();
    });
 
