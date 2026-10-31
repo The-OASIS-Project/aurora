@@ -192,9 +192,11 @@ export class MusicAudio {
       }
       this.worklet = new AudioWorkletNode(this.ctx, "music-processor", { outputChannelCount: [2] });
       this.worklet.connect(this.gain);
-      this.worklet.port.onmessage = (e: MessageEvent): void => {
+      this.worklet.port.onmessage = (
+         e: MessageEvent<{ type?: string; percent: number; bufferedMs?: number } | null>
+      ): void => {
          if (e.data?.type !== "buffer") return;
-         this.bufferPercent = e.data.percent as number;
+         this.bufferPercent = e.data.percent;
          if (typeof e.data.bufferedMs === "number") {
             /* Total buffered = worklet ring depth PLUS the WebCodecs decode-input
                backlog. Reporting worklet-only reads "empty" under main-thread load
@@ -202,7 +204,7 @@ export class MusicAudio {
                server's own ceiling so a runaway decode backlog can't over-report. */
             const dec = this.decoder;
             const backlogMs = dec && dec.decodeQueueSize ? dec.decodeQueueSize * MUSIC_FRAME_MS : 0;
-            this.bufferedMs = Math.min(BUFFERED_MS_MAX, (e.data.bufferedMs as number) + backlogMs);
+            this.bufferedMs = Math.min(BUFFERED_MS_MAX, e.data.bufferedMs + backlogMs);
             /* Gate the upstream send on activity: the worklet reports ~31/s for the whole
                life of the node, but while nothing plays that is just "0" the server can't
                use. Send every non-zero depth, plus the single 0 that marks a drain (so the

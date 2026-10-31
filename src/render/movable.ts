@@ -367,7 +367,9 @@ export interface ResizeEdges {
 
 /* The full movable API, for a view that is also resizable: the anchor rules stay here. */
 export interface MovableHandle {
-   dispose(): void;
+   /* Arrow-typed (a closure, no `this`) because makeMovable hands it on detached; the others are
+      only ever called on the handle. */
+   dispose: () => void;
    /* After a user resize: re-derive each axis anchor from which edges moved (a right-docked
       view grown from its left edge stays right-docked; grown from its right edge it goes
       free; a centered axis goes free) and persist. */

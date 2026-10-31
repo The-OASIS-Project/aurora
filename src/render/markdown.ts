@@ -118,6 +118,7 @@ function offOrigin(src: string): URL | null {
 function gateImages(clean: string): string {
    if (!clean.includes("<img")) return clean;
    const tpl = document.createElement("template");
+   // eslint-disable-next-line no-unsanitized/property -- `clean` is DOMPurify output, parsed in an inert <template>
    tpl.innerHTML = clean; // inert: a <template>'s content never loads or runs
    for (const img of Array.from(tpl.content.querySelectorAll("img"))) {
       const src = img.getAttribute("src") ?? "";

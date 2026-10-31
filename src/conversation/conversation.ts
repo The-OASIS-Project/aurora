@@ -31,7 +31,7 @@ import {
    setDocBodyMessage,
    textDownload
 } from "../render/doc-viewer.ts";
-import { renderMarkdown, wireImageGate } from "./format.ts";
+import { renderMarkdown, wireImageGate } from "../render/markdown.ts";
 import {
    hasVisual,
    splitVisualSegments,
@@ -1301,6 +1301,7 @@ export function mountConversation(
             renderPending();
             summon();
          })
+         .catch((e: unknown) => console.warn("[convo] attaching failed:", e)) // each upload settles on its own; this is the render after
          .finally(() => attachBtn?.classList.remove("busy"));
    };
    const onAttachClick = (): void => {
@@ -1650,7 +1651,7 @@ export function mountConversation(
       never touches the person's draft or pending attachments. */
    let lastVisualSend = -Infinity;
    let lastVisualNotice = -Infinity;
-   /* Off-origin images in replies wait for a click (format.ts gateImages / 4.7). */
+   /* Off-origin images in replies wait for a click (render/markdown.ts gateImages / 4.7). */
    const disposeImageGate = wireImageGate(scroll);
    const disposeVisuals = initVisuals((text) => {
       const now = performance.now();

@@ -71,8 +71,8 @@ export class Store {
     */
    /*
     * Pointer entered/left a floating element. While hovered it is pulled to the
-    * front (importance up to the alert tier) and held there — tick() skips its
-    * decay — so a notice mid-recede returns and stays readable until the pointer
+    * front (importance up to the alert tier) and held there - tick() skips its
+    * decay - so a notice mid-recede returns and stays readable until the pointer
     * leaves, at which point it resumes receding. Distinct from a spike: no plateau
     * timer, it simply tracks the pointer.
     */
@@ -81,7 +81,7 @@ export class Store {
       if (!el) return;
       if (on) {
          this.hovered.add(id);
-         el.importance = Math.max(el.importance, 3); // alert tier — bring to front
+         el.importance = Math.max(el.importance, 3); // alert tier - bring to front
          el.revision = ++this.revision;
       } else {
          this.hovered.delete(id);

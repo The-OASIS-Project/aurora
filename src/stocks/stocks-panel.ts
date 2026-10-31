@@ -664,7 +664,7 @@ function emptyStateText(
    if (p) {
       switch (p.status) {
          case "token_expired":
-            return "Schwab link expired — re-link with `dawn-admin schwab auth` (clears on its own once relinked).";
+            return "Schwab link expired: re-link with `dawn-admin schwab auth` (clears on its own once relinked).";
          case "not_connected":
             return "No brokerage linked in DAWN.";
          case "rate_limited":

@@ -65,7 +65,7 @@ export function mountHud(root: HTMLElement): HudController {
    };
 
    /* Cache the last values so a refresh shows them immediately instead of "--"
-      until fresh data arrives. Uptime is excluded — it is live and re-syncs within
+      until fresh data arrives. Uptime is excluded - it is live and re-syncs within
       a second, and caching it would thrash storage every tick. */
    let cache: Record<string, string> = {};
    try {

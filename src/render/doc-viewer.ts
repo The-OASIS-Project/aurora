@@ -17,7 +17,7 @@
  */
 
 import { addCorners } from "./corners.ts";
-import { renderMarkdown, wireImageGate } from "../conversation/format.ts";
+import { renderMarkdown, wireImageGate } from "./markdown.ts";
 
 const gated = new WeakSet<HTMLElement>();
 

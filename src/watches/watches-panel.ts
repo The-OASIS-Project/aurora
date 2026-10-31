@@ -196,7 +196,7 @@ export function mountWatchesPanel(
 
    const loadCollapsed = (): Set<string> => {
       try {
-         const arr = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+         const arr: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
          return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
       } catch {
          return new Set();

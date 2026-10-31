@@ -175,15 +175,15 @@ export function mountContextPanel(
       ["USER", "Your own content: something you wrote or sent."]
    ]);
    addHelpGroup("WHY IT WAS PULLED IN", [
-      ["SEM", "Semantic — how closely its meaning matches what you just asked."],
-      ["REC", "Recency — how fresh it is."],
-      ["IMP", "Importance — how significant DAWN judged it when it saved it."],
-      ["SRC", "Source — how much this kind of source is weighted for this turn."]
+      ["SEM", "Semantic: how closely its meaning matches what you just asked."],
+      ["REC", "Recency: how fresh it is."],
+      ["IMP", "Importance: how significant DAWN judged it when it saved it."],
+      ["SRC", "Source: how much this kind of source is weighted for this turn."]
    ]);
    const note = document.createElement("p");
    note.className = "context-help-note";
    note.textContent =
-      "A row that lights up gold (CITED) is one the model actually referenced in its answer — it appears when the reply finishes.";
+      "A row that lights up gold (CITED) is one the model actually referenced in its answer; it appears when the reply finishes.";
    help.append(note);
    el.append(help);
 

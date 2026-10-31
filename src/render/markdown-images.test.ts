@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { renderMarkdown, wireImageGate } from "./format.ts";
+import { renderMarkdown, wireImageGate } from "./markdown.ts";
 
 const render = (md: string): HTMLElement => {
    const div = document.createElement("div");

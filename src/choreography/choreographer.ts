@@ -73,9 +73,9 @@ export class Choreographer {
    private engaged = false;
    private engageAmt = 0;
 
-   private reducedMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+   /* The user's reduced-motion preference, read by the composition root (choreography never
+      touches the browser): no easing, no depth slide. */
+   constructor(private readonly reducedMotion = false) {}
 
    /*
     * Advance the choreography by dt seconds against the current state snapshot,

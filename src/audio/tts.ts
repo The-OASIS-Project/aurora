@@ -76,9 +76,7 @@ export class TtsPlayback {
    private async probeOpus(): Promise<void> {
       try {
          if (typeof AudioDecoder === "undefined") return;
-         const s = await AudioDecoder.isConfigSupported(
-            OPUS_DECODE_CONFIG as unknown as AudioDecoderConfig
-         );
+         const s = await AudioDecoder.isConfigSupported(OPUS_DECODE_CONFIG);
          this.opusSupported = s.supported === true;
       } catch {
          this.opusSupported = false;
@@ -231,7 +229,7 @@ export class TtsPlayback {
                this.decoder = null;
             }
          });
-         dec.configure(OPUS_DECODE_CONFIG as unknown as AudioDecoderConfig);
+         dec.configure(OPUS_DECODE_CONFIG);
          this.decoder = dec;
          return true;
       } catch (e) {
@@ -260,7 +258,7 @@ export class TtsPlayback {
       const tick = (): void => {
          if (!this.analyser) return;
          this.analyser.getByteFrequencyData(this.freq);
-         for (let i = 0; i < this.levels.length; i++) this.levels[i] = this.freq[i]! / 255;
+         for (let i = 0; i < this.levels.length; i++) this.levels[i] = this.freq[i] / 255;
          this.onLevels(this.levels);
          this.raf = requestAnimationFrame(tick);
       };
@@ -315,7 +313,7 @@ function pcmToFloat(bytes: Uint8Array): Float32Array {
    const numSamples = Math.floor(bytes.length / 2);
    const out = new Float32Array(numSamples);
    for (let i = 0; i < numSamples; i++) {
-      let s = (bytes[i * 2 + 1]! << 8) | bytes[i * 2]!;
+      let s = (bytes[i * 2 + 1] << 8) | bytes[i * 2];
       if (s >= 0x8000) s -= 0x10000;
       out[i] = s / 32768;
    }

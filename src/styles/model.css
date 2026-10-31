@@ -148,7 +148,7 @@
    max-height: 14rem;
    overflow-y: auto;
    /* Dark surface (near-black), inverted from the now-transparent closed control. */
-   background: color-mix(in srgb, var(--ground) 95%, #000);
+   background: var(--ground);
    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
    border-radius: 3px;
    box-shadow: 0 10px 30px color-mix(in srgb, var(--ground) 74%, transparent);

@@ -20,7 +20,7 @@ beforeAll(() => {
          matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
       });
    }
-   Element.prototype.scrollTo = function () {} as typeof Element.prototype.scrollTo;
+   Element.prototype.scrollTo = function () {};
    class NoopObserver {
       observe(): void {}
       unobserve(): void {}

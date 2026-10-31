@@ -149,7 +149,7 @@ body.boot-anim #stage > #console {
 
 /* Attention budget (brief S3.3): while the user is engaged with the input, the
    pinned rails and reticle dim so the exchange takes center. The corner HUD
-   (clock/telemetry) stays put — dimming it on focus read as noise, not calm.
+   (clock/telemetry) stays put - dimming it on focus read as noise, not calm.
    The ambient depth field recedes via the choreography layer. */
 #reticle,
 #docks {
@@ -929,7 +929,7 @@ body.engaged #docks {
 }
 
 /* An image from another site in rendered markdown (a reply, a document): it waits for a click
-   (format.ts, EMAIL_PANEL_DESIGN 4.7). */
+   (render/markdown.ts, EMAIL_PANEL_DESIGN 4.7). */
 .md-img-blocked {
    display: inline-flex;
    align-items: center;

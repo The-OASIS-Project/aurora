@@ -560,7 +560,7 @@ function modelSelect(
 
    const values = options.includes(current) || !current ? options : [current, ...options];
    if (values.length === 0) {
-      valEl.textContent = "—"; // —
+      valEl.textContent = "—"; // -
       btn.disabled = true;
       row.append(lbl, dd);
       return row;

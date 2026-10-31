@@ -267,7 +267,7 @@ stub-only - kept as the render seam and the extension point for future store-bac
   `[0x20][uint16-LE len][opus]` and `DawnIngest` MUST strip the leading opcode byte before
   handing `[len][opus]` to the decoder (feeding the opcode into the length parser
   misframes every packet -> WebCodecs "Decoding error", silent playback). In dev it is
-  proxied at **`/music-ws`** — NOT `/ws-music`, which the broader `/ws` proxy prefix would
+  proxied at **`/music-ws`** - NOT `/ws-music`, which the broader `/ws` proxy prefix would
   capture and misroute to the main server (which has no `dawn-music` protocol and no HTTP
   fallback, so the upgrade just hangs up).
 - **Music uses closed-loop buffer flow control.** DAWN paces music to hold a ~2s cushion

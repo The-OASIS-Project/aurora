@@ -133,7 +133,7 @@ export interface ConversationSink {
       messageId: number;
       email?: EmailRef;
    }): void;
-   /* A tool reset the conversation — empty the surface. */
+   /* A tool reset the conversation - empty the surface. */
    clear(): void;
    /* Current activity (thinking / using tools / ...) or null to clear it. */
    setStatus(status: ActivityStatus | null): void;
@@ -962,3 +962,15 @@ export interface Ingest {
       so an in-session reconnect can reuse the AudioContexts instead of stacking new ones. */
    dispose(): void;
 }
+
+/* The link to DAWN, as the login panel and the Connection dialog show it. */
+export type LinkStatus =
+   | "checking" // silently probing a stored session on load - no card shown
+   | "idle"
+   | "authenticating"
+   | "connecting"
+   | "connected"
+   | "stale" // socket open but a heartbeat ping went unanswered - link unstable, not yet dead
+   | "superseded" // another tab took over this session (WS close 4001); we backed off, awaiting reclaim
+   | "disconnected"
+   | "error";

@@ -142,9 +142,10 @@ src/
   ingest/            the DAWN boundary (Ingest, DawnIngest, StubIngest, sinks)
   state/             Store + ElementState
   choreography/      importance -> depth / presence
-  render/            css3d renderer, RenderNode contract, makeMovable + makeResizable, panel drag
+  render/            css3d renderer, RenderNode contract, makeMovable + makeResizable, panel drag,
+                     the sanitizing markdown renderer (markdown.ts) + the document viewer
   anchor/            the Three.js reactor (the only WebGL)
-  conversation/      the front window, markdown, the 3D-lean recede, attachment
+  conversation/      the front window, the 3D-lean recede, generated visuals, attachment
                      display + the composer's attach/upload (attachments.ts), and the
                      ordered/expandable tool-use pills (live tool_step + reload rehydration)
   conversation-picker/  the top-band history panel

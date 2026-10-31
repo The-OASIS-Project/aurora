@@ -1,6 +1,6 @@
 /*
  * Login panel: the one place the dashboard collects credentials. Chrome, like the
- * HUD and menu, so it lives outside the render seam and only reports intent — it
+ * HUD and menu, so it lives outside the render seam and only reports intent - it
  * hands (username, password) to onConnect and reflects the connection status the
  * ingest reports back. It never sees the session cookie (HttpOnly).
  *
@@ -8,7 +8,7 @@
  * chip once the socket is up (so it stays out of the way of the live dashboard).
  */
 
-import type { LinkStatus } from "../ingest/dawn-ws.ts";
+import type { LinkStatus } from "../ingest/ingest.ts";
 
 export interface LoginOptions {
    onConnect: (username: string, password: string) => Promise<void>;
@@ -113,14 +113,15 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
          connectBtn.disabled = false;
       }
    };
-   card.addEventListener("submit", onSubmit);
+   const onSubmitEvent = (e: Event): void => void onSubmit(e); // onSubmit settles on its own (try/finally)
+   card.addEventListener("submit", onSubmitEvent);
 
    const onChipClick = (): void => opts.onLogout();
    chip.addEventListener("click", onChipClick);
 
    const setStatus = (status: LinkStatus, detail?: string): void => {
       const label = STATUS_TEXT[status];
-      statusEl.textContent = detail ? `${label} — ${detail}` : label;
+      statusEl.textContent = detail ? `${label}: ${detail}` : label;
       statusEl.dataset.state = status;
       overlay.dataset.state = status;
 
@@ -150,7 +151,7 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       card.hidden = takenOver;
       /* Show the card only when the user is actually needed (enter creds) or while
          a manual login is running. `checking` and a silent auto-resume's
-         connecting phase keep it hidden — no blip on a successful F5 resume. */
+         connecting phase keep it hidden - no blip on a successful F5 resume. */
       const needsUser = status === "idle" || status === "disconnected" || status === "error";
       const manualProgress = manual && (status === "authenticating" || status === "connecting");
       overlay.hidden = chipVisible || !(takenOver || needsUser || manualProgress);
@@ -168,7 +169,7 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
    return {
       setStatus,
       destroy: () => {
-         card.removeEventListener("submit", onSubmit);
+         card.removeEventListener("submit", onSubmitEvent);
          chip.removeEventListener("click", onChipClick);
          reclaimBtn.removeEventListener("click", onReclaimClick);
          overlay.remove();

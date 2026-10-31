@@ -20,6 +20,7 @@
 
 import type { AlarmChime } from "../audio/alarm-chime.ts";
 import type { NoticeAction, NotificationsSink } from "./ingest.ts";
+import { str } from "./wire.ts";
 
 export const PHONE_NOTICE_ID = "phone-call";
 const FALLBACK_MS = 30_000; // clear a card stuck waiting for a frame that never came (then re-ask)
@@ -69,7 +70,7 @@ export class PhoneCalls {
 
    /* A phone_call_notification frame (a live event, or the reply to phone_status). */
    onFrame(p: Record<string, unknown>): void {
-      const status = String(p.status ?? "");
+      const status = str(p.status);
       if (status === "ended") {
          this.clear();
          return;

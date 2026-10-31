@@ -19,26 +19,26 @@ export function audioDataToChannels(data: AudioData): Float32Array[] {
    for (let c = 0; c < channels; c++) out.push(new Float32Array(frames));
 
    if (format === "f32-planar") {
-      for (let c = 0; c < channels; c++) data.copyTo(out[c]!, { planeIndex: c });
+      for (let c = 0; c < channels; c++) data.copyTo(out[c], { planeIndex: c });
    } else if (format === "f32") {
       const inter = new Float32Array(frames * channels);
       data.copyTo(inter, { planeIndex: 0 });
       for (let i = 0; i < frames; i++) {
-         for (let c = 0; c < channels; c++) out[c]![i] = inter[i * channels + c]!;
+         for (let c = 0; c < channels; c++) out[c][i] = inter[i * channels + c]!;
       }
    } else if (format === "s16") {
       const bytes = new ArrayBuffer(frames * channels * 2);
       data.copyTo(bytes, { planeIndex: 0 });
       const i16 = new Int16Array(bytes);
       for (let i = 0; i < frames; i++) {
-         for (let c = 0; c < channels; c++) out[c]![i] = i16[i * channels + c]! / 32768;
+         for (let c = 0; c < channels; c++) out[c][i] = i16[i * channels + c] / 32768;
       }
    } else if (format === "s16-planar") {
       for (let c = 0; c < channels; c++) {
          const bytes = new ArrayBuffer(frames * 2);
          data.copyTo(bytes, { planeIndex: c });
          const i16 = new Int16Array(bytes);
-         for (let i = 0; i < frames; i++) out[c]![i] = i16[i]! / 32768;
+         for (let i = 0; i < frames; i++) out[c][i] = i16[i] / 32768;
       }
    } else {
       return [];

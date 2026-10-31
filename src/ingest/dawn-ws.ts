@@ -4,9 +4,9 @@
  * the same four sinks, so nothing above this boundary changes (brief S7.4).
  *
  * Two responsibilities:
- *   1. Auth + transport — log in over /api/auth, open the /ws WebSocket with the
+ *   1. Auth + transport - log in over /api/auth, open the /ws WebSocket with the
  *      mandatory `dawn-1.0` subprotocol, own its lifecycle.
- *   2. Frame routing — translate DAWN's { type, payload } frames into sink calls.
+ *   2. Frame routing - translate DAWN's { type, payload } frames into sink calls.
  *
  * SCOPE (slice 1): connection + auth + the reactor's state machine + live reply
  * streaming + a connection status readout. Every frame we do not yet consume is
@@ -16,7 +16,7 @@
  * READ-MOSTLY: this client sends nothing that mutates DAWN. On open it sends
  * `init` with tts_enabled:false (no TTS audio streamed to a display). The only
  * outbound that does real work is `text`, and only when the user types a message
- * into the console. Focus/blur (setEngaged) tells DAWN nothing — our reactor
+ * into the console. Focus/blur (setEngaged) tells DAWN nothing - our reactor
  * reflects DAWN's actual state, never our input focus.
  *
  * Protocol reference: dawn/docs/WEBSOCKET_PROTOCOL.md
@@ -26,6 +26,7 @@
 import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
 import type {
    ActivityStatus,
+   LinkStatus,
    CalendarEvent,
    CalendarInfo,
    ContextItem,
@@ -96,6 +97,7 @@ import {
    type Reasoning
 } from "../model/model.ts";
 import { todayWindow } from "../util/time.ts";
+import { str } from "./wire.ts";
 import { safeTimeZone } from "../util/tz.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
@@ -244,17 +246,6 @@ function fmtUptime(seconds: number): string {
    return `${hh}:${mm}:${ss}`;
 }
 
-export type LinkStatus =
-   | "checking" // silently probing a stored session on load — no card shown
-   | "idle"
-   | "authenticating"
-   | "connecting"
-   | "connected"
-   | "stale" // socket open but a heartbeat ping went unanswered — link unstable, not yet dead
-   | "superseded" // another tab took over this session (WS close 4001); we backed off, awaiting reclaim
-   | "disconnected"
-   | "error";
-
 type StatusHandler = (status: LinkStatus, detail?: string) => void;
 
 /* Persisted so a reload/reconnect RESUMES the same DAWN session instead of
@@ -313,10 +304,10 @@ function toActivity(dawn: string, detail?: string): ActivityStatus | null {
 /* One track row from a queue / search / library payload. */
 function toMusicTrack(t: Record<string, unknown>): MusicTrack {
    return {
-      path: String(t.path ?? ""),
-      title: String(t.title || t.display_name || ""),
-      artist: String(t.artist ?? ""),
-      album: String(t.album ?? ""),
+      path: str(t.path),
+      title: str(t.title) || str(t.display_name),
+      artist: str(t.artist),
+      album: str(t.album),
       durationSec: Number(t.duration_sec ?? 0) || 0
    };
 }
@@ -345,7 +336,7 @@ function toLibraryPage(p: Record<string, unknown>): MusicLibraryPage | null {
          return {
             kind: "artists",
             artists: arr("artists").map((a) => ({
-               name: String(a.name ?? ""),
+               name: str(a.name),
                albums: Number(a.album_count ?? 0) || 0,
                tracks: Number(a.track_count ?? 0) || 0
             })),
@@ -356,25 +347,17 @@ function toLibraryPage(p: Record<string, unknown>): MusicLibraryPage | null {
          return {
             kind: "albums",
             albums: arr("albums").map((a) => ({
-               name: String(a.name ?? ""),
-               artist: String(a.artist ?? ""),
+               name: str(a.name),
+               artist: str(a.artist),
                tracks: Number(a.track_count ?? 0) || 0
             })),
             offset: num("offset"),
             total: num("total_count")
          };
       case "tracks_by_artist":
-         return {
-            kind: "artist",
-            name: String(p.artist ?? ""),
-            tracks: arr("tracks").map(toMusicTrack)
-         };
+         return { kind: "artist", name: str(p.artist), tracks: arr("tracks").map(toMusicTrack) };
       case "tracks_by_album":
-         return {
-            kind: "album",
-            name: String(p.album ?? ""),
-            tracks: arr("tracks").map(toMusicTrack)
-         };
+         return { kind: "album", name: str(p.album), tracks: arr("tracks").map(toMusicTrack) };
       default:
          return null;
    }
@@ -387,10 +370,10 @@ function toMusicState(p: Record<string, unknown>): MusicState {
    let track: MusicTrack | null = null;
    if (t && typeof t === "object") {
       track = {
-         path: String(t.path ?? ""),
-         title: String(t.title ?? ""),
-         artist: String(t.artist ?? ""),
-         album: String(t.album ?? ""),
+         path: str(t.path),
+         title: str(t.title),
+         artist: str(t.artist),
+         album: str(t.album),
          durationSec: Number(t.duration_sec ?? 0)
       };
    }
@@ -406,9 +389,9 @@ function toMusicState(p: Record<string, unknown>): MusicState {
       shuffle: p.shuffle === true,
       repeatMode: Number(p.repeat_mode ?? 0),
       volume: Number(p.volume ?? 1),
-      quality: String(p.quality ?? ""),
+      quality: str(p.quality),
       bitrate: Number(p.bitrate ?? 0),
-      sourceFormat: String(p.source_format ?? ""),
+      sourceFormat: str(p.source_format),
       sourceRate: Number(p.source_rate ?? 0),
       loading: p.loading === true
    };
@@ -454,13 +437,13 @@ function toCalendarEvent(e: Record<string, unknown>): CalendarEvent {
    return {
       id: Number(e.id ?? 0),
       calendarId: Number(e.calendar_id ?? 0),
-      summary: String(e.summary ?? ""),
-      location: String(e.location ?? ""),
+      summary: str(e.summary),
+      location: str(e.location),
       start: Number(e.start ?? 0),
       end: Number(e.end ?? 0),
       allDay: e.all_day === true,
-      startDate: String(e.start_date ?? ""),
-      endDate: String(e.end_date ?? ""),
+      startDate: str(e.start_date),
+      endDate: str(e.end_date),
       cancelled: e.cancelled === true,
       isOverride: e.is_override === true
    };
@@ -471,12 +454,12 @@ function toCalendarEvent(e: Record<string, unknown>): CalendarEvent {
    DAWN ships the signal-map §9 backend field; absent, hasOriginal falls back to whether a
    blob id came through, and if neither is present the document is a metadata-only row. */
 function toLibraryItem(d: Record<string, unknown>): LibraryItem {
-   const filetype = String(d.filetype ?? "");
+   const filetype = str(d.filetype);
    const blobId =
       typeof d.original_blob_id === "string" && d.original_blob_id ? d.original_blob_id : undefined;
    return {
       id: Number(d.id ?? 0),
-      filename: String(d.filename ?? ""),
+      filename: str(d.filename),
       filetype,
       isNote: d.is_note === true || filetype === "note",
       text: typeof d.text === "string" ? d.text : undefined,
@@ -494,9 +477,9 @@ function toLibraryItem(d: Record<string, unknown>): LibraryItem {
 function toContextItem(d: Record<string, unknown>): ContextItem {
    const b = (d.score_breakdown ?? {}) as Record<string, unknown>;
    const item: ContextItem = {
-      itemId: String(d.item_id ?? ""), // unique per-row key; "" for non-citeable rows (feature-detected)
-      sourceId: String(d.source_id ?? ""),
-      sourceType: String(d.source_type ?? ""),
+      itemId: str(d.item_id), // unique per-row key; "" for non-citeable rows (feature-detected)
+      sourceId: str(d.source_id),
+      sourceType: str(d.source_type),
       text: typeof d.text === "string" ? d.text : "",
       score: Number(d.score ?? 0),
       breakdown: {
@@ -547,13 +530,13 @@ function toHAAttributes(a: Record<string, unknown> | undefined): HAAttributes | 
    the signal-map docs omit but the source actually sends (`area` only when the
    entity is assigned to a room); friendly_name falls back to the entity_id. */
 function toHAEntity(e: Record<string, unknown>): HAEntity {
-   const entityId = String(e.entity_id ?? "");
+   const entityId = str(e.entity_id);
    return {
       entityId,
-      name: String(e.friendly_name ?? entityId),
-      domain: String(e.domain ?? ""),
-      area: String(e.area ?? ""),
-      state: String(e.state ?? ""),
+      name: str(e.friendly_name, entityId),
+      domain: str(e.domain),
+      area: str(e.area),
+      state: str(e.state),
       attributes: toHAAttributes(e.attributes as Record<string, unknown> | undefined)
    };
 }
@@ -649,20 +632,20 @@ function formatCacheAvg(s: { cached: number; input: number; saved: number }): st
 function toWatchItem(w: Record<string, unknown>): WatchItem {
    return {
       id: Number(w.id ?? 0),
-      name: String(w.name ?? ""),
-      metric: String(w.metric ?? ""),
-      label: String(w.label ?? w.metric ?? ""),
-      unit: String(w.unit ?? ""),
-      ruleType: String(w.rule_type ?? "threshold"),
-      direction: String(w.direction ?? "above"),
+      name: str(w.name),
+      metric: str(w.metric),
+      label: str(w.label, str(w.metric)),
+      unit: str(w.unit),
+      ruleType: str(w.rule_type, "threshold"),
+      direction: str(w.direction, "above"),
       threshold: typeof w.threshold === "number" ? w.threshold : undefined,
       slopePerMin: typeof w.slope_per_min === "number" ? w.slope_per_min : undefined,
       slopeWindowSec: typeof w.slope_window_sec === "number" ? w.slope_window_sec : undefined,
       absenceAfterSec: Number(w.absence_after_sec ?? 0),
-      notify: String(w.notify ?? ""),
+      notify: str(w.notify),
       enabled: w.enabled === true,
       named: w.named === true,
-      source: String(w.source ?? ""),
+      source: str(w.source),
       hasCurrent: w.has_current === true,
       current: typeof w.current === "number" ? w.current : undefined,
       breaching: typeof w.breaching === "boolean" ? w.breaching : undefined
@@ -729,7 +712,7 @@ function stockDesc(v: unknown): string | undefined {
 
 function toStockPosition(r: Record<string, unknown>): StockPosition {
    return {
-      symbol: String(r.symbol ?? ""),
+      symbol: str(r.symbol),
       description: stockDesc(r.description),
       assetType: asStockAssetType(r.asset_type),
       qty: finNum(r.qty),
@@ -745,7 +728,7 @@ function toStockPosition(r: Record<string, unknown>): StockPosition {
 function toStockAccount(a: Record<string, unknown>): StockAccount {
    const positions = a.positions;
    return {
-      label: String(a.label ?? ""),
+      label: str(a.label),
       value: finNum(a.value),
       cash: finNum(a.cash),
       dayChange: finNum(a.day_change),
@@ -793,7 +776,7 @@ function toStockPortfolio(p: Record<string, unknown>): StockPortfolio {
    held. Same allowlist + finite guards as the portfolio mapping. --- */
 function toStockWatchSymbol(r: Record<string, unknown>): StockWatchSymbol {
    return {
-      symbol: String(r.symbol ?? ""),
+      symbol: str(r.symbol),
       description: stockDesc(r.description),
       assetType: asStockAssetType(r.asset_type),
       price: finNum(r.price),
@@ -837,7 +820,7 @@ function watchRejectMessage(rejected: unknown): string | null {
       .map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>) : null))
       .map((r) => {
          if (!r) return null;
-         const sym = String(r.symbol ?? "")
+         const sym = str(r.symbol)
             .toUpperCase()
             .replace(/[^A-Z0-9.]/g, "")
             .slice(0, 12);
@@ -1319,7 +1302,7 @@ export class DawnIngest implements Ingest {
    private readonly llmListeners: Array<() => void> = [];
    private readonly seenUnhandled = new Set<string>();
 
-   /* Bind the sinks. Does NOT connect — the user drives that from the login
+   /* Bind the sinks. Does NOT connect - the user drives that from the login
       panel via connect(), so credentials never live in the composition root. */
    start(sinks: IngestSinks): void {
       this.sinks = sinks;
@@ -1333,7 +1316,7 @@ export class DawnIngest implements Ingest {
       if (this.rateEma > 0) {
          this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
       }
-      /* Stay silent until tryResume() decides — so a successful auto-resume never
+      /* Stay silent until tryResume() decides - so a successful auto-resume never
          flashes the login card. */
       this.emit("checking");
    }
@@ -1361,12 +1344,7 @@ export class DawnIngest implements Ingest {
          the login and every URL after it must agree on which cookie they use. */
       /* Unknown flags would mean logging in on the shared cookie, which on a newer DAWN overwrites
          the WebUI's login with this user: stop instead (an older DAWN still answers status). */
-      let status: Awaited<ReturnType<DawnIngest["authStatus"]>> = null;
-      try {
-         status = await this.authStatus();
-      } catch {
-         status = null;
-      }
+      const status = await this.authStatusOrNull();
       if (!status) {
          this.emit("error", "Couldn't reach DAWN");
          throw new Error("Couldn't reach DAWN");
@@ -1454,7 +1432,7 @@ export class DawnIngest implements Ingest {
             });
          }
       }
-      let ok = false;
+      let ok: boolean;
       try {
          const res = await fetch(this.dawnUrl("/api/auth/logout"), {
             method: "POST",
@@ -1543,7 +1521,7 @@ export class DawnIngest implements Ingest {
          );
          return;
       }
-      /* No valid session — reveal the login card, with why the last one ended if it was revoked. */
+      /* No valid session - reveal the login card, with why the last one ended if it was revoked. */
       const reason = takeEndReason();
       if (reason) this.emit("error", reason);
       else this.emit("idle");
@@ -1557,27 +1535,24 @@ export class DawnIngest implements Ingest {
    private watchForLogin(checks: number): void {
       window.clearTimeout(this.loginWatchTimer);
       this.loginWatchTimer = window.setTimeout(
-         async () => {
-            if (this.wantConnected) return; // signing in, or already resumed
-            let s: Awaited<ReturnType<DawnIngest["authStatus"]>> = null;
-            try {
-               s = await this.authStatus();
-            } catch {
-               s = null;
-            }
-            if (this.wantConnected) return;
-            if (!s?.authenticated) {
-               this.watchForLogin(checks + 1);
-               return;
-            }
-            /* Logged in as someone other than this tab showed (its panels may still hold that user's
-            data, behind the card): no automatic resume; signing in reloads onto a clean page. */
-            const who = typeof s.username === "string" ? s.username.trim() : "";
-            if (this.signedInAs !== "" && who !== this.signedInAs) return;
-            void this.tryResume();
-         },
+         () => void this.checkLogin(checks),
          checks < LOGIN_WATCH_FAST_CHECKS ? LOGIN_WATCH_FAST_MS : LOGIN_WATCH_SLOW_MS
       );
+   }
+
+   private async checkLogin(checks: number): Promise<void> {
+      if (this.wantConnected) return; // signing in, or already resumed
+      const s = await this.authStatusOrNull();
+      if (this.wantConnected) return;
+      if (!s?.authenticated) {
+         this.watchForLogin(checks + 1);
+         return;
+      }
+      /* Logged in as someone other than this tab showed (its panels may still hold that user's
+            data, behind the card): no automatic resume; signing in reloads onto a clean page. */
+      const who = typeof s.username === "string" ? s.username.trim() : "";
+      if (this.signedInAs !== "" && who !== this.signedInAs) return;
+      void this.tryResume();
    }
 
    private openSocket(): void {
@@ -1585,7 +1560,7 @@ export class DawnIngest implements Ingest {
       this.configSeen = false;
       this.emit("connecting");
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      /* Same-origin /ws — Vite proxies it to the DAWN daemon. The dawn-1.0
+      /* Same-origin /ws - Vite proxies it to the DAWN daemon. The dawn-1.0
          subprotocol is MANDATORY: omit it and libwebsockets routes us to its
          HTTP handler, the socket "opens", and every frame is silently dropped. */
       const ws = new WebSocket(
@@ -1986,7 +1961,10 @@ export class DawnIngest implements Ingest {
             rather than leaving whoever is waiting on it (a sign-out check, the resume) hanging. */
          const res = await fetch(url, {
             credentials: "same-origin",
-            signal: AbortSignal.timeout(AUTH_STATUS_TIMEOUT_MS)
+            signal:
+               typeof AbortSignal.timeout === "function"
+                  ? AbortSignal.timeout(AUTH_STATUS_TIMEOUT_MS)
+                  : undefined // feature-detected, as logout
          });
          return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
       };
@@ -1996,7 +1974,7 @@ export class DawnIngest implements Ingest {
          setAppLogins(true); // shared with the markdown renderer (same-origin /api links in replies)
          s = await get(this.dawnUrl("/api/auth/status"));
       }
-      return s as { authenticated?: boolean; username?: string; protocol?: unknown } | null;
+      return s;
    }
 
    /* Whether DAWN advertised a behaviour flag (false on an older DAWN that sends none). */
@@ -2106,12 +2084,16 @@ export class DawnIngest implements Ingest {
    private onFrame(raw: string): void {
       let msg: { type?: string; payload?: unknown };
       try {
-         msg = JSON.parse(raw);
+         msg = JSON.parse(raw) as { type?: string; payload?: unknown };
       } catch {
          return;
       }
-      const type = msg.type ?? "";
-      const p = (msg.payload ?? {}) as Record<string, unknown>;
+      if (!msg || typeof msg !== "object") return; // valid JSON, but not a frame
+      const type = typeof msg.type === "string" ? msg.type : "";
+      const p = (msg.payload && typeof msg.payload === "object" ? msg.payload : {}) as Record<
+         string,
+         unknown
+      >;
 
       /* A turn can run to completion on a conversation the user has switched away from (DAWN
          keeps it in that conversation's own history). Its live frames are tagged with that
@@ -2379,7 +2361,7 @@ export class DawnIngest implements Ingest {
             this.cloudVision = cfg.llm?.cloud?.vision_enabled === true;
             this.localVision = cfg.llm?.local?.vision_enabled === true;
             /* CURRENT session state: llm_runtime (payload level, resolved for this
-               session) — the reliable source, since llm_state_update only fires on a
+               session) - the reliable source, since llm_state_update only fires on a
                switch_llm tool call, never on connect. Provider is capitalized here.
                As of signal-map §9.1a it also carries the session's resolved
                thinking_mode + reasoning_effort, so a fresh connection shows the real
@@ -2997,7 +2979,7 @@ export class DawnIngest implements Ingest {
             break;
 
          case "new_conversation_response": {
-            /* The fresh conversation the daemon just created — persist to it now. A
+            /* The fresh conversation the daemon just created - persist to it now. A
                `server_initiated` push is DAWN lazily auto-creating+binding a conversation for a
                voice turn that had none (always-on / push-to-talk); it carries the
                transcript-derived `title` and OWNS the conversation's privacy (public). So on that
@@ -3039,7 +3021,7 @@ export class DawnIngest implements Ingest {
                   triggers exactly one list_conversations, not two. */
                window.clearTimeout(this.convListTimer);
                this.convListTimer = 0;
-               this.requestConversations(); // the new row now exists — refresh the picker list
+               this.requestConversations(); // the new row now exists - refresh the picker list
                if (!serverInitiated && this.isPrivate) {
                   /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
                      without an id): the new conversation inherits the pending intent. Skipped for
@@ -3069,12 +3051,12 @@ export class DawnIngest implements Ingest {
          }
 
          case "phone_call_notification":
-            this.phone.onFrame(p as Record<string, unknown>);
+            this.phone.onFrame(p);
             break;
 
          case "state":
             this.applyState(
-               String(p.state ?? "idle"),
+               str(p.state, "idle"),
                typeof p.detail === "string" ? p.detail : undefined,
                p.tools
             );
@@ -3347,7 +3329,7 @@ export class DawnIngest implements Ingest {
 
          case "music_search_response": {
             const r = Array.isArray(p.results) ? (p.results as Array<Record<string, unknown>>) : [];
-            this.sinks.music.setSearchResults?.(String(p.query ?? ""), r.map(toMusicTrack));
+            this.sinks.music.setSearchResults?.(str(p.query), r.map(toMusicTrack));
             break;
          }
 
@@ -3363,20 +3345,17 @@ export class DawnIngest implements Ingest {
                audio again (the previous had paused that expectation) and it's logged quietly. */
             if (p.code === "NOTHING_EARLIER") {
                this.musicWatch.setPlaying(this.prevMusicPlaying);
-               this.sinks.music.setError(
-                  String(p.message ?? "Nothing earlier to go back to"),
-                  "info"
-               );
+               this.sinks.music.setError(str(p.message, "Nothing earlier to go back to"), "info");
                console.info("[dawn] music: nothing earlier to go back to");
                break;
             }
             /* DAWN can stop streaming on an error without a music_state (a failed auto-advance
                decode), so stop expecting audio until the next music_state says playing again. */
             this.musicWatch.setPlaying(false);
-            this.sinks.music.setError(String(p.message ?? p.code ?? "Music error"));
+            this.sinks.music.setError(str(p.message, str(p.code, "Music error")));
             /* The queue and library section's own refusals: it stops waiting and says so. */
-            if (MUSIC_SECTION_ERRORS.has(String(p.code ?? "")))
-               this.sinks.music.setLibraryError?.(String(p.code), String(p.message ?? ""));
+            if (MUSIC_SECTION_ERRORS.has(str(p.code)))
+               this.sinks.music.setLibraryError?.(str(p.code), str(p.message));
             console.warn("[dawn] music_error:", p.code, p.message);
             break;
 
@@ -3386,8 +3365,8 @@ export class DawnIngest implements Ingest {
             const cals = (p.calendars ?? []) as Array<Record<string, unknown>>;
             const map: CalendarInfo[] = cals.map((c) => ({
                id: Number(c.id ?? 0),
-               name: String(c.name ?? ""),
-               color: String(c.color ?? "")
+               name: str(c.name),
+               color: str(c.color)
             }));
             this.sinks.calendar.setCalendars(map);
             break;
@@ -3434,8 +3413,8 @@ export class DawnIngest implements Ingest {
                if (p.success === true && typeof p.text === "string") {
                   pending.resolve({
                      text: p.text,
-                     filename: String(p.filename ?? ""),
-                     filetype: String(p.filetype ?? "")
+                     filename: str(p.filename),
+                     filetype: str(p.filetype)
                   });
                } else {
                   pending.resolve(null);
@@ -3532,7 +3511,7 @@ export class DawnIngest implements Ingest {
             const ents = (p.entities ?? []) as Array<Record<string, unknown>>;
             let touched = false;
             for (const e of ents) {
-               const id = String(e.entity_id ?? "");
+               const id = str(e.entity_id);
                if (!id) continue;
                if (e.removed === true) this.haEntities.delete(id);
                else this.haEntities.set(id, toHAEntity(e));
@@ -3560,9 +3539,9 @@ export class DawnIngest implements Ingest {
             }
             const rows = (p.watches ?? []) as Array<Record<string, unknown>>;
             const catalog = ((p.catalog ?? []) as Array<Record<string, unknown>>).map((c) => ({
-               key: String(c.key ?? ""),
-               label: String(c.label ?? c.key ?? ""),
-               unit: String(c.unit ?? ""),
+               key: str(c.key),
+               label: str(c.label, str(c.key)),
+               unit: str(c.unit),
                ruleType: typeof c.rule_type === "string" ? c.rule_type : undefined,
                defaultDirection:
                   typeof c.default_direction === "string" ? c.default_direction : undefined,
@@ -3660,7 +3639,7 @@ export class DawnIngest implements Ingest {
          }
 
          case "jobs_snapshot": {
-            /* The complete active set — replace ours wholesale. */
+            /* The complete active set - replace ours wholesale. */
             this.jobs.clear();
             for (const j of (p.jobs ?? []) as JobRow[]) this.trackJob(j);
             this.renderJobs();
@@ -3693,14 +3672,14 @@ export class DawnIngest implements Ingest {
 
          case "job_notification":
             /* A job finished: spike a transient notice that recedes on its own. */
-            this.spikeNotice("job-notice", "jobs", String(p.text ?? "Background job complete"), {});
+            this.spikeNotice("job-notice", "jobs", str(p.text, "Background job complete"), {});
             break;
 
          case "attention_alert": {
-            /* SAGE proactive attention — the signature ambient spike. level=alert
+            /* SAGE proactive attention - the signature ambient spike. level=alert
                needs the user (warm + claims the front); level=ambient is an FYI. */
-            const alert = String(p.level ?? "ambient") === "alert";
-            const summary = String(p.summary ?? "");
+            const alert = str(p.level, "ambient") === "alert";
+            const summary = str(p.summary);
             /* Key the notice by its text: distinct alerts get distinct cards (two watches firing
                close together stack instead of one overwriting the other), while an identical
                re-fire coalesces onto the same card and re-spikes - so one flapping watch can't
@@ -3721,12 +3700,14 @@ export class DawnIngest implements Ingest {
             /* A quieter noticed-something FYI, categorized (calendar/email/…). Keyed by
                category+note so distinct observations stack and identical ones coalesce (see
                attention_alert). */
-            const category = String(p.category ?? "note");
-            const note = String(p.note ?? "");
-            this.spikeNotice(`observation:${category}:${note}`, category, note, {
-               hold: 5
-               /* Centered in the dead strip too (see attention_alert), just lower. */
-            });
+            {
+               const category = str(p.category, "note");
+               const note = str(p.note);
+               this.spikeNotice(`observation:${category}:${note}`, category, note, {
+                  hold: 5
+                  /* Centered in the dead strip too (see attention_alert), just lower. */
+               });
+            }
             break;
 
          case "context_injection": {
@@ -3743,7 +3724,7 @@ export class DawnIngest implements Ingest {
                turnId: Number(root.turn_id ?? 0),
                items: items.map(toContextItem),
                rejections: rej.map((r) => ({
-                  sourceId: String(r.source_id ?? ""),
+                  sourceId: str(r.source_id),
                   count: Number(r.count ?? 0)
                }))
             });
@@ -3773,9 +3754,9 @@ export class DawnIngest implements Ingest {
                for the dismiss->scheduler_action path. Reminders/timers auto-dismiss server-
                side after their chime, so they are NOT tracked and their auto-dismiss frame is
                ignored below (else the card would flash and vanish before it can be read). */
-            const status = String(p.status ?? "");
-            const message = String(p.message ?? "");
-            const eventType = String(p.event_type ?? "alarm");
+            const status = str(p.status);
+            const message = str(p.message);
+            const eventType = str(p.event_type, "alarm");
             const eventId = Number(p.event_id ?? 0);
             const missed = p.missed === true;
             const noticeId = `scheduler-${eventId}`;
@@ -3790,7 +3771,7 @@ export class DawnIngest implements Ingest {
                   can't silently evict its card - that would leave the loop beeping with no
                   on-screen control. Reminders/timers and missed replays are ordinary. */
                const ringingAlarm = eventType === "alarm" && status === "ringing" && !missed;
-               this.spikeNotice(noticeId, eventType, String(p.name ?? "Alarm"), {
+               this.spikeNotice(noticeId, eventType, str(p.name, "Alarm"), {
                   tone: "attention",
                   hold: 10,
                   detail: message,
@@ -3940,7 +3921,7 @@ export class DawnIngest implements Ingest {
             break;
 
          case "stream_delta": {
-            this.sinks.conversation.appendDelta(String(p.delta ?? ""));
+            this.sinks.conversation.appendDelta(str(p.delta));
             break;
          }
 
@@ -4013,7 +3994,7 @@ export class DawnIngest implements Ingest {
                error?: unknown;
             } = {};
             try {
-               obj = JSON.parse(String(p.payload ?? "")) as typeof obj;
+               obj = JSON.parse(str(p.payload)) as typeof obj;
             } catch {
                /* garbled / non-JSON payload -> treat as empty (generic label, no detail) */
             }
@@ -4038,7 +4019,7 @@ export class DawnIngest implements Ingest {
 
          case "transcript":
             /* DAWN smuggles llm_state_update inside a transcript with this role
-               (webui_server.c). Intercept it — it is not a message. */
+               (webui_server.c). Intercept it - it is not a message. */
             if (p.role === "__llm_state__" && typeof p.text === "string") {
                this.applyLlmState(p.text);
                break;
@@ -4179,8 +4160,8 @@ export class DawnIngest implements Ingest {
 
          default:
             /* The mail panel's replies (email_*_response), matched by req in email-wire.ts. */
-            if (this.email.handleFrame(type, p as Record<string, unknown>)) break;
-            /* Log each unseen type ONCE — this is our live map of what to wire
+            if (this.email.handleFrame(type, p)) break;
+            /* Log each unseen type ONCE - this is our live map of what to wire
                next (attention_alert, scheduler_notification, job_*, music_*, ...). */
             if (!this.seenUnhandled.has(type)) {
                this.seenUnhandled.add(type);
@@ -4507,16 +4488,16 @@ export class DawnIngest implements Ingest {
       });
       if (!res.ok) throw new Error(`document upload failed: ${res.status}`);
       const j = (await res.json()) as Record<string, unknown>;
-      if (j.success === false) throw new Error(String(j.error ?? "upload failed"));
+      if (j.success === false) throw new Error(str(j.error, "upload failed"));
       const blobId =
          typeof j.original_blob_id === "string" && j.original_blob_id
             ? j.original_blob_id
             : undefined;
       return {
-         filename: String(j.filename ?? file.name),
+         filename: str(j.filename, file.name),
          content: typeof j.content === "string" ? j.content : "",
          size: Number(j.size ?? file.size),
-         type: String(j.type ?? ""),
+         type: str(j.type),
          blobId
       };
    }
@@ -4536,7 +4517,7 @@ export class DawnIngest implements Ingest {
       const j = (await res.json()) as Record<string, unknown>;
       const id = typeof j.id === "string" ? j.id : "";
       if (!id) throw new Error("image upload returned no id");
-      return { id, mimeType: String(j.mime_type ?? "image/jpeg"), size: Number(j.size ?? 0) };
+      return { id, mimeType: str(j.mime_type, "image/jpeg"), size: Number(j.size ?? 0) };
    }
 
    /* Whether the active model can see images (resolved from get_config's cloud/local
@@ -5040,7 +5021,9 @@ export class DawnIngest implements Ingest {
       this.send({ type: "always_on_enable", payload: { sample_rate: 48000 } });
       /* Seed the echo mute: latching while DAWN is mid-reply (speaking or audio still
          playing) must not capture its voice. updateMicMute drives it after this. */
-      this.mic.continuousStart(this.dawnSpeaking || this.tts.isSpeaking());
+      this.mic
+         .continuousStart(this.dawnSpeaking || this.tts.isSpeaking())
+         .catch((e: unknown) => console.warn("[dawn] continuous listening failed to start:", e));
    }
 
    /* userInitiated: a tap-off / auto-unlatch clears the resume flag; a transient teardown
@@ -5324,7 +5307,7 @@ export class DawnIngest implements Ingest {
    private notifyLlm(): void {
       /* Persistent HUD readout of the current brain: model + effort (OFF when
          reasoning is disabled, else LOW/MEDIUM/HIGH/…). Do NOT push an empty model
-         — llm_state_update can arrive after get_config, and an empty value would
+         - llm_state_update can arrive after get_config, and an empty value would
          clobber the cached (persistent) reading. */
       const caps = this.currentCaps();
       const entry = caps?.modes.find((m) => m.mode === this.llm.reasoning);
@@ -5364,12 +5347,12 @@ export class DawnIngest implements Ingest {
    private applyLlmState(json: string): void {
       let msg: { payload?: Record<string, unknown> };
       try {
-         msg = JSON.parse(json);
+         msg = JSON.parse(json) as { payload?: Record<string, unknown> };
       } catch {
          return;
       }
-      const pl = msg.payload;
-      if (!pl) return;
+      const pl = msg && typeof msg === "object" ? msg.payload : undefined;
+      if (!pl || typeof pl !== "object") return;
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
       if (typeof pl.provider === "string") {
          const prov = pl.provider.toLowerCase();
@@ -6019,7 +6002,7 @@ export class DawnIngest implements Ingest {
    /* Whether a chat turn can carry an email reference: DAWN's `email_refs` flag (P1.4). Its
       prerequisites are all in (docs/EMAIL_PANEL_DESIGN.md 4): submit() sends `email_refs`,
       private-first creation (newConversation({private:true})), and off-origin images in rendered
-      replies wait for a click (format.ts, 4.7). */
+      replies wait for a click (render/markdown.ts, 4.7). */
    supportsEmailRefs(): boolean {
       return this.hasFeature("email_refs");
    }
@@ -6216,7 +6199,7 @@ export class DawnIngest implements Ingest {
       });
    }
 
-   /* Persist a turn to the DB. DAWN keeps webui text turns in memory only — the
+   /* Persist a turn to the DB. DAWN keeps webui text turns in memory only - the
       client owns the user turn and the final answer rows (webui_history.c message-
       ownership map); without this our conversations never survive a reconnect. */
    /* A user turn from the server. In Phase 0 it arrives BOTH as the transcript echo AND as the

@@ -67,7 +67,12 @@ function blobToBase64(blob: Blob): Promise<string> {
    return new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => {
-         const s = String(r.result);
+         /* readAsDataURL always yields a string; anything else is a failed read. */
+         if (typeof r.result !== "string") {
+            reject(new Error("base64 encode failed"));
+            return;
+         }
+         const s = r.result;
          const comma = s.indexOf(",");
          resolve(comma >= 0 ? s.slice(comma + 1) : s);
       };

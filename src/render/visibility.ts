@@ -6,9 +6,10 @@
  * financial data should not auto-appear). `offClass` is the class whose CSS hides the
  * element (display:none); toggling it is the whole behavior.
  */
+/* Closures, not methods (no `this`): safe to hand on detached, as the panels do. */
 export interface Visibility {
-   isVisible(): boolean;
-   setVisible(on: boolean): void;
+   isVisible: () => boolean;
+   setVisible: (on: boolean) => void;
 }
 
 export function makeVisibility(

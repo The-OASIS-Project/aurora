@@ -3016,11 +3016,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             if (!accountsKnown) render();
             else if (!source.supportsLiveChanges()) {
                /* No change feed to catch up from: what arrived while down is learned by loading again. */
-               if (panelEffective()) rows.length ? refreshInPlace() : reload();
-               else listStale = true;
-            } else if (panelEffective() && (listStale || rows.length === 0))
-               rows.length ? refreshInPlace() : reload();
-            else catchUp();
+               if (!panelEffective()) listStale = true;
+               else if (rows.length) refreshInPlace();
+               else reload();
+            } else if (panelEffective() && (listStale || rows.length === 0)) {
+               if (rows.length) refreshInPlace();
+               else reload();
+            } else catchUp();
          }
          render();
       },
@@ -3050,18 +3052,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          if (!expanded) setExpanded(true);
          raiseMovable(el); // opened from a card: bring it in front of other panels
          const k = keyOf(accountId, messageId);
-         const row =
-            rows.find((r) => rowKey(r) === k) ??
-            ({
-               accountId,
-               messageId,
-               fromName: "",
-               fromAddr: "",
-               subject: "",
-               date: Math.floor(Date.now() / 1000),
-               preview: "",
-               unread: true
-            } as EmailRow);
+         const row = rows.find((r) => rowKey(r) === k) ?? {
+            accountId,
+            messageId,
+            fromName: "",
+            fromAddr: "",
+            subject: "",
+            date: Math.floor(Date.now() / 1000),
+            preview: "",
+            unread: true
+         };
          opts.removeNotice(`mail-new:${accountId}`);
          clearNotifyState(accountId);
          openRow(row);

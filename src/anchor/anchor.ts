@@ -585,6 +585,7 @@ export class Anchor {
       cv.width = cv.height = s;
       const ctx = cv.getContext("2d")!;
       const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      /* color-ok: a white alpha sprite, tinted by the material's color (the palette) where drawn */
       g.addColorStop(0, "rgba(255,255,255,1)");
       g.addColorStop(0.4, "rgba(255,255,255,0.35)");
       g.addColorStop(1, "rgba(255,255,255,0)");

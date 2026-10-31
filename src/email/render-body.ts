@@ -190,6 +190,7 @@ export function renderEmailBody(
       /* Parse the sanitized HTML in an inert <template> (nothing loads or runs there), swap the
          blocked images for placeholders, and hand back its content. */
       const tpl = document.createElement("template");
+      // eslint-disable-next-line no-unsanitized/property -- `clean` is DOMPurify output, parsed in an inert <template>
       tpl.innerHTML = clean;
       const frag = tpl.content;
       placeholders(frag);

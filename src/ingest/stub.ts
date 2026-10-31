@@ -298,7 +298,7 @@ export class StubIngest implements Ingest {
       this.fakeWatches.push({
          id,
          name: named
-            ? (fields as WatchFields).name!
+            ? fields.name!
             : isAbsence
               ? `${cat?.label ?? metric} silent`
               : `${cat?.label ?? metric} ${dir} ${thr}`,
@@ -734,57 +734,60 @@ export class StubIngest implements Ingest {
    loadMoreLibrary(_offset: number): void {}
    /* No real files behind the stub: hand back a small markdown blob so the reader has
       something to render for a txt/md stub doc (a pdf stub just "downloads" this). */
-   async fetchDocumentOriginal(_blobId: string): Promise<{ blob: Blob; contentType: string }> {
+   fetchDocumentOriginal(_blobId: string): Promise<{ blob: Blob; contentType: string }> {
       const text =
          "# Stub document\n\nFake original text for offline dev.\n\n- alpha\n- beta\n- gamma\n";
-      return { blob: new Blob([text], { type: "text/markdown" }), contentType: "text/markdown" };
+      return Promise.resolve({
+         blob: new Blob([text], { type: "text/markdown" }),
+         contentType: "text/markdown"
+      });
    }
    /* No DAWN vendor scripts behind the stub: a chart visual renders without its library. */
-   async fetchVendorScript(_path: string): Promise<string> {
-      throw new Error("no vendor scripts in the stub");
+   fetchVendorScript(_path: string): Promise<string> {
+      return Promise.reject(new Error("no vendor scripts in the stub"));
    }
    /* No real images behind the stub. */
-   async fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
-      return { blob: new Blob(), contentType: "" };
+   fetchImage(_id: string): Promise<{ blob: Blob; contentType: string }> {
+      return Promise.resolve({ blob: new Blob(), contentType: "" });
    }
    /* Fake a document upload: echo the file with a bit of extracted text. */
-   async uploadDocument(file: File): Promise<UploadedDoc> {
-      return {
+   uploadDocument(file: File): Promise<UploadedDoc> {
+      return Promise.resolve({
          filename: file.name,
          content: `Stub extracted text for ${file.name}.`,
          size: file.size,
          type: (file.name.split(".").pop() ?? "").toLowerCase()
-      };
+      });
    }
    /* Fake an image upload. */
-   async uploadImage(_image: Blob): Promise<UploadedImage> {
-      return { id: "img_stubstub0001", mimeType: "image/jpeg", size: 0 };
+   uploadImage(_image: Blob): Promise<UploadedImage> {
+      return Promise.resolve({ id: "img_stubstub0001", mimeType: "image/jpeg", size: 0 });
    }
    /* The stub pretends to be vision-capable so the attach path can be exercised offline. */
    isVisionCapable(): boolean {
       return true;
    }
    /* Fake reassembled full text for any doc (so a no-original stub doc still reads). */
-   async getDocumentText(
+   getDocumentText(
       id: number
    ): Promise<{ text: string; filename: string; filetype: string } | null> {
       const item = this.libraryItems.find((i) => i.id === id);
-      if (!item) return null;
-      return {
+      if (!item) return Promise.resolve(null);
+      return Promise.resolve({
          text: `# ${item.filename}\n\nReassembled full text (stub) for offline dev.\n\nThis stands in for a generated document's body fetched via doc_library_get.`,
          filename: item.filename,
          filetype: item.filetype
-      };
+      });
    }
 
-   async updateNote(id: number, _label: string, text: string): Promise<string | null> {
+   updateNote(id: number, _label: string, text: string): Promise<string | null> {
       const item = this.libraryItems.find((i) => i.id === id);
       if (item) item.text = text; // reflect the edit offline so the reader/list stay consistent
-      return null;
+      return Promise.resolve(null);
    }
 
-   async updateDocText(_id: number, _text: string): Promise<string | null> {
-      return null; // stub: no persistence, report success so the dev editor flow works
+   updateDocText(_id: number, _text: string): Promise<string | null> {
+      return Promise.resolve(null); // stub: no persistence, report success so the dev editor flow works
    }
 
    /* Focus puts DAWN in listening; blur returns to idle unless mid-response. */

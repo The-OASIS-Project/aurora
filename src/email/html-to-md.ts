@@ -100,12 +100,15 @@ export function safeUrl(raw: string | null | undefined, kind: "link" | "image"):
 /* Text -> markdown-inert text. Backslash-escape the markdown metacharacters (CommonMark
    unescapes any escaped ASCII punctuation back to the literal), then entity-encode < > &. */
 export function escapeMd(s: string): string {
-   return s
-      .replace(/\u0000/g, "")
-      .replace(/[\\`*_{}[\]()#+\-.!|~=]/g, "\\$&")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+   return (
+      s
+         // eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
+         .replace(/\u0000/g, "")
+         .replace(/[\\`*_{}[\]()#+\-.!|~=]/g, "\\$&")
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+   );
 }
 
 /* A URL inside markdown's (...) destination: parens and spaces must not end it early. */
@@ -219,10 +222,12 @@ interface Ctx {
    images: number; // real remote images emitted (https; tracking pixels excluded)
 }
 
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const PRE_RE = /\u0000PRE(\d+)\u0000/g;
 const PRE_TOKEN = (n: number): string => `\u0000PRE${n}\u0000`;
 
 /* Raw text for code: visible text only, never NUL (the PRE token's delimiter). */
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const codeText = (el: Element): string => flatText(el).replace(/\u0000/g, "");
 
 /* In an inline context (a heading, emphasis, a link, a list item, ...) a code block can't be
@@ -428,6 +433,7 @@ function list(el: Element, ctx: Ctx, depth: number, indent: string): string {
 
 /* A cell whose markdown starts a block construct must not be joined onto one line with others
    (it would turn the whole row into a heading, quote, list, or fence). */
+// eslint-disable-next-line no-control-regex -- NUL is this module's placeholder sentinel, never in real text
 const BLOCK_START = /^(#|>|- |\d+\. |`{3,}|\u0000PRE)/;
 
 /* A table row: short single-line cells share one line ("a · b"); anything bigger stacks. */

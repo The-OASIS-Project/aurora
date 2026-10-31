@@ -9,7 +9,7 @@ beforeAll(() => {
       });
    }
    Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} });
-   Element.prototype.scrollTo = function () {} as typeof Element.prototype.scrollTo;
+   Element.prototype.scrollTo = function () {};
    class NoopObserver {
       observe(): void {}
       unobserve(): void {}

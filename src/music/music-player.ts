@@ -112,10 +112,10 @@ function parseHex(c: string): [number, number, number] | null {
 }
 
 /* A gradient across the given stops sampled at t in [0,1]. Falls back to the last
-   parseable stop (or grey) if a stop is not hex, so a bad var never throws. */
+   parseable stop (or the dim text token) if a stop is not hex, so a bad var never throws. */
 function sampleStops(stops: Array<[number, number, number] | null>, t: number): string {
    const valid = stops.filter((s): s is [number, number, number] => s !== null);
-   if (valid.length === 0) return "#888888";
+   if (valid.length === 0) return PALETTE.textDim;
    if (valid.length === 1) return `rgb(${valid[0][0]},${valid[0][1]},${valid[0][2]})`;
    const clamped = Math.min(1, Math.max(0, t));
    const seg = clamped * (valid.length - 1);

@@ -180,7 +180,7 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       survives re-polls and reconnects; an unknown room just defaults to expanded). */
    const loadCollapsed = (): Set<string> => {
       try {
-         const arr = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+         const arr: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
          return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
       } catch {
          return new Set();

@@ -16,6 +16,8 @@
  * Aurora's design tokens so a generated visual adopts the phosphor look.
  */
 
+import { PALETTE, VISUAL_RAMPS, VISUAL_TEXT } from "../design/tokens.ts";
+
 export interface VisualBlock {
    title: string;
    type: "svg" | "html";
@@ -76,8 +78,8 @@ let classCache: string | null = null;
 function buildThemeCss(): string {
    const s = getComputedStyle(document.documentElement);
    const v = (name: string): string => s.getPropertyValue(name).trim();
-   const ground = v("--ground") || "#05070a";
-   const raise = v("--ground-raise") || "#0b1016";
+   const ground = v("--ground") || PALETTE.ground;
+   const raise = v("--ground-raise") || PALETTE.groundRaise;
    return [
       ":root {",
       `  --color-bg-primary: ${ground};`,
@@ -101,25 +103,14 @@ function buildThemeCss(): string {
 /* The prebuilt class library the model draws against (DAWN's visual guidelines). Aurora is
    always dark, so only the dark ramp variant is emitted. */
 function buildVisualClasses(): string {
-   const ramps: Record<string, [string, string, string, string]> = {
-      purple: ["#EEEDFE", "#AFA9EC", "#534AB7", "#3C3489"],
-      teal: ["#E1F5EE", "#5DCAA5", "#0F6E56", "#085041"],
-      coral: ["#FAECE7", "#F0997B", "#993C1D", "#712B13"],
-      pink: ["#FBEAF0", "#ED93B1", "#993556", "#72243E"],
-      gray: ["#F1EFE8", "#B4B2A9", "#5F5E5A", "#444441"],
-      blue: ["#E6F1FB", "#85B7EB", "#185FA5", "#0C447C"],
-      green: ["#EAF3DE", "#97C459", "#3B6D11", "#27500A"],
-      amber: ["#FAEEDA", "#EF9F27", "#854F0B", "#633806"],
-      red: ["#FCEBEB", "#F09595", "#A32D2D", "#791F1F"]
-   };
    let ramp = "";
-   for (const [name, r] of Object.entries(ramps)) {
+   for (const [name, r] of Object.entries(VISUAL_RAMPS)) {
       const sel = `.c-${name}`;
       /* Dark: 800 fill, 200 stroke, light text. */
       ramp +=
          `${sel} rect, ${sel} ellipse, ${sel} circle, ${sel} polygon, ${sel} path:not([fill="none"]) { fill: ${r[3]}; stroke: ${r[1]}; }\n` +
-         `${sel} text, ${sel} .th, ${sel} .t { fill: #f0f0f0; }\n` +
-         `${sel} .ts { fill: #ccc; }\n`;
+         `${sel} text, ${sel} .th, ${sel} .t { fill: ${VISUAL_TEXT.primary}; }\n` +
+         `${sel} .ts { fill: ${VISUAL_TEXT.secondary}; }\n`;
    }
    return (
       ".t { font-family: var(--font-sans); font-size: 14px; fill: var(--color-text-primary); }\n" +
@@ -254,12 +245,13 @@ async function inlineVendor(
          pull the user's data into the visual's sandbox. Fetched through ingest with this app's
          login (DAWN serves /js/vendor only to a signed-in browser; a cookie-less fetch got its
          login page, which inlined as a script and blanked every chart). */
-      let path = "";
+      let path: string;
       try {
          path = new URL(src, window.location.origin).pathname;
       } catch {
          path = "";
       }
+      /* dawn-url-ok: inspects the path; the fetch goes through ingest's fetchVendorScript (dawnUrl) */
       if (!path.startsWith("/js/vendor/") || src.includes("\\") || !fetchVendor) {
          out = out.replace(tag, "");
          continue;
@@ -293,7 +285,7 @@ function triggerDownload(v: VisualBlock): void {
          body = body.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
       const bg =
          getComputedStyle(document.documentElement).getPropertyValue("--ground").trim() ||
-         "#05070a";
+         PALETTE.ground;
       body = body.replace(/(<\/defs>\s*)/, `$1<rect width="100%" height="100%" fill="${bg}"/>\n`);
    } else {
       body = `<!DOCTYPE html><html><head><style>${themeCss()}${visualClasses()}</style></head><body>${v.code}</body></html>`;
@@ -396,6 +388,7 @@ export function createVisualFrame(
    /* Vendor scripts (Chart.js) must be inlined; fetch may be async, so attach the frame now
       and set srcdoc once ready. */
    void inlineVendor(content, fetchVendor).then((resolved) => {
+      // eslint-disable-next-line no-unsanitized/property -- model code by design: a sandboxed, opaque-origin frame under VISUAL_CSP, with VISUAL_PRELUDE run first
       iframe.srcdoc = resolved;
    });
    container.appendChild(iframe);

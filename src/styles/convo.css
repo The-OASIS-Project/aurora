@@ -2,7 +2,7 @@
  * Conversation front window: the readable, scrollable face of the exchange. Same
  * frosted-glass + corner-bracket language as the panels. Each turn is a labelled
  * block (USER / the AI's name) with a markdown body. When it recedes it does NOT
- * fade out — it leans back from a fixed bottom edge into a trapezoid (real CSS-3D),
+ * fade out - it leans back from a fixed bottom edge into a trapezoid (real CSS-3D),
  * frame and far edge dissolving, leaving dimmed text tipped away. The lean DOWN is
  * slow (a recede); the raise back UP is quick.
  */
@@ -55,7 +55,7 @@
 /* RECEDED: tip back into a trapezoid, keeping the bottom edge fixed. The box
    dissolves and a top-fade mask carries the far edge to nothing; the text dims but
    never disappears. The transition here (destination state) governs the lean DOWN,
-   so it is deliberately long and eased-out — it reads as a slow recede. */
+   so it is deliberately long and eased-out - it reads as a slow recede. */
 .convo-window.receded {
    transform: rotateX(36deg);
    pointer-events: none;
@@ -64,6 +64,7 @@
    backdrop-filter: none;
    -webkit-backdrop-filter: none;
    overflow: hidden;
+   /* color-ok: a mask reads only alpha */
    -webkit-mask-image: linear-gradient(to top, #000 18%, transparent 96%);
    mask-image: linear-gradient(to top, #000 18%, transparent 96%);
    transition:
@@ -191,7 +192,7 @@
 }
 
 /* A turn: a colored left rail + a role header, then the body. Cooler than a filled
-   box — the rail and a glowing role tick carry the identity. */
+   box - the rail and a glowing role tick carry the identity. */
 .convo-msg {
    padding-left: 0.8rem;
    border-left: 2px solid transparent;

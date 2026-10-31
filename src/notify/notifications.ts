@@ -569,7 +569,7 @@ export class Notifications implements NotificationsSink {
          ".notice-action"
       ) as HTMLElement | null;
       const hadFocus = !!focusedAction && card.root.contains(focusedAction);
-      const focusedId = hadFocus ? focusedAction!.dataset.action : undefined;
+      const focusedId = hadFocus ? focusedAction.dataset.action : undefined;
       if (!card.actionsEl) {
          if (!actions.length) return;
          card.actionsEl = document.createElement("div");

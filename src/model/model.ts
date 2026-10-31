@@ -2,7 +2,7 @@
  * Model-selection contract (brief: the MODEL menu). The panel is a passive view:
  * it reads the current LLM state and reports each change, which the ingest turns
  * into a `set_session_llm` (session-only) or `set_private`. It never talks to DAWN
- * directly — same seam as the rest of the UI.
+ * directly - same seam as the rest of the UI.
  */
 
 export type LlmMode = "local" | "cloud";

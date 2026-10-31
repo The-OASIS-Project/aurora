@@ -95,7 +95,9 @@ applyUiScale();
 
 /* 2. The layers + views. */
 const store = new Store();
-const choreographer = new Choreographer();
+const choreographer = new Choreographer(
+   window.matchMedia("(prefers-reduced-motion: reduce)").matches
+);
 
 const field = document.getElementById("field") as HTMLElement;
 const docks = document.getElementById("docks") as HTMLElement;
@@ -153,7 +155,7 @@ const display = ((): { starfield: boolean; clouds: boolean; bloom: boolean } => 
          unknown
       >;
       for (const k of Object.keys(d) as (keyof typeof d)[]) {
-         if (typeof saved[k] === "boolean") d[k] = saved[k] as boolean;
+         if (typeof saved[k] === "boolean") d[k] = saved[k];
       }
    } catch {
       /* corrupt/absent -> defaults (all on) */
