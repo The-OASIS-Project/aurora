@@ -74,6 +74,8 @@ should be tested with hostile input, not only the happy path.
 
 - `main` is protected: changes arrive by pull request, CI must pass, and pull requests land as merge
   commits.
+- `git blame` should skip the one-time reformat: `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+  (GitHub's blame view does this on its own).
 - One logical change per commit. The message says what changed and why, in plain language a reader
   without your context can follow.
 - By contributing you agree to license your contribution under GPLv3 or later.
