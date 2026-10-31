@@ -43,7 +43,9 @@ describe("EmailSim paging", () => {
    it("refuses a cursor from a different filter", async () => {
       const sim = quiet();
       const first = await sim.list({ limit: 10 });
-      await expect(sim.list({ cursor: first.cursor!, unreadOnly: true })).rejects.toMatchObject({ code: "CURSOR_STALE" });
+      await expect(sim.list({ cursor: first.cursor!, unreadOnly: true })).rejects.toMatchObject({
+         code: "CURSOR_STALE"
+      });
       await expect(sim.list({ cursor: "garbage" })).rejects.toMatchObject({ code: "CURSOR_STALE" });
    });
 
@@ -73,7 +75,10 @@ describe("EmailSim triage", () => {
       const row = (await sim.list({ unreadOnly: true, accountIds: [1], limit: 1 })).rows[0];
       const r = await sim.read(1, row.messageId, true);
       expect(r.unread).toBe(false);
-      expect(sink.changes.at(-1)?.updated[0]).toMatchObject({ messageId: row.messageId, unread: false });
+      expect(sink.changes.at(-1)?.updated[0]).toMatchObject({
+         messageId: row.messageId,
+         unread: false
+      });
    });
 
    it("trashes with an undo that restores once, with a new id on IMAP", async () => {

@@ -19,9 +19,19 @@ describe("isoDate", () => {
 
 describe("todayWindow / dayStart", () => {
    const day = (sec: number, tz: string): string =>
-      new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(sec * 1000));
+      new Intl.DateTimeFormat("en-CA", {
+         timeZone: tz,
+         year: "numeric",
+         month: "2-digit",
+         day: "2-digit"
+      }).format(new Date(sec * 1000));
    const clock = (sec: number, tz: string): string =>
-      new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(sec * 1000));
+      new Intl.DateTimeFormat("en-GB", {
+         timeZone: tz,
+         hour: "2-digit",
+         minute: "2-digit",
+         hourCycle: "h23"
+      }).format(new Date(sec * 1000));
    /* The window is exactly the zone's calendar day: its first second is on that date and the
       second before it isn't, and the same at the end. */
    const expectDay = (w: { start: number; end: number }, date: string, tz: string): void => {

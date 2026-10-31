@@ -81,7 +81,9 @@
    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
    border-radius: 2px;
    outline: none;
-   transition: border-color 120ms ease, box-shadow 120ms ease;
+   transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease;
 }
 
 .login-field input:focus {
@@ -101,7 +103,9 @@
    border: none;
    border-radius: 2px;
    cursor: pointer;
-   transition: background 120ms ease, box-shadow 120ms ease;
+   transition:
+      background 120ms ease,
+      box-shadow 120ms ease;
 }
 
 .login-connect:hover {
@@ -264,7 +268,9 @@
    border: none;
    border-radius: 2px;
    cursor: pointer;
-   transition: background 120ms ease, box-shadow 120ms ease;
+   transition:
+      background 120ms ease,
+      box-shadow 120ms ease;
 }
 .takeover-reclaim:hover {
    background: var(--accent-glow);

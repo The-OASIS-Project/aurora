@@ -19,7 +19,8 @@ function setup(status: () => Promise<Response>) {
    ing.wantConnected = true;
    return { ing, statuses, revoked, ws, opened: () => opened };
 }
-const json = (body: unknown): Promise<Response> => Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+const json = (body: unknown): Promise<Response> =>
+   Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
 const down = (): Promise<Response> => Promise.resolve(new Response("", { status: 502 }));
 const flush = async (): Promise<void> => {
    for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -121,7 +122,12 @@ describe("a DAWN with login_unavailable", () => {
    it("signs out on UNAUTHORIZED at once, and shrugs off SERVICE_UNAVAILABLE", async () => {
       const t = setup(() => json({ authenticated: true }));
       t.ing.serverFeatures = new Set(["login_unavailable"]);
-      t.ing.onFrame(JSON.stringify({ type: "error", payload: { code: "SERVICE_UNAVAILABLE", message: "Couldn't check the login; try again" } }));
+      t.ing.onFrame(
+         JSON.stringify({
+            type: "error",
+            payload: { code: "SERVICE_UNAVAILABLE", message: "Couldn't check the login; try again" }
+         })
+      );
       expect(t.revoked).toEqual([]);
       expect(t.statuses).not.toContain("error");
       await t.ing.onUnauthorized("Session expired");
@@ -136,22 +142,42 @@ describe("SERVICE_UNAVAILABLE", () => {
       t.ing.serverFeatures = new Set(["login_unavailable", "turn_refs"]);
       const rejected: unknown[] = [];
       const notes: string[] = [];
-      t.ing.sinks = { conversation: { rejectTurn: (r: unknown) => (rejected.push(r), 1), noteRefusal: (m: string) => notes.push(m), setThinking: () => {} } };
+      t.ing.sinks = {
+         conversation: {
+            rejectTurn: (r: unknown) => (rejected.push(r), 1),
+            noteRefusal: (m: string) => notes.push(m),
+            setThinking: () => {}
+         }
+      };
       t.ing.dropTypedEchoRef = () => {};
-      t.ing.onFrame(JSON.stringify({ type: "error", payload: { code: "SERVICE_UNAVAILABLE", message: "Couldn't check the login; try again", client_ref: "7", severity: "error" } }));
+      t.ing.onFrame(
+         JSON.stringify({
+            type: "error",
+            payload: {
+               code: "SERVICE_UNAVAILABLE",
+               message: "Couldn't check the login; try again",
+               client_ref: "7",
+               severity: "error"
+            }
+         })
+      );
       expect(rejected).toEqual([{ ref: "7" }]);
       expect(notes[0]).toContain("Couldn't check the login");
    });
 
    it("keeps probing a ping it answered, so the link doesn't stay unstable while other replies flow", () => {
       vi.useRealTimers();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+      vi.useFakeTimers({
+         toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"]
+      });
       const t = setup(() => json({ authenticated: true }));
       const pings: number[] = [];
       t.ing.send = (m: { type: string }) => m.type === "ping" && pings.push(1);
       t.ing.pongSupported = true;
       t.ing.startHeartbeat();
-      t.ing.onFrame(JSON.stringify({ type: "error", payload: { code: "SERVICE_UNAVAILABLE", message: "x" } }));
+      t.ing.onFrame(
+         JSON.stringify({ type: "error", payload: { code: "SERVICE_UNAVAILABLE", message: "x" } })
+      );
       for (let s = 0; s < 40; s += 2) {
          vi.advanceTimersByTime(2000);
          t.ing.lastInboundAt = performance.now(); // other replies keep coming

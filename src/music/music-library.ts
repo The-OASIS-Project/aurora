@@ -81,7 +81,11 @@ function glyph(name: keyof typeof GLYPHS): SVGSVGElement {
 
 let mountSeq = 0;
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
+function el<K extends keyof HTMLElementTagNameMap>(
+   tag: K,
+   cls?: string,
+   text?: string
+): HTMLElementTagNameMap[K] {
    const e = document.createElement(tag);
    if (cls) e.className = cls;
    if (text !== undefined) e.textContent = text;
@@ -105,7 +109,13 @@ function writePref(key: string, value: string): void {
 
 /* How many rows a browse list has loaded so far (the next page's offset). */
 const loadedCount = (p: MusicLibraryPage): number =>
-   p.kind === "tracks" || p.kind === "artist" || p.kind === "album" ? p.tracks.length : p.kind === "artists" ? p.artists.length : p.kind === "albums" ? p.albums.length : 0;
+   p.kind === "tracks" || p.kind === "artist" || p.kind === "album"
+      ? p.tracks.length
+      : p.kind === "artists"
+        ? p.artists.length
+        : p.kind === "albums"
+          ? p.albums.length
+          : 0;
 
 const trackParams = (t: MusicTrack): Record<string, unknown> => ({
    path: t.path,
@@ -154,7 +164,8 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    search.type = "search";
    search.placeholder = "Search music, then Enter";
    search.setAttribute("aria-label", "Search music (source:plex or source:local narrows it)");
-   search.title = 'Press Enter to search. Add "source:plex" or "source:local" to search one library.';
+   search.title =
+      'Press Enter to search. Add "source:plex" or "source:local" to search one library.';
    libTools.append(search);
    const backBtn = el("button", "music-lib-back");
    backBtn.type = "button";
@@ -226,9 +237,17 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       }, 1000);
    };
 
-   const trackRow = (t: MusicTrack, onPlay: () => void, act: { glyph: "plus" | "minus"; label: string; run: (b: HTMLButtonElement) => void }): HTMLLIElement => {
+   const trackRow = (
+      t: MusicTrack,
+      onPlay: () => void,
+      act: { glyph: "plus" | "minus"; label: string; run: (b: HTMLButtonElement) => void }
+   ): HTMLLIElement => {
       const li = el("li", "music-lib-row");
-      const main = rowButton(t.title, [t.artist, t.album].filter(Boolean).join(" · "), `Play ${t.title || "track"}`);
+      const main = rowButton(
+         t.title,
+         [t.artist, t.album].filter(Boolean).join(" · "),
+         `Play ${t.title || "track"}`
+      );
       main.addEventListener("click", onPlay);
       const a = actionButton(act.glyph, act.label);
       a.addEventListener("click", () => act.run(a));
@@ -266,7 +285,10 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
                   in this list uses the new indices; the re-read then confirms. */
                if (queue) {
                   const tracks = queue.tracks.filter((_, k) => k !== i);
-                  const cur = queue.currentIndex > i ? queue.currentIndex - 1 : Math.min(queue.currentIndex, tracks.length - 1);
+                  const cur =
+                     queue.currentIndex > i
+                        ? queue.currentIndex - 1
+                        : Math.min(queue.currentIndex, tracks.length - 1);
                   queue = { tracks, currentIndex: cur };
                   renderQueue();
                }
@@ -305,11 +327,18 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       const stat = (label: string, n: number, type: string): HTMLButtonElement => {
          const b = el("button", "music-lib-stat");
          b.type = "button";
-         b.append(el("span", "music-lib-stat-n", n.toLocaleString()), el("span", "music-lib-stat-label", label));
+         b.append(
+            el("span", "music-lib-stat-n", n.toLocaleString()),
+            el("span", "music-lib-stat-label", label)
+         );
          b.addEventListener("click", () => askLibrary(type, { offset: 0, limit: PAGE }));
          return b;
       };
-      li.append(stat("Tracks", p.tracks, "tracks"), stat("Artists", p.artists, "artists"), stat("Albums", p.albums, "albums"));
+      li.append(
+         stat("Tracks", p.tracks, "tracks"),
+         stat("Artists", p.artists, "artists"),
+         stat("Albums", p.albums, "albums")
+      );
       list.appendChild(li);
       status.textContent = p.tracks === 0 ? "Your music library is empty." : "";
    };
@@ -320,9 +349,18 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       } else if (p.kind === "artists") {
          for (const a of p.artists) {
             const li = el("li", "music-lib-row");
-            const main = rowButton(a.name, `${a.albums} album${a.albums === 1 ? "" : "s"} · ${a.tracks} track${a.tracks === 1 ? "" : "s"}`, `Open ${a.name || "artist"}`);
-            main.addEventListener("click", () => askLibrary("tracks_by_artist", { artist: a.name }));
-            const add = actionButton("plus", `Add everything by ${a.name || "this artist"} to the queue`);
+            const main = rowButton(
+               a.name,
+               `${a.albums} album${a.albums === 1 ? "" : "s"} · ${a.tracks} track${a.tracks === 1 ? "" : "s"}`,
+               `Open ${a.name || "artist"}`
+            );
+            main.addEventListener("click", () =>
+               askLibrary("tracks_by_artist", { artist: a.name })
+            );
+            const add = actionButton(
+               "plus",
+               `Add everything by ${a.name || "this artist"} to the queue`
+            );
             add.addEventListener("click", () => {
                opts.control("add_artist", { artist: a.name });
                flash(add);
@@ -333,7 +371,13 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       } else if (p.kind === "albums") {
          for (const a of p.albums) {
             const li = el("li", "music-lib-row");
-            const main = rowButton(a.name, [a.artist, `${a.tracks} track${a.tracks === 1 ? "" : "s"}`].filter(Boolean).join(" · "), `Open ${a.name || "album"}`);
+            const main = rowButton(
+               a.name,
+               [a.artist, `${a.tracks} track${a.tracks === 1 ? "" : "s"}`]
+                  .filter(Boolean)
+                  .join(" · "),
+               `Open ${a.name || "album"}`
+            );
             main.addEventListener("click", () => askLibrary("tracks_by_album", { album: a.name }));
             const add = actionButton("plus", `Add ${a.name || "this album"} to the queue`);
             add.addEventListener("click", () => {
@@ -353,8 +397,10 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       status.textContent = "";
       if (searchResults) {
          backLabel.textContent = "Library";
-         if (searchResults.tracks.length === 0) status.textContent = `Nothing found for “${searchResults.query}”.`;
-         for (const t of searchResults.tracks) list.appendChild(trackRow(t, playTrack(t), addTrack(t)));
+         if (searchResults.tracks.length === 0)
+            status.textContent = `Nothing found for “${searchResults.query}”.`;
+         for (const t of searchResults.tracks)
+            list.appendChild(trackRow(t, playTrack(t), addTrack(t)));
          return;
       }
       if (!browse) {
@@ -365,7 +411,8 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
          renderStats(browse);
          return;
       }
-      backLabel.textContent = browse.kind === "artist" ? "Artists" : browse.kind === "album" ? "Albums" : "Library";
+      backLabel.textContent =
+         browse.kind === "artist" ? "Artists" : browse.kind === "album" ? "Albums" : "Library";
       if (browse.kind === "artist" || browse.kind === "album") {
          const head = el("li", "music-lib-heading", browse.name || "Unknown");
          head.setAttribute("role", "heading");
@@ -417,7 +464,12 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    libraryTab.addEventListener("click", onTab);
    /* Arrow keys / Home / End move between the two tabs (and select). */
    tabs.addEventListener("keydown", (e) => {
-      const next = e.key === "ArrowRight" || e.key === "End" ? "library" : e.key === "ArrowLeft" || e.key === "Home" ? "queue" : null;
+      const next =
+         e.key === "ArrowRight" || e.key === "End"
+            ? "library"
+            : e.key === "ArrowLeft" || e.key === "Home"
+              ? "queue"
+              : null;
       if (!next) return;
       e.preventDefault();
       showTab(next);
@@ -463,7 +515,11 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    });
    const loadMore = (): void => {
       if (pagePending || !open || tab !== "library" || searchResults) return;
-      if (!browse || (browse.kind !== "tracks" && browse.kind !== "artists" && browse.kind !== "albums")) return;
+      if (
+         !browse ||
+         (browse.kind !== "tracks" && browse.kind !== "artists" && browse.kind !== "albums")
+      )
+         return;
       if (loadedCount(browse) >= browse.total) return;
       pagePending = true;
       moreBtn.disabled = true;
@@ -475,9 +531,12 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       More button stays as the fallback, and as the "Loading more…" line meanwhile. */
    const io =
       typeof IntersectionObserver === "function"
-         ? new IntersectionObserver((entries) => {
-              if (entries.some((e) => e.isIntersecting)) loadMore();
-           }, { root: body, rootMargin: "120px" })
+         ? new IntersectionObserver(
+              (entries) => {
+                 if (entries.some((e) => e.isIntersecting)) loadMore();
+              },
+              { root: body, rootMargin: "120px" }
+           )
          : null;
    io?.observe(moreBtn);
    /* A page that didn't fill the list leaves the end in view: re-check (observing again reports it). */
@@ -516,7 +575,9 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
          /* The first state means DAWN is talking: a library read sent before the link was up was
             dropped, so ask again for whatever the open section still lacks. */
          if (s && open && tab === "library" && !browse && !searchResults) askLibrary("stats");
-         const sig = s ? `${s.queueLength}|${s.queueIndex}|${s.track?.path ?? ""}|${s.queueRev}` : "";
+         const sig = s
+            ? `${s.queueLength}|${s.queueIndex}|${s.track?.path ?? ""}|${s.queueRev}`
+            : "";
          if (sig === lastQueueSig) return;
          lastQueueSig = sig;
          if (open && tab === "queue") askQueueSoon();
@@ -553,11 +614,18 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
             pagePending = false;
             moreBtn.disabled = false;
             if (!browse || browse.kind !== page.kind || page.offset !== loadedCount(browse)) return;
-            if (browse.kind === "tracks" && page.kind === "tracks") browse = { ...page, tracks: [...browse.tracks, ...page.tracks] };
-            else if (browse.kind === "artists" && page.kind === "artists") browse = { ...page, artists: [...browse.artists, ...page.artists] };
-            else if (browse.kind === "albums" && page.kind === "albums") browse = { ...page, albums: [...browse.albums, ...page.albums] };
+            if (browse.kind === "tracks" && page.kind === "tracks")
+               browse = { ...page, tracks: [...browse.tracks, ...page.tracks] };
+            else if (browse.kind === "artists" && page.kind === "artists")
+               browse = { ...page, artists: [...browse.artists, ...page.artists] };
+            else if (browse.kind === "albums" && page.kind === "albums")
+               browse = { ...page, albums: [...browse.albums, ...page.albums] };
             /* An empty page (the library changed meanwhile) ends the list. */
-            if (loadedCount(page) === 0 && (browse.kind === "tracks" || browse.kind === "artists" || browse.kind === "albums")) browse = { ...browse, total: loadedCount(browse) };
+            if (
+               loadedCount(page) === 0 &&
+               (browse.kind === "tracks" || browse.kind === "artists" || browse.kind === "albums")
+            )
+               browse = { ...browse, total: loadedCount(browse) };
          } else {
             pagePending = false;
             moreBtn.disabled = false;

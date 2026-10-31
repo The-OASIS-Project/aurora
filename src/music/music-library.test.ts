@@ -3,11 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountMusicLibrary } from "./music-library.ts";
 import type { MusicState, MusicTrack } from "../ingest/ingest.ts";
 
-const track = (n: number): MusicTrack => ({ path: `/m/${n}.flac`, title: `Song ${n}`, artist: `Artist ${n}`, album: "Album", durationSec: 200 + n });
+const track = (n: number): MusicTrack => ({
+   path: `/m/${n}.flac`,
+   title: `Song ${n}`,
+   artist: `Artist ${n}`,
+   album: "Album",
+   durationSec: 200 + n
+});
 
 function setup(open = true) {
    if (open) localStorage.setItem("dawn.hero.musicLibOpen", "1");
-   const calls = { control: [] as Array<[string, Record<string, unknown> | undefined]>, queue: 0, search: [] as string[], library: [] as Array<[string, Record<string, unknown> | undefined]> };
+   const calls = {
+      control: [] as Array<[string, Record<string, unknown> | undefined]>,
+      queue: 0,
+      search: [] as string[],
+      library: [] as Array<[string, Record<string, unknown> | undefined]>
+   };
    const view = mountMusicLibrary({
       control: (a, p) => calls.control.push([a, p]),
       queueList: () => calls.queue++,
@@ -16,7 +27,8 @@ function setup(open = true) {
    });
    document.body.appendChild(view.el);
    const q = <T extends Element>(sel: string): T => view.el.querySelector<T>(sel)!;
-   const rows = (): HTMLElement[] => Array.from(view.el.querySelectorAll<HTMLElement>(".music-lib-row"));
+   const rows = (): HTMLElement[] =>
+      Array.from(view.el.querySelectorAll<HTMLElement>(".music-lib-row"));
    return { view, calls, q, rows };
 }
 
@@ -59,7 +71,10 @@ describe("music queue", () => {
       const t = setup();
       expect(t.calls.library).toEqual([["stats", undefined]]); // sent before the link was up
       t.view.setState({ queueLength: 0, queueIndex: 0, track: null } as unknown as MusicState);
-      expect(t.calls.library).toEqual([["stats", undefined], ["stats", undefined]]);
+      expect(t.calls.library).toEqual([
+         ["stats", undefined],
+         ["stats", undefined]
+      ]);
       t.view.setLibrary({ kind: "stats", tracks: 1, artists: 1, albums: 1 });
       t.view.setState({ queueLength: 1, queueIndex: 0, track: track(1) } as unknown as MusicState);
       expect(t.calls.library.length).toBe(2); // has a page now: no more asks
@@ -71,14 +86,18 @@ describe("music queue", () => {
       const filter = t.q<HTMLInputElement>(".music-lib-tools input");
       filter.value = "song 1";
       filter.dispatchEvent(new Event("input"));
-      expect(t.rows().map((r) => r.querySelector(".music-lib-title")?.textContent)).toEqual(["Song 1", "Song 12"]);
+      expect(t.rows().map((r) => r.querySelector(".music-lib-title")?.textContent)).toEqual([
+         "Song 1",
+         "Song 12"
+      ]);
       t.q<HTMLButtonElement>(".music-lib-text-btn").click();
       expect(t.calls.control.pop()).toEqual(["clear_queue", undefined]);
    });
 
    it("re-reads the queue when it moves while open (coalesced)", () => {
       const t = setup();
-      const state = (len: number) => ({ queueLength: len, queueIndex: 0, track: track(1) }) as unknown as MusicState;
+      const state = (len: number) =>
+         ({ queueLength: len, queueIndex: 0, track: track(1) }) as unknown as MusicState;
       t.view.setState(state(3));
       t.view.setState(state(4));
       t.view.setState(state(5));
@@ -88,7 +107,13 @@ describe("music queue", () => {
 
    it("re-reads the queue on a queue_rev change that keeps the count and the current track", () => {
       const t = setup();
-      const state = (rev: number) => ({ queueLength: 3, queueIndex: 0, track: track(1), queueRev: rev }) as unknown as MusicState;
+      const state = (rev: number) =>
+         ({
+            queueLength: 3,
+            queueIndex: 0,
+            track: track(1),
+            queueRev: rev
+         }) as unknown as MusicState;
       t.view.setState(state(4));
       vi.advanceTimersByTime(200);
       const reads = t.calls.queue;
@@ -108,7 +133,8 @@ describe("music queue", () => {
 });
 
 describe("music library", () => {
-   const openLibrary = (t: ReturnType<typeof setup>) => t.q<HTMLButtonElement>('[data-tab="library"]').click();
+   const openLibrary = (t: ReturnType<typeof setup>) =>
+      t.q<HTMLButtonElement>('[data-tab="library"]').click();
 
    it("opens on the library stats and browses into a page with More", () => {
       const t = setup();
@@ -136,7 +162,16 @@ describe("music library", () => {
       openLibrary(t);
       t.view.setLibrary({ kind: "tracks", tracks: [track(7)], offset: 0, total: 1 });
       t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-main")!.click();
-      expect(t.calls.control.pop()).toEqual(["play", { path: "/m/7.flac", title: "Song 7", artist: "Artist 7", album: "Album", duration_sec: 207 }]);
+      expect(t.calls.control.pop()).toEqual([
+         "play",
+         {
+            path: "/m/7.flac",
+            title: "Song 7",
+            artist: "Artist 7",
+            album: "Album",
+            duration_sec: 207
+         }
+      ]);
       t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-act")!.click();
       expect(t.calls.control.pop()?.[0]).toBe("add_to_queue");
    });
@@ -144,7 +179,12 @@ describe("music library", () => {
    it("opens an artist, or adds all of it", () => {
       const t = setup();
       openLibrary(t);
-      t.view.setLibrary({ kind: "artists", artists: [{ name: "Nightwish", albums: 3, tracks: 30 }], offset: 0, total: 1 });
+      t.view.setLibrary({
+         kind: "artists",
+         artists: [{ name: "Nightwish", albums: 3, tracks: 30 }],
+         offset: 0,
+         total: 1
+      });
       t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-act")!.click();
       expect(t.calls.control.pop()).toEqual(["add_artist", { artist: "Nightwish" }]);
       t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-main")!.click();
@@ -164,9 +204,14 @@ describe("music library", () => {
 
    it("binds DAWN's text as text, never markup", () => {
       const t = setup();
-      t.view.setQueue({ tracks: [{ ...track(1), title: "<img src=x onerror=alert(1)>" }], currentIndex: 0 });
+      t.view.setQueue({
+         tracks: [{ ...track(1), title: "<img src=x onerror=alert(1)>" }],
+         currentIndex: 0
+      });
       expect(t.view.el.querySelector("img")).toBeNull();
-      expect(t.rows()[0].querySelector(".music-lib-title")?.textContent).toBe("<img src=x onerror=alert(1)>");
+      expect(t.rows()[0].querySelector(".music-lib-title")?.textContent).toBe(
+         "<img src=x onerror=alert(1)>"
+      );
    });
 });
 
@@ -206,4 +251,3 @@ describe("music library paging by scrolling", () => {
       }
    });
 });
-

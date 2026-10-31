@@ -4,7 +4,9 @@ import { mountConversation, type ConversationController } from "./conversation.t
 
 beforeAll(() => {
    if (!window.matchMedia) {
-      Object.assign(window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+      Object.assign(window, {
+         matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
+      });
    }
    Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} });
    Element.prototype.scrollTo = function () {} as typeof Element.prototype.scrollTo;
@@ -24,7 +26,10 @@ afterEach(() => {
 });
 
 /* The composer markup the view binds to (a subset of index.html). */
-type Sent = { turnRef?: string; documents?: Array<{ filename: string; size: number; content: string; blobId?: string }> };
+type Sent = {
+   turnRef?: string;
+   documents?: Array<{ filename: string; size: number; content: string; blobId?: string }>;
+};
 
 function mount(
    onSubmit: (text: string, a?: Sent) => void,
@@ -40,7 +45,14 @@ function mount(
       canSubmit: () => true,
       turnRefs: () => turnRefs,
       structuredDocs: () => structuredDocs,
-      uploadDocument: (f: File) => Promise.resolve({ filename: f.name, content: "extracted body", size: 42, type: "txt", blobId: "blb_abcdefabcdef" }),
+      uploadDocument: (f: File) =>
+         Promise.resolve({
+            filename: f.name,
+            content: "extracted body",
+            size: 42,
+            type: "txt",
+            blobId: "blb_abcdefabcdef"
+         }),
       uploadImage: () => Promise.resolve({ id: "img_fresh", mimeType: "image/jpeg", size: 1 })
    });
    const input = document.getElementById("composer-input") as HTMLTextAreaElement;
@@ -54,7 +66,10 @@ function mount(
    };
 }
 
-const userBubbles = (): string[] => Array.from(document.querySelectorAll(".convo-msg.user .convo-body")).map((b) => b.textContent ?? "");
+const userBubbles = (): string[] =>
+   Array.from(document.querySelectorAll(".convo-msg.user .convo-body")).map(
+      (b) => b.textContent ?? ""
+   );
 
 describe("held turns with turn references (turn_refs)", () => {
    it("tags each turn and confirms / refuses exactly the turn named, even with identical text", () => {
@@ -74,7 +89,10 @@ describe("held turns with turn references (turn_refs)", () => {
 
 async function attachDoc(): Promise<void> {
    const fileInput = document.querySelector<HTMLInputElement>('#composer input[type="file"]')!;
-   Object.defineProperty(fileInput, "files", { value: [new File(["x"], "notes.txt")], configurable: true });
+   Object.defineProperty(fileInput, "files", {
+      value: [new File(["x"], "notes.txt")],
+      configurable: true
+   });
    fileInput.dispatchEvent(new Event("change"));
    await new Promise((r) => setTimeout(r, 0));
    await new Promise((r) => setTimeout(r, 0));
@@ -87,7 +105,9 @@ describe("document attachments", () => {
       await attachDoc();
       send("what does this say?");
       expect(calls[0][0]).toBe("what does this say?");
-      expect(calls[0][1]?.documents).toEqual([{ filename: "notes.txt", size: 42, content: "extracted body", blobId: "blb_abcdefabcdef" }]);
+      expect(calls[0][1]?.documents).toEqual([
+         { filename: "notes.txt", size: 42, content: "extracted body", blobId: "blb_abcdefabcdef" }
+      ]);
       expect(userBubbles()[0]).toContain("what does this say?"); // the local bubble still shows the doc chip + words
    });
 
@@ -96,7 +116,9 @@ describe("document attachments", () => {
       const { send } = mount((t, a) => calls.push([t, a]), true, false);
       await attachDoc();
       send("hi");
-      expect(calls[0][0]).toBe("[ATTACHED DOCUMENT: notes.txt (42 bytes) blob:blb_abcdefabcdef]\nextracted body\n[END DOCUMENT]\n\nhi");
+      expect(calls[0][0]).toBe(
+         "[ATTACHED DOCUMENT: notes.txt (42 bytes) blob:blb_abcdefabcdef]\nextracted body\n[END DOCUMENT]\n\nhi"
+      );
       expect(calls[0][1]?.documents).toBeUndefined();
    });
 });

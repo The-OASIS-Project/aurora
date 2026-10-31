@@ -9,7 +9,8 @@ afterEach(() => {
 });
 
 const panel = (): HTMLElement => document.body.appendChild(document.createElement("div"));
-const button = (el: HTMLElement): HTMLButtonElement => el.querySelector<HTMLButtonElement>(".movable-lock")!;
+const button = (el: HTMLElement): HTMLButtonElement =>
+   el.querySelector<HTMLButtonElement>(".movable-lock")!;
 
 describe("panel position lock", () => {
    it("locks and unlocks from the padlock, and remembers it per panel", () => {
@@ -51,7 +52,9 @@ describe("panel position lock", () => {
       expect(lock.locked()).toBe(true);
       localStorage.setItem("dawn.hero.panelsLocked", "1");
       localStorage.removeItem("e.pos.locked");
-      window.dispatchEvent(new StorageEvent("storage", { key: "dawn.hero.panelsLocked", newValue: "1" }));
+      window.dispatchEvent(
+         new StorageEvent("storage", { key: "dawn.hero.panelsLocked", newValue: "1" })
+      );
       expect(arePanelsLocked()).toBe(true);
       expect(button(el).disabled).toBe(true);
    });

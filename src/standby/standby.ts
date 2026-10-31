@@ -182,7 +182,10 @@ export function mountStandby(deps: {
             return;
          }
          driftT += dt;
-         place(cx + ax * Math.sin((2 * Math.PI * driftT) / DRIFT_TX), cy + ay * Math.sin((2 * Math.PI * driftT) / DRIFT_TY));
+         place(
+            cx + ax * Math.sin((2 * Math.PI * driftT) / DRIFT_TX),
+            cy + ay * Math.sin((2 * Math.PI * driftT) / DRIFT_TY)
+         );
       },
       destroy: () => {
          activity.destroy();

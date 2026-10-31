@@ -42,7 +42,10 @@ export class PanelDrag {
    private side: "left" | "right" = "left";
    private index = 0;
 
-   constructor(root: HTMLElement, opts: { onTap: TapHandler; onDrop: DropHandler; onFloat?: FloatHandler }) {
+   constructor(
+      root: HTMLElement,
+      opts: { onTap: TapHandler; onDrop: DropHandler; onFloat?: FloatHandler }
+   ) {
       this.onTap = opts.onTap;
       this.onDrop = opts.onDrop;
       this.onFloat = opts.onFloat;

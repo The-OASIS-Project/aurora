@@ -89,7 +89,11 @@ function segmentedField(
    return { row, get: () => value };
 }
 
-function numberField(label: string, initial: number | undefined, unit: string): { row: HTMLElement; get: () => number | undefined } {
+function numberField(
+   label: string,
+   initial: number | undefined,
+   unit: string
+): { row: HTMLElement; get: () => number | undefined } {
    const row = document.createElement("div");
    row.className = "watch-field";
    const lbl = document.createElement("span");
@@ -121,7 +125,11 @@ function numberField(label: string, initial: number | undefined, unit: string): 
 
 /* A free-text field (the watch name). `placeholder` shows the server auto-name when the watch
    isn't user-named, so leaving it blank keeps auto-naming. */
-function textField(label: string, initial: string, placeholder: string): { row: HTMLElement; get: () => string } {
+function textField(
+   label: string,
+   initial: string,
+   placeholder: string
+): { row: HTMLElement; get: () => string } {
    const row = document.createElement("div");
    row.className = "watch-field";
    const lbl = document.createElement("span");
@@ -140,7 +148,11 @@ function textField(label: string, initial: string, placeholder: string): { row: 
    canonical per-MINUTE, so get() converts a per-second display value back (x60). The toggle
    rescales the shown number so the underlying rate is unchanged by a unit flip. `baseUnit` is
    the metric unit ("°C", "%", "" for a bare count); the displayed unit is "<baseUnit>/min". */
-function slopeField(label: string, initialPerMin: number | undefined, baseUnit: string): { row: HTMLElement; get: () => number | undefined } {
+function slopeField(
+   label: string,
+   initialPerMin: number | undefined,
+   baseUnit: string
+): { row: HTMLElement; get: () => number | undefined } {
    let per: "min" | "sec" = "min";
    const row = document.createElement("div");
    row.className = "watch-field";
@@ -184,7 +196,9 @@ function slopeField(label: string, initialPerMin: number | undefined, baseUnit: 
 
 /* Keep Tab focus inside the card. */
 function trapTab(e: KeyboardEvent, container: HTMLElement): void {
-   const f = container.querySelectorAll<HTMLElement>('button, input, [href], [tabindex]:not([tabindex="-1"])');
+   const f = container.querySelectorAll<HTMLElement>(
+      'button, input, [href], [tabindex]:not([tabindex="-1"])'
+   );
    if (!f.length) return;
    const first = f[0];
    const last = f[f.length - 1];
@@ -239,7 +253,11 @@ export function openEditWatch(opts: EditWatchOpts): void {
    /* Name: pre-filled for a user-named watch; blank with the auto-name as placeholder for an
       auto-named one (so leaving it blank keeps the server auto-naming from the condition). */
    const isNamed = w.named === true;
-   const nameField = textField("Name", isNamed ? w.name : "", isNamed ? "" : w.name || "Auto-named");
+   const nameField = textField(
+      "Name",
+      isNamed ? w.name : "",
+      isNamed ? "" : w.name || "Auto-named"
+   );
    body.appendChild(nameField.row);
 
    /* Current condition kind: absence is fixed; a threshold/slope watch starts on its stored
@@ -266,7 +284,11 @@ export function openEditWatch(opts: EditWatchOpts): void {
          const dir = segmentedField("Direction", SLOPE_DIR_OPTIONS, dirInit);
          const rate = slopeField("Rate", w.slopePerMin, w.unit);
          const win = numberField("Averaged over", w.slopeWindowSec, "s"); // optional; blank -> server default
-         getCondition = () => ({ direction: dir.get(), slopePerMin: rate.get(), slopeWindowSec: win.get() });
+         getCondition = () => ({
+            direction: dir.get(),
+            slopePerMin: rate.get(),
+            slopeWindowSec: win.get()
+         });
          condWrap.append(dir.row, rate.row, win.row);
       } else {
          const dirInit = w.direction === "below" ? "below" : "above";
@@ -294,9 +316,14 @@ export function openEditWatch(opts: EditWatchOpts): void {
       they did (or when the stored value was already representable). */
    let notifyTouched = false;
    const notifyRepresentable = w.notify === "alert" || w.notify === "ambient";
-   const notify = segmentedField("Notify", NOTIFY_OPTIONS, w.notify === "ambient" ? "ambient" : "alert", () => {
-      notifyTouched = true;
-   });
+   const notify = segmentedField(
+      "Notify",
+      NOTIFY_OPTIONS,
+      w.notify === "ambient" ? "ambient" : "alert",
+      () => {
+         notifyTouched = true;
+      }
+   );
    body.appendChild(notify.row);
    card.append(body);
 

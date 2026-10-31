@@ -8,7 +8,12 @@ type Sent = { type: string; payload?: Record<string, unknown> };
 function setup() {
    const sent: Sent[] = [];
    const wire = new DawnEmail((m) => sent.push(m));
-   const seen = { availability: "" as EmailAvailability | "", linked: false, accounts: [] as EmailAccount[], counts: [] as EmailUnreadCount[] };
+   const seen = {
+      availability: "" as EmailAvailability | "",
+      linked: false,
+      accounts: [] as EmailAccount[],
+      counts: [] as EmailUnreadCount[]
+   };
    const sink: EmailSink = {
       setAvailability: (a) => (seen.availability = a),
       setAccounts: (a) => (seen.accounts = a),
@@ -18,7 +23,8 @@ function setup() {
       setAccountsError: () => {}
    };
    const reply = (type: string, payload: Record<string, unknown>): void => {
-      const req = [...sent].reverse().find((m) => m.type === type.replace(/_response$/, ""))?.payload?.req;
+      const req = [...sent].reverse().find((m) => m.type === type.replace(/_response$/, ""))
+         ?.payload?.req;
       wire.handleFrame(type, { ...payload, req });
    };
    return { wire, sent, sink, seen, reply };
@@ -45,7 +51,9 @@ describe("DawnEmail", () => {
          ]
       });
       return Promise.resolve().then(() => {
-         expect(t.seen.accounts).toEqual([{ id: 3, address: "me@example.org", displayName: "Work", readOnly: false }]);
+         expect(t.seen.accounts).toEqual([
+            { id: 3, address: "me@example.org", displayName: "Work", readOnly: false }
+         ]);
       });
    });
 
@@ -75,7 +83,10 @@ describe("DawnEmail", () => {
       t.wire.attach(t.sink);
       t.wire.setLinked(true);
       t.wire.setServerSupport(true);
-      t.wire.handleFrame("email_list_accounts_response", { success: false, error: "Failed to list accounts" });
+      t.wire.handleFrame("email_list_accounts_response", {
+         success: false,
+         error: "Failed to list accounts"
+      });
       for (let i = 0; i < 5; i++) await Promise.resolve(); // settle the request's catch + finally
       expect(errors).toEqual(["Failed to list accounts"]);
       vi.advanceTimersByTime(10_001);
@@ -92,7 +103,10 @@ describe("DawnEmail", () => {
       t.wire.setServerSupport(true);
       vi.advanceTimersByTime(30_001); // retried under a second tag
       expect(t.sent.filter((m) => m.type === "email_list_accounts").length).toBe(2);
-      const rows = { success: true, accounts: [{ id: 3, name: "Work", username: "me@example.org", enabled: true }] };
+      const rows = {
+         success: true,
+         accounts: [{ id: 3, name: "Work", username: "me@example.org", enabled: true }]
+      };
       t.wire.handleFrame("email_list_accounts_response", rows);
       t.wire.handleFrame("email_list_accounts_response", rows); // the twin: nothing pending, dropped
       return Promise.resolve().then(() => expect(t.seen.accounts.map((a) => a.id)).toEqual([3]));
@@ -118,17 +132,37 @@ describe("DawnEmail", () => {
       const listReq = t.sent.find((m) => m.type === "email_list")!;
       expect(listReq.payload).toMatchObject({ folder: "inbox", unread_only: false, limit: 25 });
       expect(listReq.payload?.cursor).toBeUndefined();
-      t.reply("email_unread_counts_response", { success: true, accounts: [{ account_id: 3, inbox_unread: null, status: "unreachable" }] });
+      t.reply("email_unread_counts_response", {
+         success: true,
+         accounts: [{ account_id: 3, inbox_unread: null, status: "unreachable" }]
+      });
       t.wire.handleFrame("email_list_response", {
          success: true,
          req: listReq.payload!.req,
-         rows: [{ account_id: 3, message_id: "INBOX:42", from_name: "Ann", from_addr: "a@example.com", subject: "Hi", date: 100, preview: "", unread: true }],
+         rows: [
+            {
+               account_id: 3,
+               message_id: "INBOX:42",
+               from_name: "Ann",
+               from_addr: "a@example.com",
+               subject: "Hi",
+               date: 100,
+               preview: "",
+               unread: true
+            }
+         ],
          cursor: "abc",
          partial: [{ account_id: 5, error_code: "AUTH_FAILED", error: "refused" }],
          accounts: [{ account_id: 3, inbox_unread: 12, status: "ok" }]
       });
       const list = await listP;
-      expect(list.rows[0]).toMatchObject({ accountId: 3, messageId: "INBOX:42", fromName: "Ann", unread: true, preview: "" });
+      expect(list.rows[0]).toMatchObject({
+         accountId: 3,
+         messageId: "INBOX:42",
+         fromName: "Ann",
+         unread: true,
+         preview: ""
+      });
       expect(list.cursor).toBe("abc");
       expect(list.partial).toEqual([{ accountId: 5, code: "AUTH_FAILED", message: "refused" }]);
       expect(t.seen.counts).toEqual([{ accountId: 3, inboxUnread: 12, status: "ok" }]);
@@ -141,8 +175,15 @@ describe("DawnEmail", () => {
       t.wire.setLinked(true);
       t.wire.setServerSupport(true);
       const p = t.wire.list({ query: "invoice", accountIds: [3] });
-      expect(t.sent.at(-1)).toMatchObject({ type: "email_search", payload: { query: "invoice", account_ids: [3] } });
-      t.reply("email_search_response", { success: false, error_code: "SUPERSEDED", error: "replaced" });
+      expect(t.sent.at(-1)).toMatchObject({
+         type: "email_search",
+         payload: { query: "invoice", account_ids: [3] }
+      });
+      t.reply("email_search_response", {
+         success: false,
+         error_code: "SUPERSEDED",
+         error: "replaced"
+      });
       await expect(p).rejects.toMatchObject({ code: "SUPERSEDED" });
    });
 
@@ -170,14 +211,28 @@ describe("DawnEmail", () => {
       const secondReq = t.sent.filter((m) => m.type === "email_list")[1].payload!.req;
       expect(secondReq).not.toBe(firstReq);
       /* DAWN: the retry replaced the running first list, which answers SUPERSEDED: ignored. */
-      t.wire.handleFrame("email_list_response", { success: false, error_code: "SUPERSEDED", req: firstReq });
-      t.wire.handleFrame("email_list_response", { success: true, req: secondReq, rows: [], cursor: null });
+      t.wire.handleFrame("email_list_response", {
+         success: false,
+         error_code: "SUPERSEDED",
+         req: firstReq
+      });
+      t.wire.handleFrame("email_list_response", {
+         success: true,
+         req: secondReq,
+         rows: [],
+         cursor: null
+      });
       await expect(p).resolves.toMatchObject({ rows: [], cursor: null });
 
       const r = t.wire.read(3, "INBOX:1", true);
       const readReq = t.sent.filter((m) => m.type === "email_read")[0].payload!.req;
       vi.advanceTimersByTime(30_001); // retry waits behind the first on DAWN's side
-      t.wire.handleFrame("email_read_response", { success: true, req: readReq, unread: false, message: { account_id: 3, message_id: "INBOX:1" } });
+      t.wire.handleFrame("email_read_response", {
+         success: true,
+         req: readReq,
+         unread: false,
+         message: { account_id: 3, message_id: "INBOX:1" }
+      });
       await expect(r).resolves.toMatchObject({ unread: false }); // the slow first reply still counts
    });
 
@@ -187,7 +242,12 @@ describe("DawnEmail", () => {
       t.wire.setLinked(true);
       t.wire.setServerSupport(true);
       const p = t.wire.list({ accountIds: [3] });
-      t.reply("email_list_response", { success: true, rows: [], cursor: null, accounts: [{ account_id: 3, inbox_unread: 2, status: "ok" }] });
+      t.reply("email_list_response", {
+         success: true,
+         rows: [],
+         cursor: null,
+         accounts: [{ account_id: 3, inbox_unread: 2, status: "ok" }]
+      });
       await p;
       expect(t.seen.counts).toEqual([]);
    });
@@ -198,21 +258,49 @@ describe("DawnEmail", () => {
       t.wire.setLinked(true);
       t.wire.setServerSupport(true);
       const p = t.wire.read(3, "INBOX:42", false);
-      expect(t.sent.at(-1)?.payload).toMatchObject({ account_id: 3, message_id: "INBOX:42", mark_read: false });
+      expect(t.sent.at(-1)?.payload).toMatchObject({
+         account_id: 3,
+         message_id: "INBOX:42",
+         mark_read: false
+      });
       t.reply("email_read_response", {
          success: true,
          unread: true,
          message: {
-            account_id: 3, message_id: "INBOX:42", subject: "Lunch", from_name: "Ann", from_addr: "a@example.com",
-            to: [{ name: "", addr: "me@example.org" }], cc: [], to_total: 40, reply_to: { name: "", addr: "list@example.com" },
-            date: 1, body_text: "hi", body_html: "<p>hi</p>", text_truncated: false, html_truncated: false,
-            attachments: [{ part_id: "2", filename: "menu.pdf", mime: "application/pdf", size: 10, inline: false }],
+            account_id: 3,
+            message_id: "INBOX:42",
+            subject: "Lunch",
+            from_name: "Ann",
+            from_addr: "a@example.com",
+            to: [{ name: "", addr: "me@example.org" }],
+            cc: [],
+            to_total: 40,
+            reply_to: { name: "", addr: "list@example.com" },
+            date: 1,
+            body_text: "hi",
+            body_html: "<p>hi</p>",
+            text_truncated: false,
+            html_truncated: false,
+            attachments: [
+               {
+                  part_id: "2",
+                  filename: "menu.pdf",
+                  mime: "application/pdf",
+                  size: 10,
+                  inline: false
+               }
+            ],
             attachments_truncated: true
          }
       });
       const r = await p;
       expect(r.unread).toBe(true);
-      expect(r.message).toMatchObject({ toTotal: 40, replyTo: { addr: "list@example.com" }, bodyHtml: "<p>hi</p>", attachmentsTruncated: true });
+      expect(r.message).toMatchObject({
+         toTotal: 40,
+         replyTo: { addr: "list@example.com" },
+         bodyHtml: "<p>hi</p>",
+         attachmentsTruncated: true
+      });
       expect(r.message.attachments[0]).toMatchObject({ partId: "2", filename: "menu.pdf" });
 
       const q = t.wire.unreadCounts();
@@ -231,15 +319,24 @@ describe("DawnEmail", () => {
       vi.advanceTimersByTime(260);
       const sent = t.sent.filter((m) => m.type === "email_archive");
       expect(sent.length).toBe(1);
-      expect(sent[0].payload).toMatchObject({ account_id: 3, message_ids: ["INBOX:1", "INBOX:2.7"] });
+      expect(sent[0].payload).toMatchObject({
+         account_id: 3,
+         message_ids: ["INBOX:1", "INBOX:2.7"]
+      });
       t.wire.handleFrame("email_archive_response", {
          success: true,
          req: sent[0].payload!.req,
          done: [{ message_id: "INBOX:1.7", undo: "a".repeat(32) }],
          failed: [{ message_id: "INBOX:2.7", error_code: "IN_TRASH", error: "in trash" }]
       });
-      await expect(a).resolves.toEqual({ done: [{ messageId: "INBOX:1.7", undo: "a".repeat(32), leftFlagged: undefined }], failed: [] });
-      await expect(b).resolves.toMatchObject({ done: [], failed: [{ messageId: "INBOX:2.7", code: "IN_TRASH" }] });
+      await expect(a).resolves.toEqual({
+         done: [{ messageId: "INBOX:1.7", undo: "a".repeat(32), leftFlagged: undefined }],
+         failed: []
+      });
+      await expect(b).resolves.toMatchObject({
+         done: [],
+         failed: [{ messageId: "INBOX:2.7", code: "IN_TRASH" }]
+      });
    });
 
    it("never re-sends a move: a lost reply is outcome-unknown, a whole-call refusal fails every click", async () => {
@@ -254,7 +351,11 @@ describe("DawnEmail", () => {
       const x = t.wire.trash(3, ["INBOX:2"]);
       const y = t.wire.trash(3, ["INBOX:3"]);
       vi.advanceTimersByTime(260);
-      t.reply("email_trash_response", { success: false, error_code: "NO_TRASH", error: "no trash" });
+      t.reply("email_trash_response", {
+         success: false,
+         error_code: "NO_TRASH",
+         error: "no trash"
+      });
       await expect(x).rejects.toMatchObject({ code: "NO_TRASH" });
       await expect(y).rejects.toMatchObject({ code: "NO_TRASH" });
    });
@@ -269,14 +370,42 @@ describe("DawnEmail", () => {
       const u = t.wire.undo(3, ["b".repeat(32), "c".repeat(32)]);
       t.reply("email_undo_response", {
          success: true,
-         restored: [{ undo: "b".repeat(32), row: { account_id: 3, message_id: "INBOX:9.7", subject: "Back" } }, { undo: "c".repeat(32), row: null }],
+         restored: [
+            {
+               undo: "b".repeat(32),
+               row: { account_id: 3, message_id: "INBOX:9.7", subject: "Back" }
+            },
+            { undo: "c".repeat(32), row: null }
+         ],
          failed: []
       });
       const r = await u;
       expect(r.restored[0].row).toMatchObject({ messageId: "INBOX:9.7", subject: "Back" });
       expect(r.restored[1].row).toBeNull();
-      expect(t.wire.handleFrame("email_changed", { account_id: 3, state: null, kind: "trash", undo: false, created: [], updated: [], destroyed: ["INBOX:4.7"], refresh: true })).toBe(true);
-      expect(changes).toEqual([{ accountId: 3, state: null, created: [], updated: [], destroyed: ["INBOX:4.7"], kind: "trash", undo: false, refresh: true }]);
+      expect(
+         t.wire.handleFrame("email_changed", {
+            account_id: 3,
+            state: null,
+            kind: "trash",
+            undo: false,
+            created: [],
+            updated: [],
+            destroyed: ["INBOX:4.7"],
+            refresh: true
+         })
+      ).toBe(true);
+      expect(changes).toEqual([
+         {
+            accountId: 3,
+            state: null,
+            created: [],
+            updated: [],
+            destroyed: ["INBOX:4.7"],
+            kind: "trash",
+            undo: false,
+            refresh: true
+         }
+      ]);
    });
 
    it("learns whether an account has a Trash / Archive from the list's first page", async () => {
@@ -284,11 +413,21 @@ describe("DawnEmail", () => {
       t.wire.attach(t.sink);
       t.wire.setLinked(true);
       t.wire.setServerSupport(true);
-      t.wire.handleFrame("email_list_accounts_response", { success: true, accounts: [{ id: 3, name: "Work", username: "me@example.org", enabled: true }] });
+      t.wire.handleFrame("email_list_accounts_response", {
+         success: true,
+         accounts: [{ id: 3, name: "Work", username: "me@example.org", enabled: true }]
+      });
       await Promise.resolve();
       expect(t.seen.accounts[0].canTrash).toBeUndefined();
       const p = t.wire.list({});
-      t.reply("email_list_response", { success: true, rows: [], cursor: null, accounts: [{ account_id: 3, inbox_unread: 0, status: "ok", can_trash: false, can_archive: true }] });
+      t.reply("email_list_response", {
+         success: true,
+         rows: [],
+         cursor: null,
+         accounts: [
+            { account_id: 3, inbox_unread: 0, status: "ok", can_trash: false, can_archive: true }
+         ]
+      });
       await p;
       expect(t.seen.accounts[0]).toMatchObject({ id: 3, canTrash: false, canArchive: true });
    });
@@ -308,7 +447,10 @@ describe("DawnEmail", () => {
 
    it("fails a repeat of a type DAWN said it doesn't handle without sending it", async () => {
       const sent: Array<{ type: string }> = [];
-      const wire = new DawnEmail((m) => sent.push(m), (type) => type === "email_read");
+      const wire = new DawnEmail(
+         (m) => sent.push(m),
+         (type) => type === "email_read"
+      );
       wire.setLinked(true);
       wire.setServerSupport(true);
       await expect(wire.read(3, "INBOX:1", true)).rejects.toMatchObject({ code: "UNAVAILABLE" });

@@ -437,13 +437,15 @@ export class Notifications implements NotificationsSink {
             moved = false;
          });
          root.addEventListener("pointermove", (e) => {
-            if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_MAX_PX) moved = true;
+            if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_MAX_PX)
+               moved = true;
          });
          root.addEventListener("click", (e) => {
             const target = card.notice.open;
             if (!target || moved) return; // nothing behind it, or this press latched a drag
             const t = e.target as HTMLElement;
-            if (t.closest(".notice-close, .notice-actions, .notice-action, .notice-action-select")) return;
+            if (t.closest(".notice-close, .notice-actions, .notice-action, .notice-action-select"))
+               return;
             this.onOpen(target);
          });
       }
@@ -510,7 +512,8 @@ export class Notifications implements NotificationsSink {
       const want = notice.image ?? "";
       if (want !== card.imgSrc) {
          card.imgSrc = want;
-         const ok = !!want && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(want);
+         const ok =
+            !!want && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(want);
          if (ok) card.imgEl.src = want;
          else card.imgEl.removeAttribute("src");
          card.imgEl.hidden = !ok;
@@ -545,7 +548,15 @@ export class Notifications implements NotificationsSink {
    /* Build or reconcile the action row from the notice (only when its buttons actually changed). */
    private paintActions(card: Card): void {
       const actions = card.notice.actions ?? [];
-      const sig = JSON.stringify(actions.map((a) => [a.id, a.label, !!a.disabled, a.options?.map((o) => o.value), a.defaultValue]));
+      const sig = JSON.stringify(
+         actions.map((a) => [
+            a.id,
+            a.label,
+            !!a.disabled,
+            a.options?.map((o) => o.value),
+            a.defaultValue
+         ])
+      );
       if (sig === card.actionsSig) return;
       card.actionsSig = sig;
       card.root.classList.toggle("notice-has-actions", actions.length > 0);
@@ -554,7 +565,9 @@ export class Notifications implements NotificationsSink {
       const close = card.root.querySelector<HTMLElement>(".notice-close");
       if (close) close.hidden = actions.length > 0 || !!card.notice.sticky;
       /* Keep keyboard focus across the rebuild (e.g. on Answer when it becomes "Answering…"). */
-      const focusedAction = (document.activeElement as HTMLElement | null)?.closest?.(".notice-action") as HTMLElement | null;
+      const focusedAction = (document.activeElement as HTMLElement | null)?.closest?.(
+         ".notice-action"
+      ) as HTMLElement | null;
       const hadFocus = !!focusedAction && card.root.contains(focusedAction);
       const focusedId = hadFocus ? focusedAction!.dataset.action : undefined;
       if (!card.actionsEl) {
@@ -592,8 +605,14 @@ export class Notifications implements NotificationsSink {
       });
       card.actionsEl.replaceChildren(...groups);
       if (hadFocus) {
-         const btns = Array.from(card.actionsEl.querySelectorAll<HTMLButtonElement>(".notice-action"));
-         (btns.find((b) => b.dataset.action === focusedId && !b.disabled) ?? btns.find((b) => !b.disabled) ?? card.root).focus?.();
+         const btns = Array.from(
+            card.actionsEl.querySelectorAll<HTMLButtonElement>(".notice-action")
+         );
+         (
+            btns.find((b) => b.dataset.action === focusedId && !b.disabled) ??
+            btns.find((b) => !b.disabled) ??
+            card.root
+         ).focus?.();
       }
    }
 

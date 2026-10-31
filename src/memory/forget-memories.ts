@@ -25,7 +25,9 @@ const forgetActions = (onForget: () => void): DialogAction[] => [
 ];
 
 /* The post-private offer, fed by the ingest's memoryForget sink. */
-export function mountForgetLearned(opts: { onForget(conversationId: number): void }): MemoryForgetSink {
+export function mountForgetLearned(opts: {
+   onForget(conversationId: number): void;
+}): MemoryForgetSink {
    return {
       offerForgetLearned(
          conversationId: number,

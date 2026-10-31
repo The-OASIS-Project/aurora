@@ -83,7 +83,9 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
 
    /* Close every open dropdown. Query-based so action rows can call it too. */
    const closeAll = (): void =>
-      bar.querySelectorAll<HTMLElement>(".menu-group.open").forEach((g) => g.classList.remove("open"));
+      bar
+         .querySelectorAll<HTMLElement>(".menu-group.open")
+         .forEach((g) => g.classList.remove("open"));
 
    const panels = toggleMenu(
       "Panels",
@@ -93,7 +95,12 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
             checked: p.enabled,
             onChange: () => opts.onTogglePanel(p.id)
          })),
-      () => (opts.panelToggles ?? []).map((t) => ({ label: t.label, checked: t.get(), onChange: () => t.toggle() }))
+      () =>
+         (opts.panelToggles ?? []).map((t) => ({
+            label: t.label,
+            checked: t.get(),
+            onChange: () => t.toggle()
+         }))
    );
    const display = displayMenu(
       () =>
@@ -117,7 +124,10 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
       closeAll
    );
 
-   const groups: { el: HTMLElement; refresh: () => void; onOpen?: () => void }[] = [panels, display];
+   const groups: { el: HTMLElement; refresh: () => void; onOpen?: () => void }[] = [
+      panels,
+      display
+   ];
    if (opts.model) groups.push(modelMenu(opts.model));
    groups.push(system);
    bar.append(...groups.map((g) => g.el));
@@ -344,7 +354,11 @@ function systemMenu(
 
 /* The MODEL panel: a richer dropdown of segmented controls + a model select + a
    privacy toggle. Rebuilt from the control's state on open and on any change push. */
-function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void; onOpen: () => void } {
+function modelMenu(ctrl: ModelControl): {
+   el: HTMLElement;
+   refresh: () => void;
+   onOpen: () => void;
+} {
    const { el, dropdown } = menuGroup("Model");
    dropdown.classList.add("model-panel");
 
@@ -352,8 +366,14 @@ function modelMenu(ctrl: ModelControl): { el: HTMLElement; refresh: () => void; 
       const s = ctrl.getState();
       const rows: HTMLElement[] = [];
       rows.push(
-         segmented("Mode", [["local", "Local"], ["cloud", "Cloud"]], s.mode, (v) =>
-            ctrl.setMode(v as LlmMode)
+         segmented(
+            "Mode",
+            [
+               ["local", "Local"],
+               ["cloud", "Cloud"]
+            ],
+            s.mode,
+            (v) => ctrl.setMode(v as LlmMode)
          )
       );
       if (s.mode === "cloud") {
@@ -433,7 +453,15 @@ function reasoningRows(s: LlmState, ctrl: ModelControl): HTMLElement[] {
    const caps = s.reasoningCaps;
    if (!caps) {
       return [
-         segmented("Reasoning", [["disabled", "Off"], ["enabled", "On"]], s.reasoning, (v) => ctrl.setReasoning(v as Reasoning)),
+         segmented(
+            "Reasoning",
+            [
+               ["disabled", "Off"],
+               ["enabled", "On"]
+            ],
+            s.reasoning,
+            (v) => ctrl.setReasoning(v as Reasoning)
+         ),
          segmented(
             "Effort",
             s.effortOptions.map((o) => [o, effortLabel(o)] as [string, string]),
@@ -504,7 +532,11 @@ function modelHint(text: string): HTMLElement {
    opens, Up/Down move, Enter selects, Esc closes; a mousedown outside closes. Selecting fires
    onSelect, which rebuilds the whole panel, so this control is short-lived - no teardown
    beyond the open-only document listener it removes on close. */
-function modelSelect(options: string[], current: string, onSelect: (value: string) => void): HTMLElement {
+function modelSelect(
+   options: string[],
+   current: string,
+   onSelect: (value: string) => void
+): HTMLElement {
    const row = document.createElement("div");
    row.className = "model-row";
    const lbl = document.createElement("span");

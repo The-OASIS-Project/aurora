@@ -8,6 +8,7 @@ describe("formatCacheState", () => {
       expect(formatCacheState("model")).toEqual({ text: "Model changed", flag: false });
    });
    it("shows nothing to judge for untracked, unknown, or absent", () => {
-      for (const s of ["untracked", "something_new", undefined, 7]) expect(formatCacheState(s)).toEqual({ text: "--", flag: false });
+      for (const s of ["untracked", "something_new", undefined, 7])
+         expect(formatCacheState(s)).toEqual({ text: "--", flag: false });
    });
 });

@@ -111,10 +111,18 @@ function sizeInfo(item: LibraryItem): string {
 
 function fmtDate(epochSec: number, tz: string | undefined): string {
    if (!epochSec) return "";
-   return new Date(epochSec * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric", timeZone: tz });
+   return new Date(epochSec * 1000).toLocaleDateString([], {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      timeZone: tz
+   });
 }
 
-export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions): LibraryPanelController {
+export function mountLibraryPanel(
+   root: HTMLElement,
+   opts: LibraryPanelOptions
+): LibraryPanelController {
    let tz: string | undefined; // the DAWN user's zone; browser-local until known
    const el = document.createElement("div");
    el.id = "library";
@@ -199,7 +207,12 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
       setDocBodyMessage(body, "Loading…");
       const hasBinary = Boolean(item.hasOriginal && item.originalBlobId);
       const fallback = (): void =>
-         setDocBodyMessage(body, hasBinary ? "This document type opens as a download." : "No readable text is stored for this document.");
+         setDocBodyMessage(
+            body,
+            hasBinary
+               ? "This document type opens as a download."
+               : "No readable text is stored for this document."
+         );
       opts
          .getFullText(item.id)
          .then((res) => {
@@ -208,7 +221,8 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
                setDocBodyText(body, res.text, true); // reassembled -> markdown
                /* A binary original (set at open) is the better download; only synthesize a
                   text file when there is none. */
-               if (!hasBinary) setDownload(textDownload(ensureExt(item.filename || "document", "md"), res.text));
+               if (!hasBinary)
+                  setDownload(textDownload(ensureExt(item.filename || "document", "md"), res.text));
                setEditable(res.text); // the stored text is what an edit re-saves
             } else fallback();
          })
@@ -255,7 +269,9 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
    };
 
    const readerSubtitle = (item: LibraryItem): string =>
-      [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt, tz), item.isGlobal ? "shared" : ""].filter(Boolean).join(" · ");
+      [typeLabel(item), sizeInfo(item), fmtDate(item.createdAt, tz), item.isGlobal ? "shared" : ""]
+         .filter(Boolean)
+         .join(" · ");
    let readerItem: LibraryItem | null = null; // the item the reader opened, to re-date it
 
    const openReader = (item: LibraryItem): void => {
@@ -270,7 +286,10 @@ export function mountLibraryPanel(root: HTMLElement, opts: LibraryPanelOptions):
          const body = item.text ?? "";
          if (body) download = textDownload(ensureExt(item.filename || "note", "md"), body);
       } else if (item.hasOriginal && blobId) {
-         download = { filename: item.filename || "document", fetch: () => opts.fetchOriginal(blobId) };
+         download = {
+            filename: item.filename || "document",
+            fetch: () => opts.fetchOriginal(blobId)
+         };
       }
       reader = openDocViewer({
          title: item.filename || "(untitled)",

@@ -24,5 +24,7 @@ export function formatClockTime(now: Date, tz?: string): string {
 
 /* "WED 17 SEP 2026" in the given IANA tz (or local). */
 export function formatClockDate(now: Date, tz?: string): string {
-   return now.toLocaleDateString("en-US", tz ? { ...DATE_OPTS, timeZone: tz } : DATE_OPTS).toUpperCase();
+   return now
+      .toLocaleDateString("en-US", tz ? { ...DATE_OPTS, timeZone: tz } : DATE_OPTS)
+      .toUpperCase();
 }

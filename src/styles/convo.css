@@ -293,7 +293,9 @@
    border-radius: 2px;
    cursor: pointer;
    opacity: 0;
-   transition: opacity 140ms ease, color 140ms ease;
+   transition:
+      opacity 140ms ease,
+      color 140ms ease;
 }
 .convo-visual:hover .convo-visual-download {
    opacity: 1;

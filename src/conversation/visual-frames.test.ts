@@ -5,7 +5,10 @@ import { neutralizeFrames, VISUAL_PRELUDE } from "./visual.ts";
 
 /* A visual's document with the prelude run first, as in the real srcdoc. */
 function visualWindow(): { w: Window & typeof globalThis; run: (code: string) => unknown } {
-   const dom = new JSDOM(`<!DOCTYPE html><html><head>${VISUAL_PRELUDE}</head><body></body></html>`, { runScripts: "dangerously" });
+   const dom = new JSDOM(
+      `<!DOCTYPE html><html><head>${VISUAL_PRELUDE}</head><body></body></html>`,
+      { runScripts: "dangerously" }
+   );
    const w = dom.window as unknown as Window & typeof globalThis;
    return { w, run: (code) => (w as unknown as { eval: (c: string) => unknown }).eval(code) };
 }
@@ -15,7 +18,9 @@ describe("no frames inside a visual", () => {
       expect(neutralizeFrames('<div><iframe src="x"></iframe><IFRAME/><embed src=y></div>')).toBe(
          '<div><x-blocked-iframe src="x"></x-blocked-iframe><x-blocked-IFRAME/><x-blocked-embed src=y></div>'
       );
-      expect(neutralizeFrames("<iframes-are-words> <frameborder>")).toBe("<iframes-are-words> <frameborder>");
+      expect(neutralizeFrames("<iframes-are-words> <frameborder>")).toBe(
+         "<iframes-are-words> <frameborder>"
+      );
    });
 
    it("refuses every runtime route to a frame", () => {
@@ -32,21 +37,29 @@ describe("no frames inside a visual", () => {
          'var r = document.createRange(); r.selectNodeContents(document.body); r.insertNode(r.createContextualFragment("<iframe></iframe>"))'
       ];
       /* An HTML value that isn't a string (a TrustedHTML in a real browser): still checked. */
-      routes.push('document.body.insertAdjacentHTML("beforeend", { toString: function () { return "<iframe></iframe>"; } })');
+      routes.push(
+         'document.body.insertAdjacentHTML("beforeend", { toString: function () { return "<iframe></iframe>"; } })'
+      );
       for (const r of routes) expect(() => run(r), r).toThrow(/Frames are not allowed/);
       expect(run('document.querySelectorAll("iframe,object,embed").length')).toBe(0);
    });
 
    it("leaves ordinary content alone, and WebRTC gone", () => {
       const { run } = visualWindow();
-      run('document.body.innerHTML = "<div id=a><canvas></canvas></div>"; document.body.appendChild(document.createElement("span"))');
+      run(
+         'document.body.innerHTML = "<div id=a><canvas></canvas></div>"; document.body.appendChild(document.createElement("span"))'
+      );
       expect(run('document.querySelectorAll("#a canvas, span").length')).toBe(2);
       expect(run("typeof window.RTCPeerConnection")).toBe("undefined");
    });
 
    it("can't be undone by the visual's code", () => {
       const { run } = visualWindow();
-      expect(() => run('Object.defineProperty(Document.prototype, "createElement", { value: function () {} })')).toThrow();
+      expect(() =>
+         run(
+            'Object.defineProperty(Document.prototype, "createElement", { value: function () {} })'
+         )
+      ).toThrow();
       expect(() => run('document.createElement("iframe")')).toThrow(/Frames are not allowed/);
    });
 });

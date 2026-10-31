@@ -62,7 +62,14 @@ const ICONS: Record<string, { solid?: boolean; paths: string[] }> = {
          "M3 7h2.5a4 4 0 0 1 3.3 1.7l.7 1"
       ]
    },
-   repeat: { paths: ["M17 2l4 4-4 4", "M3 11v-1a4 4 0 0 1 4-4h14", "M7 22l-4-4 4-4", "M21 13v1a4 4 0 0 1-4 4H3"] },
+   repeat: {
+      paths: [
+         "M17 2l4 4-4 4",
+         "M3 11v-1a4 4 0 0 1 4-4h14",
+         "M7 22l-4-4 4-4",
+         "M21 13v1a4 4 0 0 1-4 4H3"
+      ]
+   },
    volume: { paths: ["M11 5 6 9H3v6h3l5 4z", "M15.5 8.5a5 5 0 0 1 0 7", "M18.5 6a9 9 0 0 1 0 12"] },
    mute: { paths: ["M11 5 6 9H3v6h3l5 4z", "M22 9l-6 6", "M16 9l6 6"] },
    /* A list: the queue and library section. */
@@ -129,7 +136,10 @@ function fmtTime(sec: number): string {
    return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): MusicPlayerController {
+export function mountMusicPlayer(
+   root: HTMLElement,
+   opts: MusicPlayerOptions
+): MusicPlayerController {
    const el = document.createElement("div");
    el.id = "music";
    el.className = "music";
@@ -175,7 +185,12 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
 
    const controls = document.createElement("div");
    controls.className = "music-controls";
-   const mkBtn = (act: string, name: keyof typeof ICONS, label: string, cls = ""): HTMLButtonElement => {
+   const mkBtn = (
+      act: string,
+      name: keyof typeof ICONS,
+      label: string,
+      cls = ""
+   ): HTMLButtonElement => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = `music-btn ${cls}`.trim();
@@ -401,7 +416,8 @@ export function mountMusicPlayer(root: HTMLElement, opts: MusicPlayerOptions): M
             else if (state?.paused) opts.control("play");
             /* A stopped player whose track isn't in the shared queue (queue_index -1): a bare play
                starts the queue's top. Never a play_index of -1. */
-            else if ((state?.queueIndex ?? 0) >= 0) opts.control("play_index", { index: state?.queueIndex ?? 0 });
+            else if ((state?.queueIndex ?? 0) >= 0)
+               opts.control("play_index", { index: state?.queueIndex ?? 0 });
             else opts.control("play");
             break;
          case "next":

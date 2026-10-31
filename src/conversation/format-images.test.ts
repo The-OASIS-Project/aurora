@@ -18,7 +18,9 @@ describe("off-origin images in rendered markdown wait for a click (4.7)", () => 
    });
 
    it("keeps same-origin and data: images", () => {
-      const root = render(`![a](${window.location.origin}/api/images/img_1) ![b](/api/images/img_2) ![c](data:image/png;base64,iVBORw0KGgo=)`);
+      const root = render(
+         `![a](${window.location.origin}/api/images/img_1) ![b](/api/images/img_2) ![c](data:image/png;base64,iVBORw0KGgo=)`
+      );
       expect(root.querySelectorAll("img").length).toBe(3);
       expect(root.querySelector(".md-img-blocked")).toBeNull();
    });
@@ -51,10 +53,23 @@ describe("off-origin images in rendered markdown wait for a click (4.7)", () => 
       ].join("\n");
       const root = render(html);
       for (const el of Array.from(root.querySelectorAll("*"))) {
-         for (const attr of ["srcset", "poster", "style", "background", "action", "href", "xlink:href"]) {
+         for (const attr of [
+            "srcset",
+            "poster",
+            "style",
+            "background",
+            "action",
+            "href",
+            "xlink:href"
+         ]) {
             expect(el.hasAttribute(attr), `${el.tagName} ${attr}`).toBe(false);
          }
-         if (el.hasAttribute("src")) expect(el.getAttribute("src")!.startsWith("/") || el.getAttribute("src")!.startsWith(window.location.origin), `${el.tagName} src`).toBe(true);
+         if (el.hasAttribute("src"))
+            expect(
+               el.getAttribute("src")!.startsWith("/") ||
+                  el.getAttribute("src")!.startsWith(window.location.origin),
+               `${el.tagName} src`
+            ).toBe(true);
       }
       expect(root.querySelector("video, audio, source, picture, svg, form, input")).toBeNull();
    });

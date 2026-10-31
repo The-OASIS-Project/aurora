@@ -19,7 +19,14 @@
  * is user/LLM-authorable through the `attention` tool, so treat it as untrusted.
  */
 
-import type { WatchItem, WatchesStatus, WatchesSink, WatchCatalogEntry, WatchReading, WatchFields } from "../ingest/ingest.ts";
+import type {
+   WatchItem,
+   WatchesStatus,
+   WatchesSink,
+   WatchCatalogEntry,
+   WatchReading,
+   WatchFields
+} from "../ingest/ingest.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { addCorners } from "../render/corners.ts";
@@ -61,7 +68,11 @@ const COLLAPSED_KEY = "dawn.hero.watchesCollapsed";
 /* Group by metric FAMILY (the metric-key prefix: stat.* / suit.* / component.*), not the
    watch's source_tag - that's provenance (seed/other), whereas the family is what "what am I
    watching" wants. Preferred display order first, unknown families after (alpha). */
-const FAMILY_LABELS: Record<string, string> = { stat: "System", suit: "Suit", component: "Components" };
+const FAMILY_LABELS: Record<string, string> = {
+   stat: "System",
+   suit: "Suit",
+   component: "Components"
+};
 const FAMILY_ORDER = ["stat", "suit", "component"];
 const familyOf = (w: WatchItem): string => w.metric.split(".")[0] || w.source || "other";
 
@@ -112,7 +123,10 @@ function currentText(w: WatchItem): string {
    return `now ${withUnit(w.current, w.unit)}`;
 }
 
-export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): WatchesPanelController {
+export function mountWatchesPanel(
+   root: HTMLElement,
+   opts: WatchesPanelOpts
+): WatchesPanelController {
    const el = document.createElement("div");
    el.id = "watches";
    el.className = "watches";
@@ -223,7 +237,10 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          /* Cluster watches on the same metric together (a min + a max sit adjacent), then by
             title, then id for a stable order. */
          items: (groups.get(family) as WatchItem[]).sort(
-            (a, b) => a.metric.localeCompare(b.metric) || rowTitle(a).localeCompare(rowTitle(b)) || a.id - b.id
+            (a, b) =>
+               a.metric.localeCompare(b.metric) ||
+               rowTitle(a).localeCompare(rowTitle(b)) ||
+               a.id - b.id
          )
       }));
    };
@@ -264,7 +281,7 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
          ruleType: c.ruleType ?? "threshold",
          direction: c.defaultDirection ?? "above",
          threshold: isAbsence ? undefined : c.defaultThreshold,
-         absenceAfterSec: isAbsence ? c.defaultThreshold ?? 120 : 0,
+         absenceAfterSec: isAbsence ? (c.defaultThreshold ?? 120) : 0,
          notify: "alert",
          enabled: true,
          named: false,
@@ -396,7 +413,9 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       if (!status.ok && watches.length === 0) {
          const msg = document.createElement("div");
          msg.className = "watches-empty";
-         msg.textContent = status.error ? `Couldn't load watches (${status.error})` : "Couldn't load watches";
+         msg.textContent = status.error
+            ? `Couldn't load watches (${status.error})`
+            : "Couldn't load watches";
          list.appendChild(msg);
          card.refresh();
          changed = new Set();
@@ -423,7 +442,9 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
       if (!status.ok) {
          const stale = document.createElement("div");
          stale.className = "watches-stale";
-         stale.textContent = status.error ? `Showing last known (${status.error})` : "Showing last known";
+         stale.textContent = status.error
+            ? `Showing last known (${status.error})`
+            : "Showing last known";
          list.appendChild(stale);
       }
 
@@ -484,7 +505,10 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
             for (const w of next) {
                const pe = prevEnabled.get(w.id);
                const ph = prevHasCurrent.get(w.id);
-               if ((pe !== undefined && pe !== w.enabled) || (ph !== undefined && ph !== w.hasCurrent)) {
+               if (
+                  (pe !== undefined && pe !== w.enabled) ||
+                  (ph !== undefined && ph !== w.hasCurrent)
+               ) {
                   nextChanged.add(w.id);
                }
             }
@@ -506,7 +530,10 @@ export function mountWatchesPanel(root: HTMLElement, opts: WatchesPanelOpts): Wa
             spike rows) then setStatus back-to-back in the same tick. Re-rendering here on an
             UNCHANGED status would replaceChildren and discard those spike rows before they
             paint - so only render when the status actually changed. */
-         const same = status.ok === s.ok && status.attentionEnabled === s.attentionEnabled && status.error === s.error;
+         const same =
+            status.ok === s.ok &&
+            status.attentionEnabled === s.attentionEnabled &&
+            status.error === s.error;
          status = s;
          if (!same) render();
       },

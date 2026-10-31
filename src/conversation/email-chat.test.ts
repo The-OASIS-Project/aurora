@@ -5,7 +5,9 @@ import type { EmailRef } from "../ingest/email.ts";
 
 beforeAll(() => {
    if (!window.matchMedia) {
-      Object.assign(window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+      Object.assign(window, {
+         matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
+      });
    }
    Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} });
    Element.prototype.scrollTo = function () {} as typeof Element.prototype.scrollTo;
@@ -32,9 +34,18 @@ afterEach(() => {
    document.body.replaceChildren();
 });
 
-const REF: EmailRef = { accountId: 3, messageId: "INBOX:4211.7", sender: "Ann <ann@example.com>", subject: "Lunch on Friday?" };
+const REF: EmailRef = {
+   accountId: 3,
+   messageId: "INBOX:4211.7",
+   sender: "Ann <ann@example.com>",
+   subject: "Lunch on Friday?"
+};
 
-function mount(): { sent: Array<{ text: string; refs?: EmailRef[] }>; opened: EmailRef[]; send: (text: string) => void } {
+function mount(): {
+   sent: Array<{ text: string; refs?: EmailRef[] }>;
+   opened: EmailRef[];
+   send: (text: string) => void;
+} {
    document.body.innerHTML = `<div id="stage"><div id="console"><div id="convo"></div>
       <form id="composer"><div class="composer-row"><button id="composer-attach" type="button"></button>
       <textarea id="composer-input"></textarea><button class="composer-hint" type="submit"></button></div></form></div></div>`;
@@ -59,7 +70,8 @@ function mount(): { sent: Array<{ text: string; refs?: EmailRef[] }>; opened: Em
    };
 }
 
-const chips = (): HTMLButtonElement[] => Array.from(document.querySelectorAll<HTMLButtonElement>(".convo-msg.user .convo-email-chip"));
+const chips = (): HTMLButtonElement[] =>
+   Array.from(document.querySelectorAll<HTMLButtonElement>(".convo-msg.user .convo-email-chip"));
 
 describe("email in chat (P1.4)", () => {
    it("needs words with an email, then sends the ref with its display strings and shows the chip", () => {
@@ -67,10 +79,14 @@ describe("email in chat (P1.4)", () => {
       view!.addEmailRef(REF);
       t.send("");
       expect(t.sent).toEqual([]);
-      expect(document.querySelector(".composer-note")?.textContent).toContain("Add a question about this email");
+      expect(document.querySelector(".composer-note")?.textContent).toContain(
+         "Add a question about this email"
+      );
       t.send("Can I make it?");
       expect(t.sent).toEqual([{ text: "Can I make it?", refs: [REF] }]);
-      expect(chips().map((c) => c.textContent)).toEqual(["MAILAnn <ann@example.com>: Lunch on Friday?"]);
+      expect(chips().map((c) => c.textContent)).toEqual([
+         "MAILAnn <ann@example.com>: Lunch on Friday?"
+      ]);
    });
 
    it("gives the email back with the draft when DAWN refuses the turn", () => {
@@ -85,8 +101,16 @@ describe("email in chat (P1.4)", () => {
 
    it("renders the chip on reloaded and appended rows, and opens it in Mail on click", () => {
       const t = mount();
-      view!.loadHistory([{ role: "user", text: "What does this say?", id: 10, email: REF }, { role: "assistant", text: "It says hi.", id: 11 }]);
-      view!.renderAppended({ role: "user", text: "And this one?", messageId: 12, email: { ...REF, messageId: "abc123" } });
+      view!.loadHistory([
+         { role: "user", text: "What does this say?", id: 10, email: REF },
+         { role: "assistant", text: "It says hi.", id: 11 }
+      ]);
+      view!.renderAppended({
+         role: "user",
+         text: "And this one?",
+         messageId: 12,
+         email: { ...REF, messageId: "abc123" }
+      });
       expect(chips().length).toBe(2);
       chips()[0].click();
       expect(t.opened).toEqual([REF]);
@@ -94,7 +118,8 @@ describe("email in chat (P1.4)", () => {
 });
 
 describe("live visuals from the render_visual tool", () => {
-   const VISUAL = '<dawn-visual title="Box" type="svg">\n<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n</dawn-visual>';
+   const VISUAL =
+      '<dawn-visual title="Box" type="svg">\n<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n</dawn-visual>';
    const frames = (): number => document.querySelectorAll(".convo-msg.assistant iframe").length;
 
    it("joins the reply that's streaming, where it arrived", () => {

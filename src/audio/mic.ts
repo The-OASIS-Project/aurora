@@ -127,7 +127,9 @@ export class MicCapture {
    private async probeOpus(): Promise<void> {
       try {
          if (typeof AudioEncoder === "undefined") return;
-         const s = await AudioEncoder.isConfigSupported(OPUS_CONFIG as unknown as AudioEncoderConfig);
+         const s = await AudioEncoder.isConfigSupported(
+            OPUS_CONFIG as unknown as AudioEncoderConfig
+         );
          this.opusSupported = s.supported === true;
       } catch {
          this.opusSupported = false;
@@ -177,7 +179,8 @@ export class MicCapture {
       try {
          const devs = await navigator.mediaDevices.enumerateDevices();
          for (const d of devs) {
-            if (d.kind === "audioinput") out.push({ id: d.deviceId, label: d.label || "Microphone" });
+            if (d.kind === "audioinput")
+               out.push({ id: d.deviceId, label: d.label || "Microphone" });
          }
       } catch {
          /* enumeration blocked -> just the default */

@@ -90,7 +90,9 @@ describe("TTS output", () => {
       tts.play();
       await Promise.resolve();
       expect(contexts.length).toBe(2);
-      expect(wiring.filter(([from, to]) => from === "analyser" && to === "speakers").length).toBe(2);
+      expect(wiring.filter(([from, to]) => from === "analyser" && to === "speakers").length).toBe(
+         2
+      );
       tts.dispose();
    });
 

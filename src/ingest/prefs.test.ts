@@ -2,11 +2,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { definePref, LocalUserPrefs, PREFS_KEY } from "./prefs.ts";
 
-const FLAG = definePref<boolean>({ key: "test.flag", default: false, parse: (r) => (typeof r === "boolean" ? r : undefined) });
+const FLAG = definePref<boolean>({
+   key: "test.flag",
+   default: false,
+   parse: (r) => (typeof r === "boolean" ? r : undefined)
+});
 const LIST = definePref<string[]>({
    key: "test.list",
    default: [],
-   parse: (r) => (Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : undefined)
+   parse: (r) =>
+      Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : undefined
 });
 
 afterEach(() => localStorage.clear());
@@ -18,13 +23,20 @@ describe("LocalUserPrefs", () => {
       p.set(FLAG, true);
       expect(p.get(FLAG)).toBe(true);
       expect(new LocalUserPrefs().get(FLAG)).toBe(true); // persisted
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ v: 1, values: { "test.flag": "yes" }, authority: "local", dirty: [] }));
+      localStorage.setItem(
+         PREFS_KEY,
+         JSON.stringify({ v: 1, values: { "test.flag": "yes" }, authority: "local", dirty: [] })
+      );
       expect(new LocalUserPrefs().get(FLAG)).toBe(false);
       p.dispose();
    });
 
    it("never resolves a key to an Object.prototype member, and refuses bad key names", () => {
-      const CTOR = definePref<string>({ key: "test.constructor", default: "d", parse: (r) => (typeof r === "string" ? r : undefined) });
+      const CTOR = definePref<string>({
+         key: "test.constructor",
+         default: "d",
+         parse: (r) => (typeof r === "string" ? r : undefined)
+      });
       expect(new LocalUserPrefs().get(CTOR)).toBe("d");
       expect(() => definePref({ key: "NoDots", default: 1, parse: () => 1 })).toThrow();
       expect(() => definePref({ key: "x.Upper", default: 1, parse: () => 1 })).toThrow();
@@ -47,7 +59,10 @@ describe("LocalUserPrefs", () => {
       const p = new LocalUserPrefs();
       const seen: string[][] = [];
       p.onChange((keys) => seen.push(keys));
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ v: 1, values: { "test.flag": true }, authority: "local", dirty: [] }));
+      localStorage.setItem(
+         PREFS_KEY,
+         JSON.stringify({ v: 1, values: { "test.flag": true }, authority: "local", dirty: [] })
+      );
       window.dispatchEvent(new StorageEvent("storage", { key: PREFS_KEY }));
       expect(p.get(FLAG)).toBe(true);
       expect(seen).toEqual([["test.flag"]]);

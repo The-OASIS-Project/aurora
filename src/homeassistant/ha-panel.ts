@@ -235,7 +235,10 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       arrives within HA_ACK_TIMEOUT_MS the flip is reverted (the write was lost into a
       half-open link that still read "live"). Any setEntities cancels all of these - a
       server entity broadcast IS the reconcile, and its truth supersedes every flip. */
-   const pendingReverts = new Map<string, { state: string; attributes?: HAAttributes; timer: number }>();
+   const pendingReverts = new Map<
+      string,
+      { state: string; attributes?: HAAttributes; timer: number }
+   >();
 
    const cancelReverts = (): void => {
       for (const p of pendingReverts.values()) window.clearTimeout(p.timer);
@@ -259,7 +262,11 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       the true state (a fresh ha_entities_response after DAWN re-polls HA). On a rejected
       call the ingest re-polls to revert this flip and surfaces the error; a lost call (no
       response at all) is caught by the revert timer below. */
-   const optimistic = (entityId: string, newState: string, attrPatch?: Partial<HAAttributes>): void => {
+   const optimistic = (
+      entityId: string,
+      newState: string,
+      attrPatch?: Partial<HAAttributes>
+   ): void => {
       if (!live()) return; // link down: callService already declined + notified; don't flip a lie
       const e = entities.find((x) => x.entityId === entityId);
       if (!e) return;
@@ -394,7 +401,10 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
 
       /* Read-only readout (sensors, weather, anything not controllable). */
       const unit = a?.unit ?? "";
-      return { control: { kind: "display", text: humanizeState(ev.state) + (unit ? ` ${unit}` : "") }, slider: null };
+      return {
+         control: { kind: "display", text: humanizeState(ev.state) + (unit ? ` ${unit}` : "") },
+         slider: null
+      };
    };
 
    const buildControlEl = (c: Control): HTMLElement => {
@@ -483,7 +493,9 @@ export function mountHAPanel(root: HTMLElement, opts: HAPanelOpts): HAPanelContr
       if (!status.connected) {
          const msg = document.createElement("div");
          msg.className = "ha-empty";
-         msg.textContent = status.error ? `Home Assistant offline (${status.error})` : "Home Assistant offline";
+         msg.textContent = status.error
+            ? `Home Assistant offline (${status.error})`
+            : "Home Assistant offline";
          list.appendChild(msg);
          card.refresh();
          changed = new Set();

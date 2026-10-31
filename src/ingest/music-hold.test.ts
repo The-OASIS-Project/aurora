@@ -28,19 +28,54 @@ function setup(bufferedMs = 2000) {
    const sent: Array<Record<string, unknown>> = [];
    ing.music = player;
    ing.sinks = {
-      music: { setState: (s: MusicState) => shown.push(s), setPosition: (p: number) => positions.push(p), setError: () => {} }
+      music: {
+         setState: (s: MusicState) => shown.push(s),
+         setPosition: (p: number) => positions.push(p),
+         setError: () => {}
+      }
    };
    ing.ws = { readyState: WebSocket.OPEN, send: (m: string) => sent.push(JSON.parse(m)) };
    ing.musicEnabled = false; // no music socket in these tests
-   const frame = (type: string, payload: Record<string, unknown>): void => ing.onFrame(JSON.stringify({ type, payload }));
-   const track = (n: number) => ({ path: `/music/${n}.flac`, title: `Song ${n}`, artist: "", album: "", duration_sec: 200 });
+   const frame = (type: string, payload: Record<string, unknown>): void =>
+      ing.onFrame(JSON.stringify({ type, payload }));
+   const track = (n: number) => ({
+      path: `/music/${n}.flac`,
+      title: `Song ${n}`,
+      artist: "",
+      album: "",
+      duration_sec: 200
+   });
    const state = (n: number, extra: Record<string, unknown> = {}) =>
-      frame("music_state", { playing: true, paused: false, track: track(n), position_sec: 0, queue_index: n, queue_length: 5, ...extra });
-   const controls = () => sent.filter((m) => m.type === "music_control").map((m) => m.payload as Record<string, unknown>);
-   return { ing, player, shown, positions, frame, state, controls, last: () => shown[shown.length - 1] };
+      frame("music_state", {
+         playing: true,
+         paused: false,
+         track: track(n),
+         position_sec: 0,
+         queue_index: n,
+         queue_length: 5,
+         ...extra
+      });
+   const controls = () =>
+      sent
+         .filter((m) => m.type === "music_control")
+         .map((m) => m.payload as Record<string, unknown>);
+   return {
+      ing,
+      player,
+      shown,
+      positions,
+      frame,
+      state,
+      controls,
+      last: () => shown[shown.length - 1]
+   };
 }
 
-beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] }));
+beforeEach(() =>
+   vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"]
+   })
+);
 afterEach(() => vi.useRealTimers());
 
 describe("end-of-track music_state hold", () => {
@@ -59,7 +94,14 @@ describe("end-of-track music_state hold", () => {
    it("lets the end of the queue play out: the stop applies later and never flushes", () => {
       const t = setup();
       t.state(1);
-      t.frame("music_state", { playing: false, paused: false, track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 }, position_sec: 0, queue_index: 0, advance: "auto" });
+      t.frame("music_state", {
+         playing: false,
+         paused: false,
+         track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 },
+         position_sec: 0,
+         queue_index: 0,
+         advance: "auto"
+      });
       expect(t.last().playing).toBe(true);
       vi.advanceTimersByTime(2000);
       expect(t.last().playing).toBe(false);
@@ -91,7 +133,13 @@ describe("end-of-track music_state hold", () => {
       t.state(1);
       t.state(2, { advance: "auto" });
       vi.advanceTimersByTime(1500); // DAWN's position for track 2 counts from its arrival
-      t.frame("music_state", { playing: false, paused: true, track: { path: "/music/2.flac", title: "Song 2", duration_sec: 200 }, position_sec: 1.5, queue_index: 2 });
+      t.frame("music_state", {
+         playing: false,
+         paused: true,
+         track: { path: "/music/2.flac", title: "Song 2", duration_sec: 200 },
+         position_sec: 1.5,
+         queue_index: 2
+      });
       expect(t.shown.map((s) => s.track?.title).slice(-2)).toEqual(["Song 2", "Song 2"]);
       expect(t.last().paused).toBe(true);
       expect(t.player.flushes).toBe(0); // the jump from the held ~0 to 1.5 isn't a seek
@@ -124,7 +172,14 @@ describe("end-of-track music_state hold", () => {
    it("Pause on a held end-of-queue stop stops here and sends nothing", () => {
       const t = setup();
       t.state(1);
-      t.frame("music_state", { playing: false, paused: false, track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 }, position_sec: 0, queue_index: 0, advance: "auto" });
+      t.frame("music_state", {
+         playing: false,
+         paused: false,
+         track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 },
+         position_sec: 0,
+         queue_index: 0,
+         advance: "auto"
+      });
       const before = t.controls().length;
       t.ing.musicControl("pause");
       expect(t.controls().length).toBe(before);
@@ -135,7 +190,13 @@ describe("end-of-track music_state hold", () => {
    it("a different file at the same index is a track change", () => {
       const t = setup(0);
       t.state(0);
-      t.frame("music_state", { playing: true, paused: false, track: { path: "/music/other.flac", title: "Other", duration_sec: 100 }, position_sec: 0, queue_index: 0 });
+      t.frame("music_state", {
+         playing: true,
+         paused: false,
+         track: { path: "/music/other.flac", title: "Other", duration_sec: 100 },
+         position_sec: 0,
+         queue_index: 0
+      });
       expect(t.player.flushes).toBe(1);
    });
 
@@ -145,7 +206,13 @@ describe("end-of-track music_state hold", () => {
       t.state(2, { advance: "auto" });
       vi.advanceTimersByTime(2000); // the held state applies; DAWN is ~2 s into track 2 by now
       vi.advanceTimersByTime(300);
-      t.frame("music_state", { playing: true, paused: true, track: { path: "/music/2.flac", title: "Song 2", duration_sec: 200 }, position_sec: 2.3, queue_index: 2 });
+      t.frame("music_state", {
+         playing: true,
+         paused: true,
+         track: { path: "/music/2.flac", title: "Song 2", duration_sec: 200 },
+         position_sec: 2.3,
+         queue_index: 2
+      });
       expect(t.player.flushes).toBe(0);
    });
 
@@ -160,7 +227,14 @@ describe("end-of-track music_state hold", () => {
    it("Next on a held end-of-queue stop stops here and sends nothing", () => {
       const t = setup();
       t.state(1);
-      t.frame("music_state", { playing: false, paused: false, track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 }, position_sec: 0, queue_index: 0, advance: "auto" });
+      t.frame("music_state", {
+         playing: false,
+         paused: false,
+         track: { path: "/music/1.flac", title: "Song 1", duration_sec: 200 },
+         position_sec: 0,
+         queue_index: 0,
+         advance: "auto"
+      });
       const before = t.controls().length;
       t.ing.musicControl("next");
       expect(t.controls().length).toBe(before);
@@ -186,7 +260,14 @@ describe("end-of-track music_state hold", () => {
    it("Previous on a held end-of-queue stop steps back from the heard track", () => {
       const t = setup();
       t.state(3);
-      t.frame("music_state", { playing: false, paused: false, track: { path: "/music/0.flac", title: "Song 0", duration_sec: 200 }, position_sec: 0, queue_index: 0, advance: "auto" });
+      t.frame("music_state", {
+         playing: false,
+         paused: false,
+         track: { path: "/music/0.flac", title: "Song 0", duration_sec: 200 },
+         position_sec: 0,
+         queue_index: 0,
+         advance: "auto"
+      });
       t.ing.musicControl("previous");
       expect(t.controls().pop()).toEqual({ action: "play_index", index: 2 });
    });
@@ -249,7 +330,14 @@ describe("after a reconnect", () => {
       t.state(1);
       t.state(1, { playing: false, paused: true }); // frozen with ~2 s buffered
       drop(t);
-      t.frame("music_state", { playing: false, paused: false, track: null, position_sec: 0, queue_index: 0, queue_length: 5 });
+      t.frame("music_state", {
+         playing: false,
+         paused: false,
+         track: null,
+         position_sec: 0,
+         queue_index: 0,
+         queue_length: 5
+      });
       expect(t.player.flushes).toBe(1);
       expect(t.player.paused).toBe(false);
    });

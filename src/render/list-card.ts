@@ -118,7 +118,10 @@ export function makeListCard(host: HTMLElement, list: HTMLElement, opts: ListCar
       rFrame = 0;
       if (!resizing || !rSnap) return;
       const base = rStartBottom - rStartH; // the card's bottom with a zero-height list
-      const bottom = rSnap.snap("bottom", rStartBottom + (rLastY - rStartY), [base + MIN_PX, base + rCeiling]);
+      const bottom = rSnap.snap("bottom", rStartBottom + (rLastY - rStartY), [
+         base + MIN_PX,
+         base + rCeiling
+      ]);
       restingH = Math.max(MIN_PX, Math.min(rCeiling, rStartH + (bottom - rStartBottom)));
       /* Write-only while dragging: inline height (it doesn't inherit, so the rows aren't
          re-styled every frame) and the overflow cue from the measured content height. The

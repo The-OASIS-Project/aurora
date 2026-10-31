@@ -77,7 +77,9 @@ const DELETABLE_PREFIXES = new Set(["fact", "entity", "summary"]);
 const MEMORY_ID_RE = /^[1-9]\d*$/; // rejects "", "abc", "0", "1e3", "0x10", " 5 "
 function isDeletable(itemId: string): boolean {
    const c = itemId.indexOf(":");
-   return c > 0 && DELETABLE_PREFIXES.has(itemId.slice(0, c)) && MEMORY_ID_RE.test(itemId.slice(c + 1));
+   return (
+      c > 0 && DELETABLE_PREFIXES.has(itemId.slice(0, c)) && MEMORY_ID_RE.test(itemId.slice(c + 1))
+   );
 }
 
 export interface ContextPanelOptions {
@@ -86,7 +88,10 @@ export interface ContextPanelOptions {
    onDeleteMemory?: (itemId: string) => void;
 }
 
-export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions = {}): ContextPanelController {
+export function mountContextPanel(
+   root: HTMLElement,
+   opts: ContextPanelOptions = {}
+): ContextPanelController {
    const el = document.createElement("div");
    el.id = "context";
    el.className = "context";
@@ -357,7 +362,10 @@ export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions =
       if (prov && prov.conversationId) {
          const p = document.createElement("span");
          p.className = "context-prov";
-         const span = prov.msgIdEnd && prov.msgIdEnd !== prov.msgIdStart ? `${prov.msgIdStart}–${prov.msgIdEnd}` : `${prov.msgIdStart}`;
+         const span =
+            prov.msgIdEnd && prov.msgIdEnd !== prov.msgIdStart
+               ? `${prov.msgIdStart}–${prov.msgIdEnd}`
+               : `${prov.msgIdStart}`;
          p.textContent = `conv ${prov.conversationId} · msg ${span}`;
          foot.append(p);
       }
@@ -379,7 +387,8 @@ export function mountContextPanel(root: HTMLElement, opts: ContextPanelOptions =
       }
       const n = current.items.length;
       const filtered = current.rejections.reduce((s, r) => s + r.count, 0);
-      subEl.textContent = n === 0 ? "nothing this turn" : `${n} pulled${filtered ? ` · ${filtered} filtered` : ""}`;
+      subEl.textContent =
+         n === 0 ? "nothing this turn" : `${n} pulled${filtered ? ` · ${filtered} filtered` : ""}`;
    };
 
    const render = (): void => {

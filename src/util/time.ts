@@ -84,7 +84,10 @@ export function isoDate(epochSec: number, tz?: string | null): string {
 }
 
 /* The zone's wall clock at an instant (epoch ms): calendar date + time of day. */
-function wallParts(ms: number, zone: string | undefined): { y: number; mo: number; d: number; h: number; mi: number; s: number } {
+function wallParts(
+   ms: number,
+   zone: string | undefined
+): { y: number; mo: number; d: number; h: number; mi: number; s: number } {
    const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: zone,
       hourCycle: "h23",
@@ -96,7 +99,14 @@ function wallParts(ms: number, zone: string | undefined): { y: number; mo: numbe
       second: "numeric"
    }).formatToParts(new Date(ms));
    const val = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? "0");
-   return { y: val("year"), mo: val("month"), d: val("day"), h: val("hour") % 24, mi: val("minute"), s: val("second") };
+   return {
+      y: val("year"),
+      mo: val("month"),
+      d: val("day"),
+      h: val("hour") % 24,
+      mi: val("minute"),
+      s: val("second")
+   };
 }
 
 /* Seconds the zone's clock reads ahead of UTC at an instant (epoch ms). */
@@ -119,7 +129,8 @@ export function dayStart(y: number, mo: number, d: number, zone: string | undefi
    for (const k of [-1, 0, 1]) {
       const t = wallMs - offsetSecAt(wallMs + k * 86400_000, zone) * 1000;
       const p = wallParts(t, zone);
-      if (onDay(p) && p.h === 0 && p.mi === 0 && p.s === 0 && (first === null || t < first)) first = t;
+      if (onDay(p) && p.h === 0 && p.mi === 0 && p.s === 0 && (first === null || t < first))
+         first = t;
    }
    if (first !== null) return Math.floor(first / 1000);
    let t = wallMs - offsetSecAt(wallMs, zone) * 1000;
@@ -135,7 +146,10 @@ export function dayStart(y: number, mo: number, d: number, zone: string | undefi
 
 /* Today in the zone (browser-local when unset or invalid), as epoch seconds [first instant,
    the next day's first instant): 23 or 25 hours across a clock change, not always 24. */
-export function todayWindow(tz?: string | null, nowMs: number = Date.now()): { start: number; end: number } {
+export function todayWindow(
+   tz?: string | null,
+   nowMs: number = Date.now()
+): { start: number; end: number } {
    const zone = safeTimeZone(tz);
    const w = wallParts(nowMs, zone);
    return { start: dayStart(w.y, w.mo, w.d, zone), end: dayStart(w.y, w.mo, w.d + 1, zone) };

@@ -209,7 +209,11 @@ export interface EmailSource {
    /* Whether live changes (and so new-mail notifications) are available (DAWN's change feed). */
    supportsLiveChanges(): boolean;
    list(q: EmailListQuery): Promise<EmailListResult>;
-   read(accountId: number, messageId: string, markRead: boolean): Promise<{ message: EmailMessage; unread: boolean }>;
+   read(
+      accountId: number,
+      messageId: string,
+      markRead: boolean
+   ): Promise<{ message: EmailMessage; unread: boolean }>;
    setFlags(accountId: number, messageIds: string[], flags: { unread?: boolean }): Promise<void>;
    archive(accountId: number, messageIds: string[]): Promise<EmailMoveResult>;
    trash(accountId: number, messageIds: string[]): Promise<EmailMoveResult>;

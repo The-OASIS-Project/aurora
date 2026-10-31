@@ -32,7 +32,17 @@ import { watchTabAway } from "../util/tab-away.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
-import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, extSessionLabel, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
+import {
+   assetBadge,
+   assetLabel,
+   compactSymbol,
+   dirClass,
+   dirGlyph,
+   extSessionLabel,
+   fmtPct,
+   fmtSignedUsd,
+   fmtUsd
+} from "../util/stock-format.ts";
 
 export interface StocksPanelOptions {
    /* Subscribe (true) / unsubscribe (false) the portfolio push, with the current ext-hours
@@ -131,7 +141,10 @@ function eyeIcon(off: boolean): SVGSVGElement {
    return svg;
 }
 
-export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): StocksPanelController {
+export function mountStocksPanel(
+   root: HTMLElement,
+   opts: StocksPanelOptions
+): StocksPanelController {
    const el = document.createElement("div");
    el.id = "stocks";
    el.className = "stocks";
@@ -192,9 +205,14 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    });
    /* Opt-in: financial data should not auto-appear (a garage TV, a screen-share). The user
       turns it on from the Panels menu; the choice then persists like any other panel. */
-   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "stocks-off", defaultVisible: false });
+   const vis = makeVisibility(el, {
+      storageKey: VISIBLE_KEY,
+      offClass: "stocks-off",
+      defaultVisible: false
+   });
    const reducedMotion =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
    /* --- state ------------------------------------------------------------- */
    let portfolio: StockPortfolio | null = null;
@@ -221,7 +239,8 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    let seedNextFrame = false;
 
    const money = (n: number): string => (redacted ? maskFigure(fmtUsd(n)) : fmtUsd(n));
-   const moneySigned = (n: number): string => (redacted ? maskFigure(fmtSignedUsd(n)) : fmtSignedUsd(n));
+   const moneySigned = (n: number): string =>
+      redacted ? maskFigure(fmtSignedUsd(n)) : fmtSignedUsd(n);
    const pct = (n: number): string => (redacted ? maskFigure(fmtPct(n)) : fmtPct(n));
 
    /* --- subscription lifecycle (gated on EFFECTIVE visibility) ------------ */
@@ -251,7 +270,12 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       const now = new Date();
       let sameDay: boolean;
       try {
-         const f = new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, year: "numeric", month: "numeric", day: "numeric" });
+         const f = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz || undefined,
+            year: "numeric",
+            month: "numeric",
+            day: "numeric"
+         });
          sameDay = f.format(d) === f.format(now);
       } catch {
          sameDay = d.toDateString() === now.toDateString();
@@ -260,7 +284,9 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          ? { hour: "numeric", minute: "2-digit" }
          : { weekday: "short", hour: "numeric", minute: "2-digit" };
       try {
-         return new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, ...fmtOpts }).format(d);
+         return new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, ...fmtOpts }).format(
+            d
+         );
       } catch {
          return new Intl.DateTimeFormat("en-US", fmtOpts).format(d);
       }
@@ -295,7 +321,13 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
    const membershipSig = (accounts: StockAccount[]): string => {
       const multi = accounts.length > 1;
       return accounts
-         .map((a, i) => `${multi ? `H${i};` : ""}${a.positions.map((p) => posKey(i, p.symbol)).sort().join(",")}`)
+         .map(
+            (a, i) =>
+               `${multi ? `H${i};` : ""}${a.positions
+                  .map((p) => posKey(i, p.symbol))
+                  .sort()
+                  .join(",")}`
+         )
          .join("|");
    };
 
@@ -305,9 +337,17 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       if (!b) return false; // no baseline yet (fresh subscribe / structural change) => no spike
       // A genuine gain<->loss crossing (both sides nonzero) is material; a move off exactly-flat
       // is not treated as a "flip" on its own - the magnitude thresholds below catch it.
-      if (b.dayChange !== 0 && p.dayChange !== 0 && Math.sign(b.dayChange) !== Math.sign(p.dayChange)) return true;
+      if (
+         b.dayChange !== 0 &&
+         p.dayChange !== 0 &&
+         Math.sign(b.dayChange) !== Math.sign(p.dayChange)
+      )
+         return true;
       if (Math.abs(p.dayChangePct - b.dayChangePct) >= SPIKE_PP) return true;
-      return Math.abs(p.value - b.value) >= Math.max(SPIKE_VALUE_MIN, SPIKE_VALUE_FRAC * Math.abs(p.value));
+      return (
+         Math.abs(p.value - b.value) >=
+         Math.max(SPIKE_VALUE_MIN, SPIKE_VALUE_FRAC * Math.abs(p.value))
+      );
    };
 
    /* --- render ------------------------------------------------------------ */
@@ -360,7 +400,10 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
       statusEl.hidden = false;
       statusEl.className = `stocks-status${degraded || stale ? " stocks-status-stale" : ""}`;
       const asOf = `as of ${fmtAsOf(snap.asOf)}`;
-      statusEl.textContent = degraded || stale ? `${market.toUpperCase()} · stale · ${asOf}` : `${market.toUpperCase()} · ${asOf}`;
+      statusEl.textContent =
+         degraded || stale
+            ? `${market.toUpperCase()} · stale · ${asOf}`
+            : `${market.toUpperCase()} · ${asOf}`;
 
       // Schwab-link expiry note (feature-detected; absent when the daemon omits it).
       const note = linkNote(portfolio?.linkExpiresAt, Date.now() / 1000);
@@ -372,7 +415,9 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
 
       // Index the current positions by key + keep the account for a header lookup.
       const posByKey = new Map<string, StockPosition>();
-      snap.accounts.forEach((a, i) => a.positions.forEach((p) => posByKey.set(posKey(i, p.symbol), p)));
+      snap.accounts.forEach((a, i) =>
+         a.positions.forEach((p) => posByKey.set(posKey(i, p.symbol), p))
+      );
 
       // Freeze the display order across frames; recompute only when MEMBERSHIP changes (a symbol
       // or account added/removed), never on a value-rank swap.
@@ -394,7 +439,11 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
          if (!p) continue;
          if (!seed && !reducedMotion && isMaterial(it.key, p)) spiking.add(it.key);
          if (seed || spiking.has(it.key) || !baseline.has(it.key)) {
-            baseline.set(it.key, { value: p.value, dayChangePct: p.dayChangePct, dayChange: p.dayChange });
+            baseline.set(it.key, {
+               value: p.value,
+               dayChangePct: p.dayChangePct,
+               dayChange: p.dayChange
+            });
          }
       }
       // Prune baselines for symbols no longer held (bounded growth across churn).
@@ -589,7 +638,10 @@ export function mountStocksPanel(root: HTMLElement, opts: StocksPanelOptions): S
 /* The Schwab-link expiry note for a given expiry (unix sec) and now, or null to show nothing.
    Silent when comfortably ahead; a neutral note within LINK_WARN_SEC; amber within
    LINK_URGENT_SEC or already lapsed. Read-only copy - it points at the CLI relink. */
-function linkNote(expiresAt: number | undefined, nowSec: number): { text: string; urgent: boolean } | null {
+function linkNote(
+   expiresAt: number | undefined,
+   nowSec: number
+): { text: string; urgent: boolean } | null {
    if (typeof expiresAt !== "number") return null;
    const rem = expiresAt - nowSec;
    if (rem > LINK_WARN_SEC) return null; // comfortably ahead: stay quiet
@@ -604,7 +656,11 @@ function linkNote(expiresAt: number | undefined, nowSec: number): { text: string
 }
 
 /* The four empty states, distinct copy each. */
-function emptyStateText(p: StockPortfolio | null, subscribed: boolean, lastFrameAt: number): string {
+function emptyStateText(
+   p: StockPortfolio | null,
+   subscribed: boolean,
+   lastFrameAt: number
+): string {
    if (p) {
       switch (p.status) {
          case "token_expired":

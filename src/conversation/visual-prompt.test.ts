@@ -16,7 +16,9 @@ const { visualPromptText, VISUAL_PROMPT_MAX } = await import("./visual.ts");
 
 beforeAll(() => {
    if (!window.matchMedia) {
-      Object.assign(window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+      Object.assign(window, {
+         matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
+      });
    }
    Element.prototype.scrollTo = function () {} as typeof Element.prototype.scrollTo;
    class NoopObserver {
@@ -36,7 +38,11 @@ afterEach(() => {
 
 type Sent = { text: string; a?: { turnRef?: string; fromVisual?: boolean } };
 
-function mount(guard = true): { sent: Sent[]; input: HTMLTextAreaElement; view: ReturnType<typeof mountConversation> } {
+function mount(guard = true): {
+   sent: Sent[];
+   input: HTMLTextAreaElement;
+   view: ReturnType<typeof mountConversation>;
+} {
    document.body.innerHTML = `<div id="stage"><div id="console"><div id="convo"></div>
       <form id="composer"><div class="composer-row"><button id="composer-attach" type="button"></button>
       <textarea id="composer-input"></textarea><button class="composer-hint" type="submit"></button></div></form></div></div>`;
@@ -57,7 +63,9 @@ describe("a rendered visual's prompt", () => {
       const t = mount();
       t.input.value = "my half-typed draft";
       visualPrompt!("yes");
-      expect(t.sent).toEqual([{ text: "yes", a: { turnRef: expect.any(String), fromVisual: true } }]);
+      expect(t.sent).toEqual([
+         { text: "yes", a: { turnRef: expect.any(String), fromVisual: true } }
+      ]);
       expect(t.input.value).toBe("my half-typed draft");
    });
 
@@ -88,6 +96,8 @@ describe("a rendered visual's prompt", () => {
       expect(visualPromptText("yes", false)).toBeNull();
       expect(visualPromptText("   ", true)).toBeNull();
       expect(visualPromptText("  show more  ", true)).toBe("show more");
-      expect(visualPromptText("x".repeat(VISUAL_PROMPT_MAX + 50), true)!.length).toBe(VISUAL_PROMPT_MAX);
+      expect(visualPromptText("x".repeat(VISUAL_PROMPT_MAX + 50), true)!.length).toBe(
+         VISUAL_PROMPT_MAX
+      );
    });
 });

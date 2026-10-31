@@ -106,7 +106,8 @@ const toAddr = (a: unknown): { name: string; addr: string } => {
 };
 
 function toMessage(m: Json): EmailMessage {
-   const list = (v: unknown): Array<{ name: string; addr: string }> => (Array.isArray(v) ? v.map(toAddr) : []);
+   const list = (v: unknown): Array<{ name: string; addr: string }> =>
+      Array.isArray(v) ? v.map(toAddr) : [];
    return {
       accountId: num(m.account_id),
       messageId: str(m.message_id),
@@ -154,8 +155,13 @@ function toCounts(v: unknown): EmailUnreadCount[] {
    const statuses: EmailAccountStatus[] = ["ok", "auth_revoked", "auth_failed", "unreachable"];
    return (v as Json[]).map((a) => ({
       accountId: num(a.account_id),
-      inboxUnread: typeof a.inbox_unread === "number" && Number.isFinite(a.inbox_unread) ? a.inbox_unread : null,
-      status: statuses.includes(a.status as EmailAccountStatus) ? (a.status as EmailAccountStatus) : "unreachable"
+      inboxUnread:
+         typeof a.inbox_unread === "number" && Number.isFinite(a.inbox_unread)
+            ? a.inbox_unread
+            : null,
+      status: statuses.includes(a.status as EmailAccountStatus)
+         ? (a.status as EmailAccountStatus)
+         : "unreachable"
    }));
 }
 
@@ -173,7 +179,11 @@ export class DawnEmail implements EmailSource {
    private readonly batches = new Map<string, MoveBatch>();
    private readonly inFlight = new Set<string>(); // keys whose move call hasn't answered yet
    private accountsRetry = 0;
-   private readonly pageTag = (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)).replace(/-/g, "").slice(0, 8);
+   private readonly pageTag = (
+      globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2)
+   )
+      .replace(/-/g, "")
+      .slice(0, 8);
    private seq = 0;
 
    constructor(
@@ -245,7 +255,9 @@ export class DawnEmail implements EmailSource {
             const code = e instanceof EmailRequestError ? e.code : "FAILED";
             if (code === "UNREACHABLE" || code === "CANCELLED") return;
             /* Not answered, or refused: say so, and try again shortly while this connection lasts. */
-            this.sink?.setAccountsError(e instanceof Error && e.message ? e.message : "DAWN didn't answer");
+            this.sink?.setAccountsError(
+               e instanceof Error && e.message ? e.message : "DAWN didn't answer"
+            );
             window.clearTimeout(this.accountsRetry);
             this.accountsRetry = window.setTimeout(() => {
                if (this.published && this.advertised) this.loadAccounts();
@@ -283,12 +295,17 @@ export class DawnEmail implements EmailSource {
       if (!req) {
          const want = type.replace(/_response$/, "");
          const live = [...new Set(this.pending.values())].filter((e) => e.type === want);
-         if (live.length === 1) req = live[0].reqs.find((r) => this.pending.get(r) === live[0]) ?? "";
+         if (live.length === 1)
+            req = live[0].reqs.find((r) => this.pending.get(r) === live[0]) ?? "";
       }
       const entry = req ? this.pending.get(req) : undefined;
       if (!entry) return true; // a late reply to a request already settled or given up on
       /* One attempt of a retried request was replaced by its own newer twin: wait for the twin. */
-      if (p.success === false && p.error_code === "SUPERSEDED" && entry.reqs.some((r) => r !== req && this.pending.get(r) === entry)) {
+      if (
+         p.success === false &&
+         p.error_code === "SUPERSEDED" &&
+         entry.reqs.some((r) => r !== req && this.pending.get(r) === entry)
+      ) {
          this.pending.delete(req);
          return true;
       }
@@ -306,10 +323,18 @@ export class DawnEmail implements EmailSource {
    /* `once`: never re-sent (a move or undo that may already have run); a lost reply rejects as
       OUTCOME_UNKNOWN instead of TIMEOUT. */
    private request(type: string, payload: Json, once = false): Promise<Json> {
-      if (!this.linked) return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
-      if (!this.configSeen) return Promise.reject(new EmailRequestError("UNREACHABLE", "Connecting to DAWN…"));
-      if (!this.advertised) return Promise.reject(new EmailRequestError("UNAVAILABLE", "Mail isn't available on this DAWN"));
-      if (this.unsupported(type)) return Promise.reject(new EmailRequestError("UNAVAILABLE", "This DAWN doesn't support that yet"));
+      if (!this.linked)
+         return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
+      if (!this.configSeen)
+         return Promise.reject(new EmailRequestError("UNREACHABLE", "Connecting to DAWN…"));
+      if (!this.advertised)
+         return Promise.reject(
+            new EmailRequestError("UNAVAILABLE", "Mail isn't available on this DAWN")
+         );
+      if (this.unsupported(type))
+         return Promise.reject(
+            new EmailRequestError("UNAVAILABLE", "This DAWN doesn't support that yet")
+         );
       return new Promise((resolve, reject) =>
          this.dispatch({
             type,
@@ -339,7 +364,9 @@ export class DawnEmail implements EmailSource {
             entry.reject(
                new EmailRequestError(
                   entry.timeoutCode,
-                  entry.timeoutCode === "OUTCOME_UNKNOWN" ? "DAWN didn't confirm it" : "DAWN didn't answer in time"
+                  entry.timeoutCode === "OUTCOME_UNKNOWN"
+                     ? "DAWN didn't confirm it"
+                     : "DAWN didn't answer in time"
                )
             );
          }
@@ -373,7 +400,12 @@ export class DawnEmail implements EmailSource {
          window.clearTimeout(e.timer);
          /* A sent move or undo may already have run: its outcome is unknown, not refused. */
          const unknown = e.timeoutCode === "OUTCOME_UNKNOWN" && code !== "CANCELLED";
-         e.reject(new EmailRequestError(unknown ? "OUTCOME_UNKNOWN" : code, unknown ? "The connection dropped before DAWN confirmed it" : message));
+         e.reject(
+            new EmailRequestError(
+               unknown ? "OUTCOME_UNKNOWN" : code,
+               unknown ? "The connection dropped before DAWN confirmed it" : message
+            )
+         );
       }
    }
 
@@ -413,19 +445,38 @@ export class DawnEmail implements EmailSource {
       };
    }
 
-   async read(accountId: number, messageId: string, markRead: boolean): Promise<{ message: EmailMessage; unread: boolean }> {
-      const p = await this.request("email_read", { account_id: accountId, message_id: messageId, mark_read: markRead });
+   async read(
+      accountId: number,
+      messageId: string,
+      markRead: boolean
+   ): Promise<{ message: EmailMessage; unread: boolean }> {
+      const p = await this.request("email_read", {
+         account_id: accountId,
+         message_id: messageId,
+         mark_read: markRead
+      });
       const m = p.message && typeof p.message === "object" ? toMessage(p.message as Json) : null;
       if (!m) throw new EmailRequestError("FAILED", "DAWN sent an empty message");
       return { message: m, unread: p.unread === true };
    }
 
-   async setFlags(accountId: number, messageIds: string[], flags: { unread?: boolean }): Promise<void> {
+   async setFlags(
+      accountId: number,
+      messageIds: string[],
+      flags: { unread?: boolean }
+   ): Promise<void> {
       if (flags.unread === undefined) return;
-      const p = await this.request("email_set_flags", { account_id: accountId, message_ids: messageIds, unread: flags.unread });
+      const p = await this.request("email_set_flags", {
+         account_id: accountId,
+         message_ids: messageIds,
+         unread: flags.unread
+      });
       const failed = Array.isArray(p.failed) ? (p.failed as Json[]) : [];
       if (failed.length && failed.length === messageIds.length) {
-         throw new EmailRequestError((str(failed[0].error_code) || "FAILED") as EmailErrorCode, str(failed[0].error) || "Couldn't change it");
+         throw new EmailRequestError(
+            (str(failed[0].error_code) || "FAILED") as EmailErrorCode,
+            str(failed[0].error) || "Couldn't change it"
+         );
       }
    }
 
@@ -447,16 +498,27 @@ export class DawnEmail implements EmailSource {
          } catch (e) {
             /* Keep what earlier parts restored; this part's tokens failed with the reason. A lost
                reply (outcome unknown) still rejects, so the caller reloads. */
-            if (i === 0 || (e instanceof EmailRequestError && e.code === "OUTCOME_UNKNOWN")) throw e;
-            const err = e instanceof EmailRequestError ? e : new EmailRequestError("FAILED", "Something went wrong");
+            if (i === 0 || (e instanceof EmailRequestError && e.code === "OUTCOME_UNKNOWN"))
+               throw e;
+            const err =
+               e instanceof EmailRequestError
+                  ? e
+                  : new EmailRequestError("FAILED", "Something went wrong");
             for (const t of chunk) failed.push({ undo: t, code: err.code, message: err.message });
             continue;
          }
          for (const r of Array.isArray(p.restored) ? (p.restored as Json[]) : []) {
-            restored.push({ undo: str(r.undo), row: r.row && typeof r.row === "object" ? toRow(r.row as Json) : null });
+            restored.push({
+               undo: str(r.undo),
+               row: r.row && typeof r.row === "object" ? toRow(r.row as Json) : null
+            });
          }
          for (const f of Array.isArray(p.failed) ? (p.failed as Json[]) : []) {
-            failed.push({ undo: str(f.undo), code: (str(f.error_code) || "FAILED") as EmailErrorCode, message: str(f.error) });
+            failed.push({
+               undo: str(f.undo),
+               code: (str(f.error_code) || "FAILED") as EmailErrorCode,
+               message: str(f.error)
+            });
          }
       }
       return { restored, failed };
@@ -465,12 +527,17 @@ export class DawnEmail implements EmailSource {
    /* ---- moves: batched, never re-sent ---------------------------------------- */
 
    private move(kind: MoveKind, accountId: number, messageIds: string[]): Promise<EmailMoveResult> {
-      if (!this.linked) return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
+      if (!this.linked)
+         return Promise.reject(new EmailRequestError("UNREACHABLE", "Not connected to DAWN"));
       /* More than one call's worth: split it (each part batches on its own), then join the results. */
       if (messageIds.length > MOVE_MAX) {
          const parts: Promise<EmailMoveResult>[] = [];
-         for (let i = 0; i < messageIds.length; i += MOVE_MAX) parts.push(this.move(kind, accountId, messageIds.slice(i, i + MOVE_MAX)));
-         return Promise.all(parts).then((rs) => ({ done: rs.flatMap((r) => r.done), failed: rs.flatMap((r) => r.failed) }));
+         for (let i = 0; i < messageIds.length; i += MOVE_MAX)
+            parts.push(this.move(kind, accountId, messageIds.slice(i, i + MOVE_MAX)));
+         return Promise.all(parts).then((rs) => ({
+            done: rs.flatMap((r) => r.done),
+            failed: rs.flatMap((r) => r.failed)
+         }));
       }
       return new Promise((resolve, reject) => {
          const key = `${kind}:${accountId}`;
@@ -485,7 +552,8 @@ export class DawnEmail implements EmailSource {
             const bb = b;
             b.timer = window.setTimeout(() => {
                if (this.batches.get(key) !== bb) return;
-               if (this.inFlight.has(key)) bb.due = true; // goes when the running call answers
+               if (this.inFlight.has(key))
+                  bb.due = true; // goes when the running call answers
                else this.flushMove(key);
             }, MOVE_BATCH_MS);
          }
@@ -524,7 +592,10 @@ export class DawnEmail implements EmailSource {
             }
          })
          .catch((e: unknown) => {
-            const err = e instanceof EmailRequestError ? e : new EmailRequestError("FAILED", "Something went wrong");
+            const err =
+               e instanceof EmailRequestError
+                  ? e
+                  : new EmailRequestError("FAILED", "Something went wrong");
             for (const w of b.waiters) w.reject(err);
          })
          .finally(() => {
@@ -542,7 +613,9 @@ export class DawnEmail implements EmailSource {
          state: typeof p.state === "string" ? p.state : null,
          created: rows(p.created),
          updated: rows(p.updated),
-         destroyed: Array.isArray(p.destroyed) ? (p.destroyed as unknown[]).filter((x): x is string => typeof x === "string") : [],
+         destroyed: Array.isArray(p.destroyed)
+            ? (p.destroyed as unknown[]).filter((x): x is string => typeof x === "string")
+            : [],
          kind,
          undo: p.undo === true,
          refresh: p.refresh === true

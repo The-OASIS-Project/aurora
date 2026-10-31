@@ -44,10 +44,31 @@ const purify = DOMPurify(window);
    Everything else that loads on its own is removed here, and nothing can forge the click-to-load
    placeholder (no forms or buttons, no data-* attributes, no inline style). */
 const FORBID_TAGS = [
-   "video", "audio", "source", "picture", "track", "image", "feimage", "input", "form", "button",
-   "select", "textarea", "svg", "math"
+   "video",
+   "audio",
+   "source",
+   "picture",
+   "track",
+   "image",
+   "feimage",
+   "input",
+   "form",
+   "button",
+   "select",
+   "textarea",
+   "svg",
+   "math"
 ];
-const FORBID_ATTR = ["style", "srcset", "poster", "background", "xlink:href", "ping", "action", "formaction"];
+const FORBID_ATTR = [
+   "style",
+   "srcset",
+   "poster",
+   "background",
+   "xlink:href",
+   "ping",
+   "action",
+   "formaction"
+];
 
 /* Any link kept with target="_blank" also gets rel="noopener noreferrer" so the opened
    page cannot reach window.opener (reverse tabnabbing). DOMPurify already strips
@@ -145,5 +166,12 @@ export function wireImageGate(root: HTMLElement): () => void {
    same allowance the existing WebUI makes. Off-origin images come back as placeholders. */
 export function renderMarkdown(text: string): string {
    const html = marked.parse(text, { async: false });
-   return gateImages(purify.sanitize(html, { ADD_ATTR: ["target"], FORBID_TAGS, FORBID_ATTR, ALLOW_DATA_ATTR: false }));
+   return gateImages(
+      purify.sanitize(html, {
+         ADD_ATTR: ["target"],
+         FORBID_TAGS,
+         FORBID_ATTR,
+         ALLOW_DATA_ATTR: false
+      })
+   );
 }

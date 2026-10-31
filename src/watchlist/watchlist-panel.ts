@@ -27,7 +27,17 @@ import { watchTabAway } from "../util/tab-away.ts";
 import { makeListCard } from "../render/list-card.ts";
 import { makeMovable } from "../render/movable.ts";
 import { makeVisibility } from "../render/visibility.ts";
-import { assetBadge, assetLabel, compactSymbol, dirClass, dirGlyph, extSessionLabel, fmtPct, fmtSignedUsd, fmtUsd } from "../util/stock-format.ts";
+import {
+   assetBadge,
+   assetLabel,
+   compactSymbol,
+   dirClass,
+   dirGlyph,
+   extSessionLabel,
+   fmtPct,
+   fmtSignedUsd,
+   fmtUsd
+} from "../util/stock-format.ts";
 
 export interface WatchlistPanelOptions {
    /* Subscribe (true) / unsubscribe (false) the watch push, with the current ext-hours choice.
@@ -72,7 +82,10 @@ function staleAfterSec(market: StockMarket, extHours: boolean): number {
 /* One entry in the frozen render order: a symbol key (the uppercased ticker). */
 type Order = string[];
 
-export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptions): WatchlistPanelController {
+export function mountWatchlistPanel(
+   root: HTMLElement,
+   opts: WatchlistPanelOptions
+): WatchlistPanelController {
    const el = document.createElement("div");
    el.className = "watchlist lcard-host";
    addCorners(el);
@@ -128,9 +141,14 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
       ignore: ".watchlist-refresh, .watchlist-ext"
    });
    /* Opt-in like the portfolio panel (finance-adjacent; no surprise on a shared screen). */
-   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "watchlist-off", defaultVisible: false });
+   const vis = makeVisibility(el, {
+      storageKey: VISIBLE_KEY,
+      offClass: "watchlist-off",
+      defaultVisible: false
+   });
    const reducedMotion =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
    /* --- state ------------------------------------------------------------- */
    let watchlist: StockWatchlist | null = null;
@@ -176,7 +194,12 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
       const now = new Date();
       let sameDay: boolean;
       try {
-         const f = new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, year: "numeric", month: "numeric", day: "numeric" });
+         const f = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz || undefined,
+            year: "numeric",
+            month: "numeric",
+            day: "numeric"
+         });
          sameDay = f.format(d) === f.format(now);
       } catch {
          sameDay = d.toDateString() === now.toDateString();
@@ -185,7 +208,9 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
          ? { hour: "numeric", minute: "2-digit" }
          : { weekday: "short", hour: "numeric", minute: "2-digit" };
       try {
-         return new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, ...fmtOpts }).format(d);
+         return new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, ...fmtOpts }).format(
+            d
+         );
       } catch {
          return d.toLocaleTimeString();
       }
@@ -203,7 +228,12 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
    const isMaterial = (key: string, s: StockWatchSymbol): boolean => {
       const b = baseline.get(key);
       if (!b) return false;
-      if (b.dayChange !== 0 && s.dayChange !== 0 && Math.sign(b.dayChange) !== Math.sign(s.dayChange)) return true;
+      if (
+         b.dayChange !== 0 &&
+         s.dayChange !== 0 &&
+         Math.sign(b.dayChange) !== Math.sign(s.dayChange)
+      )
+         return true;
       if (Math.abs(s.dayChangePct - b.dayChangePct) >= SPIKE_PP) return true;
       return Math.abs(s.price - b.price) >= SPIKE_PRICE_FRAC * Math.abs(s.price);
    };
@@ -212,9 +242,11 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
    const emptyStateText = (): string => {
       if (unsupported) return "Watchlist isn't available on this DAWN.";
       const status = watchlist?.status ?? "ok";
-      if (status === "token_expired") return "Schwab link expired - reconnect in DAWN (dawn-admin schwab auth).";
+      if (status === "token_expired")
+         return "Schwab link expired - reconnect in DAWN (dawn-admin schwab auth).";
       if (status === "not_connected") return "No brokerage linked in DAWN.";
-      if (status === "rate_limited" || status === "error") return "Watchlist temporarily unavailable.";
+      if (status === "rate_limited" || status === "error")
+         return "Watchlist temporarily unavailable.";
       if (subscribed && lastFrameAt > 0 && performance.now() - lastFrameAt > UNAVAILABLE_MS)
          return "Watchlist feed not available on this DAWN.";
       if (!subscribed) return "Watchlist hidden.";
@@ -227,7 +259,8 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
       const row = document.createElement("div");
       row.className = "watchlist-row";
       if (unquotable) row.classList.add("watchlist-unquotable");
-      if (spike && !unquotable) row.classList.add(s.dayChangePct >= 0 ? "watchlist-spike-gain" : "watchlist-spike-loss");
+      if (spike && !unquotable)
+         row.classList.add(s.dayChangePct >= 0 ? "watchlist-spike-gain" : "watchlist-spike-loss");
 
       const l1 = document.createElement("div");
       l1.className = "watchlist-row-l1";
@@ -326,7 +359,10 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
       statusEl.hidden = false;
       statusEl.className = `watchlist-status${degraded || stale ? " watchlist-status-stale" : ""}`;
       const asOfStr = typeof asOf === "number" ? ` · as of ${fmtAsOf(asOf)}` : "";
-      statusEl.textContent = degraded || stale ? `${market.toUpperCase()} · stale${asOfStr}` : `${market.toUpperCase()}${asOfStr}`;
+      statusEl.textContent =
+         degraded || stale
+            ? `${market.toUpperCase()} · stale${asOfStr}`
+            : `${market.toUpperCase()}${asOfStr}`;
 
       // Freeze order; recompute only when membership changes (a symbol added/removed).
       const nextSig = membershipSig(symbols);
@@ -351,7 +387,11 @@ export function mountWatchlistPanel(root: HTMLElement, opts: WatchlistPanelOptio
          }
          if (!seed && !reducedMotion && isMaterial(key, s)) spiking.add(key);
          if (seed || spiking.has(key) || !baseline.has(key)) {
-            baseline.set(key, { price: s.price, dayChangePct: s.dayChangePct, dayChange: s.dayChange });
+            baseline.set(key, {
+               price: s.price,
+               dayChangePct: s.dayChangePct,
+               dayChange: s.dayChange
+            });
          }
       }
       // Prune baselines for symbols no longer present.

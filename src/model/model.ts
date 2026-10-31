@@ -53,7 +53,12 @@ export function parseReasoningCaps(raw: unknown): ReasoningCaps | null {
    const modes: ReasoningMode[] = [];
    for (const m of r.modes) {
       if (!m || typeof m !== "object") continue;
-      const e = m as { mode?: unknown; efforts?: unknown; budget?: unknown; budget_tokens?: unknown };
+      const e = m as {
+         mode?: unknown;
+         efforts?: unknown;
+         budget?: unknown;
+         budget_tokens?: unknown;
+      };
       if (!isReasoning(e.mode) || modes.some((x) => x.mode === e.mode)) continue;
       const efforts = Array.isArray(e.efforts)
          ? e.efforts.filter((x): x is string => typeof x === "string" && x !== "" && x !== "none")
@@ -66,7 +71,10 @@ export function parseReasoningCaps(raw: unknown): ReasoningCaps | null {
       }
       modes.push({ mode: e.mode, efforts, budget: e.budget === true, budgetTokens });
    }
-   const d = (r.default && typeof r.default === "object" ? r.default : {}) as { mode?: unknown; effort?: unknown };
+   const d = (r.default && typeof r.default === "object" ? r.default : {}) as {
+      mode?: unknown;
+      effort?: unknown;
+   };
    return {
       modes,
       default: {
@@ -103,14 +111,20 @@ export function reasoningNote(
    effective: { mode: Reasoning; effort: string },
    caps: ReasoningCaps | null
 ): string {
-   const budgetOf = (mode: Reasoning): boolean => caps?.modes.find((m) => m.mode === mode)?.budget === true;
+   const budgetOf = (mode: Reasoning): boolean =>
+      caps?.modes.find((m) => m.mode === mode)?.budget === true;
    /* A stored "enabled" (or legacy "auto") on a model without an enabled mode just means
       "reasoning on" to DAWN (no clamp), so it's no mismatch unless reasoning actually runs off. */
    const legacyOn = pick.mode === "enabled" && effective.mode !== "disabled";
    if (pick.mode && pick.mode !== effective.mode && !legacyOn) {
       return `${reasoningModeLabel(pick.mode, budgetOf(pick.mode))} isn't available on this model; running ${reasoningModeLabel(effective.mode, budgetOf(effective.mode))}.`;
    }
-   if (effective.mode !== "disabled" && pick.effort && pick.effort !== "none" && pick.effort !== effective.effort) {
+   if (
+      effective.mode !== "disabled" &&
+      pick.effort &&
+      pick.effort !== "none" &&
+      pick.effort !== effective.effort
+   ) {
       return `${effortLabel(pick.effort)} isn't available on this model; running ${effortLabel(effective.effort)}.`;
    }
    return "";

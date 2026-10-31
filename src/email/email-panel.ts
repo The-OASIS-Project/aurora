@@ -98,7 +98,14 @@ const UNREAD_KEY = "dawn.hero.mailUnreadOnly";
 /* The user's own choices that embed account ids: per user (in USER_KEYS). */
 export const MAIL_PREFS_KEY = "dawn.hero.mailPrefs";
 /* Every key this panel may write (a test holds it to this). */
-export const MAIL_STORAGE_KEYS = [VISIBLE_KEY, POS_KEY, SIZE_KEY, OPEN_KEY, UNREAD_KEY, MAIL_PREFS_KEY] as const;
+export const MAIL_STORAGE_KEYS = [
+   VISIBLE_KEY,
+   POS_KEY,
+   SIZE_KEY,
+   OPEN_KEY,
+   UNREAD_KEY,
+   MAIL_PREFS_KEY
+] as const;
 
 const PAGE = 25;
 const ROW_CAP = 1000;
@@ -168,7 +175,9 @@ const ICONS: Record<string, string[]> = {
    image: ["M3 5h18v14H3z", "M3 16l5-5 4 4 3-3 6 6", "M15.5 9.5h.01"],
    filter: ["M3 5h18", "M6 12h12", "M10 19h4"],
    close: ["M6 6l12 12", "M18 6L6 18"],
-   clip: ["M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"]
+   clip: [
+      "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+   ]
 };
 
 function icon(name: string): SVGSVGElement {
@@ -236,14 +245,18 @@ function fmtBytes(n: number): string {
 
 /* Distinct monograms: the first letter, two letters on a clash, then letter + a digit, so two
    accounts never share a tile (identity never rests on hue alone). Exported for tests. */
-export function assignMonograms(accounts: Array<{ id: number; label: string }>): Map<number, string> {
+export function assignMonograms(
+   accounts: Array<{ id: number; label: string }>
+): Map<number, string> {
    const clean = (s: string): string => s.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase() || "?";
    const out = new Map<number, string>();
    const used = new Set<string>();
    const labels = accounts.map((a) => ({ id: a.id, l: clean(a.label) }));
    for (const { id, l } of labels) {
       const firstClash = labels.some((b) => b.id !== id && b.l[0] === l[0]);
-      const tries = firstClash ? [l.slice(0, 2), ...Array.from({ length: 9 }, (_, i) => `${l[0]}${i + 1}`)] : [l[0], l.slice(0, 2)];
+      const tries = firstClash
+         ? [l.slice(0, 2), ...Array.from({ length: 9 }, (_, i) => `${l[0]}${i + 1}`)]
+         : [l[0], l.slice(0, 2)];
       const pick = tries.find((t) => !used.has(t)) ?? `${l[0]}${id}`;
       used.add(pick);
       out.set(id, pick);
@@ -338,9 +351,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          refit(); // skipped during the drag
       }
    });
-   const vis = makeVisibility(el, { storageKey: VISIBLE_KEY, offClass: "mail-off", defaultVisible: false });
+   const vis = makeVisibility(el, {
+      storageKey: VISIBLE_KEY,
+      offClass: "mail-off",
+      defaultVisible: false
+   });
    const reducedMotion =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
    /* --- state -------------------------------------------------------------- */
    let destroyed = false;
@@ -387,7 +405,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    }
    /* Until this connection's settings have loaded, the privacy-sensitive ones stay strict (3.9):
       no automatic images, sender-only notices. */
-   const trustedSenders = (): Set<string> => new Set(userPrefs.loaded() ? userPrefs.get(TRUSTED_SENDERS) : []);
+   const trustedSenders = (): Set<string> =>
+      new Set(userPrefs.loaded() ? userPrefs.get(TRUSTED_SENDERS) : []);
    const alwaysImages = (): boolean => userPrefs.loaded() && userPrefs.get(ALWAYS_IMAGES);
    const senderOnly = (): boolean => !userPrefs.loaded() || userPrefs.get(SENDER_ONLY);
    const markReadMode = (): MarkRead => userPrefs.get(MARK_READ);
@@ -451,14 +470,21 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    let advanceAfterPage = false; // Next pressed at the end of the loaded rows: open the next once it loads
    let advanceFrom: number | null = null; // after a move: open rows[advanceFrom] once the next page lands
    let readerSig = "";
-   let bodyCache: { key: string; showImages: boolean; node: DocumentFragment; images: number; designWidth: number } | null = null;
+   let bodyCache: {
+      key: string;
+      showImages: boolean;
+      node: DocumentFragment;
+      images: number;
+      designWidth: number;
+   } | null = null;
    /* The open message's body + its design width: its images are re-fitted when the reader resizes. */
    let fitTarget: { el: HTMLElement; design: number; width: number } | null = null;
    const refit = (): void => {
       if (!fitTarget) return;
       if (el.classList.contains("resizing")) return; // mid-resize: fit once on release (onCommit)
       const cs = getComputedStyle(fitTarget.el);
-      const width = fitTarget.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const width =
+         fitTarget.el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       if (width === fitTarget.width) return; // only the height moved (e.g. images loading)
       fitTarget.width = width;
       fitImages(fitTarget.el, fitRatio(width, fitTarget.design));
@@ -474,7 +500,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    /* --- accounts ----------------------------------------------------------- */
    const account = (id: number): EmailAccount | undefined => accounts.find((a) => a.id === id);
-   const accountName = (id: number): string => account(id)?.displayName || account(id)?.address || "Mail";
+   const accountName = (id: number): string =>
+      account(id)?.displayName || account(id)?.address || "Mail";
    const isReadOnly = (id: number): boolean => account(id)?.readOnly ?? true;
    /* Archive / trash: not on a read-only account, and only once the source can move mail.
       Read/unread works everywhere (only the read state changes). */
@@ -494,17 +521,24 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       return prefs.filter.filter((id) => all.includes(id));
    };
    const noneSelected = (): boolean => accounts.length > 0 && selectedIds().length === 0;
-   const filterIsAll = (): boolean => accounts.length > 0 && selectedIds().length === accounts.length;
+   const filterIsAll = (): boolean =>
+      accounts.length > 0 && selectedIds().length === accounts.length;
 
    const computeIdentity = (): void => {
       accountIndex.clear();
       const sorted = [...accounts].sort((a, b) => a.id - b.id);
       sorted.forEach((a, i) => accountIndex.set(a.id, i));
-      monograms = assignMonograms(sorted.map((a) => ({ id: a.id, label: a.displayName || a.address.split("@")[1] || a.address })));
+      monograms = assignMonograms(
+         sorted.map((a) => ({
+            id: a.id,
+            label: a.displayName || a.address.split("@")[1] || a.address
+         }))
+      );
    };
 
    /* The account's color token (slots cycle past the palette; the letter disambiguates). */
-   const acctColor = (id: number): string => `var(--account-${((accountIndex.get(id) ?? 0) % PALETTE.account.length) + 1})`;
+   const acctColor = (id: number): string =>
+      `var(--account-${((accountIndex.get(id) ?? 0) % PALETTE.account.length) + 1})`;
 
    const tile = (accountId: number, small = false): HTMLElement => {
       const t = span(`mail-tile${small ? " mail-tile-sm" : ""}`);
@@ -529,7 +563,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       }
       return f.format(d);
    };
-   const DAY_OPTS: Intl.DateTimeFormatOptions = { year: "numeric", month: "2-digit", day: "2-digit" };
+   const DAY_OPTS: Intl.DateTimeFormatOptions = {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+   };
    const dayKey = (d: Date): string => fmt(d, DAY_OPTS);
    /* "Now" for a render: dates read relative to it, and it's part of each row's signature so a
       long-open panel relabels rows after midnight. */
@@ -547,17 +585,30 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (dayKey(d) === today) return fmt(d, { hour: "numeric", minute: "2-digit" });
       if (nowMs - d.getTime() < 6 * 86400_000) return fmt(d, { weekday: "short" });
       const sameYear = fmt(d, { year: "numeric" }) === year;
-      return fmt(d, sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
+      return fmt(
+         d,
+         sameYear
+            ? { month: "short", day: "numeric" }
+            : { year: "numeric", month: "short", day: "numeric" }
+      );
    };
    const fullDate = (epoch: number): string =>
-      fmt(new Date(epoch * 1000), { weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      fmt(new Date(epoch * 1000), {
+         weekday: "short",
+         year: "numeric",
+         month: "short",
+         day: "numeric",
+         hour: "numeric",
+         minute: "2-digit"
+      });
 
    /* --- subscription (7.1) ------------------------------------------------- */
    let suspended = false;
    let subscribed = false;
    /* A hidden tab counts only after a grace period, so a quick tab hop doesn't drop and refetch. */
    const tabAway = watchTabAway(() => syncEffective());
-   const panelEffective = (): boolean => vis.isVisible() && expanded && !suspended && !tabAway.away();
+   const panelEffective = (): boolean =>
+      vis.isVisible() && expanded && !suspended && !tabAway.away();
    /* What needs the person actually looking, with no grace: marking read, and whether a new-mail
       bell is redundant. A hidden tab never marks a message read or swallows a bell. */
    const onScreen = (): boolean => panelEffective() && !document.hidden;
@@ -568,7 +619,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       in the panel, so an off panel must not keep raising cards the user can't trace. */
    const notifyOn = (): boolean => source.supportsLiveChanges() && prefs.notify.length > 0;
    const wantSubscription = (): boolean =>
-      availability === "available" && (panelEffective() || (vis.isVisible() && notifyOn() && linked));
+      availability === "available" &&
+      (panelEffective() || (vis.isVisible() && notifyOn() && linked));
    const syncSubscription = (): void => {
       const want = wantSubscription();
       if (want === subscribed) return;
@@ -649,7 +701,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       refreshing.updated.set(k, { ...refreshing.updated.get(k), ...u });
    };
    const refreshInPlace = (): void => {
-      if (destroyed || availability !== "available" || accounts.length === 0 || noneSelected()) return;
+      if (destroyed || availability !== "available" || accounts.length === 0 || noneSelected())
+         return;
       if (!linked) {
          listStale = true; // e.g. a laptop waking before the link is back: link-up refreshes it
          return;
@@ -679,7 +732,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          unread: new Map<string, boolean>()
       };
       refreshing = edits;
-      const base = { accountIds: filterIsAll() ? undefined : selectedIds(), unreadOnly, query: query || undefined, limit: PAGE };
+      const base = {
+         accountIds: filterIsAll() ? undefined : selectedIds(),
+         unreadOnly,
+         query: query || undefined,
+         limit: PAGE
+      };
       const buf: EmailRow[] = [];
       const seen = new Set<string>();
       const freshPartials: typeof partials = new Map();
@@ -704,7 +762,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                buf.push(row);
             }
             if (outOfOrder) buf.sort((x, y) => y.date - x.date);
-            for (const f of r.partial) freshPartials.set(f.accountId, { code: f.code, message: f.message });
+            for (const f of r.partial)
+               freshPartials.set(f.accountId, { code: f.code, message: f.message });
             next = r.cursor;
             if (next === null || buf.length >= ROW_CAP) return "swap";
             if (reachedTail) {
@@ -750,8 +809,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                if (at >= 0) list.splice(at, 0, row);
                else if (next === null) list.push(row);
             }
-            const arrived = list.filter((r) => !oldKeys.has(rowKey(r)) && !edits.added.has(rowKey(r)) && r.date > oldHead);
-            const busy = listEl.scrollTop > 4 || pointerOverList || listEl.contains(document.activeElement);
+            const arrived = list.filter(
+               (r) => !oldKeys.has(rowKey(r)) && !edits.added.has(rowKey(r)) && r.date > oldHead
+            );
+            const busy =
+               listEl.scrollTop > 4 || pointerOverList || listEl.contains(document.activeElement);
             if (busy && arrived.length && !query) {
                const held = new Set(arrived.map(rowKey));
                list = list.filter((r) => !held.has(rowKey(r)));
@@ -768,7 +830,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             const inList = new Set(list.map(rowKey));
             pendingNew = pendingNew.filter((p) => !inList.has(rowKey(p)));
             if (list.length > ROW_CAP) list.length = ROW_CAP;
-            if (list.length !== rows.length || list.some((r, i) => rowKey(r) !== rowKey(rows[i]))) lockReflow();
+            if (list.length !== rows.length || list.some((r, i) => rowKey(r) !== rowKey(rows[i])))
+               lockReflow();
             rows = list;
             cursor = next;
             advanceFrom = null; // an index into the old list: a move made meanwhile goes back to the list
@@ -802,7 +865,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    /* Paging runs only for a list someone can see, and never re-fires itself after an error
       (the user's Retry does). */
-   const canAutoPage = (): boolean => !loadError && !lastPageEmpty && panelEffective() && listEl.clientHeight > 0;
+   const canAutoPage = (): boolean =>
+      !loadError && !lastPageEmpty && panelEffective() && listEl.clientHeight > 0;
 
    const loadMore = (): void => {
       if (destroyed) return;
@@ -855,10 +919,14 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             if (advanceAfterPage) {
                advanceAfterPage = false;
                const i = reader ? rows.findIndex((x) => rowKey(x) === reader!.key) : -1;
-               if (i >= 0 && rows[i + 1]) queueMicrotask(() => openRow(rows[i + 1], readerCol.contains(document.activeElement), true));
+               if (i >= 0 && rows[i + 1])
+                  queueMicrotask(() =>
+                     openRow(rows[i + 1], readerCol.contains(document.activeElement), true)
+                  );
             }
             if (rows.length >= ROW_CAP) rows.length = ROW_CAP;
-            for (const p of r.partial) partials.set(p.accountId, { code: p.code, message: p.message });
+            for (const p of r.partial)
+               partials.set(p.accountId, { code: p.code, message: p.message });
          })
          .catch((e: unknown) => {
             if (destroyed || gen !== listGen) return;
@@ -875,7 +943,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                return;
             }
             advanceAfterPage = false;
-            loadError = errorCode(e) === "CURSOR_STALE" ? "the list keeps changing; refresh to reload" : errorText(e);
+            loadError =
+               errorCode(e) === "CURSOR_STALE"
+                  ? "the list keeps changing; refresh to reload"
+                  : errorText(e);
          })
          .finally(() => {
             if (destroyed || gen !== listGen) return;
@@ -928,7 +999,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       ].join("\u0001");
 
    const buildRow = (r: EmailRow, k: string): HTMLElement => {
-      const row = div(`mail-row${r.unread ? " unread" : ""}${k === selectedKey ? " selected" : ""}`);
+      const row = div(
+         `mail-row${r.unread ? " unread" : ""}${k === selectedKey ? " selected" : ""}`
+      );
       row.style.setProperty("--acct", acctColor(r.accountId));
       row.setAttribute("role", "option");
       row.dataset.key = k;
@@ -937,7 +1010,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       row.setAttribute("aria-selected", k === selectedKey ? "true" : "false");
       const sender = r.fromName || r.fromAddr;
       const when = rowDate(r.date);
-      row.setAttribute("aria-label", `${r.unread ? "Unread, " : ""}from ${sender}, ${accountName(r.accountId)} account, ${r.subject || "(no subject)"}, ${when}`);
+      row.setAttribute(
+         "aria-label",
+         `${r.unread ? "Unread, " : ""}from ${sender}, ${accountName(r.accountId)} account, ${r.subject || "(no subject)"}, ${when}`
+      );
       const bar = span("mail-row-bar");
       const gutter = span("mail-row-gutter");
       gutter.appendChild(tile(r.accountId));
@@ -957,7 +1033,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       row.append(bar, gutter, content);
       {
          const actions = span("mail-row-actions");
-         const mark = iconButton("mail-act-mark", r.unread ? "read" : "unread", r.unread ? "Mark read" : "Mark unread");
+         const mark = iconButton(
+            "mail-act-mark",
+            r.unread ? "read" : "unread",
+            r.unread ? "Mark read" : "Mark unread"
+         );
          mark.dataset.act = "mark";
          const btns = [mark];
          if (canArchive(r.accountId)) {
@@ -1003,7 +1083,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       /* The link state only enables/disables row actions: flip them in place, no rebuild. */
       if (renderedLinked !== linked) {
          renderedLinked = linked;
-         for (const { el: r } of rowEls.values()) r.querySelectorAll<HTMLButtonElement>(".mail-row-actions button").forEach((b) => (b.disabled = !linked));
+         for (const { el: r } of rowEls.values())
+            r.querySelectorAll<HTMLButtonElement>(".mail-row-actions button").forEach(
+               (b) => (b.disabled = !linked)
+            );
       }
 
       if (showSkeleton && rows.length === 0) {
@@ -1041,12 +1124,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    /* --- status, banners, header ------------------------------------------- */
    const bannerCopy = (code: EmailErrorCode, name: string): string => {
-      if (code === "AUTH_REVOKED" || code === "AUTH_FAILED") return `${name} needs reconnecting in DAWN's settings`;
+      if (code === "AUTH_REVOKED" || code === "AUTH_FAILED")
+         return `${name} needs reconnecting in DAWN's settings`;
       if (code === "UNREACHABLE" || code === "TIMEOUT") return `Couldn't reach ${name}`;
-      if (code === "UNSUPPORTED_QUERY") return `Search for non-English text isn't supported on ${name}`;
+      if (code === "UNSUPPORTED_QUERY")
+         return `Search for non-English text isn't supported on ${name}`;
       /* The account listed, but its server refused some rows (too many requests): its other rows stay
          on screen; Retry reloads from the top, which is the only way back to the refused ones. */
-      if (code === "RATE_LIMITED") return `${name} sent only part of this list (too many requests). Retry in a moment`;
+      if (code === "RATE_LIMITED")
+         return `${name} sent only part of this list (too many requests). Retry in a moment`;
       return `${name} had a problem loading mail`;
    };
 
@@ -1079,18 +1165,23 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const statusText = (): string => {
       if (availability === "unknown") return "Loading…";
       if (availability === "unavailable") return "Mail isn't available on this DAWN.";
-      if (!accountsKnown) return accountsError ? `Couldn't load your mail accounts: ${accountsError}. Trying again…` : "Loading…";
+      if (!accountsKnown)
+         return accountsError
+            ? `Couldn't load your mail accounts: ${accountsError}. Trying again…`
+            : "Loading…";
       if (accounts.length === 0) return "Add an email account in DAWN's settings.";
       if (noneSelected()) return "No accounts selected";
       if (rows.length > 0 || showSkeleton || loading) return "";
       if (loadError) return `Couldn't load mail: ${loadError}`;
       if (cursor === undefined) return "";
       const n = selectedIds().length;
-      if (query) return `No results for “${query}”${filterIsAll() ? "" : ` in ${n} account${n === 1 ? "" : "s"}`}`;
+      if (query)
+         return `No results for “${query}”${filterIsAll() ? "" : ` in ${n} account${n === 1 ? "" : "s"}`}`;
       return unreadOnly ? "No unread mail" : "No mail";
    };
 
-   const totalUnread = (): number => selectedIds().reduce((s, id) => s + (counts.get(id)?.inboxUnread ?? 0), 0); // unknown counts add nothing
+   const totalUnread = (): number =>
+      selectedIds().reduce((s, id) => s + (counts.get(id)?.inboxUnread ?? 0), 0); // unknown counts add nothing
 
    let lastTotal = -1;
    const renderHead = (): void => {
@@ -1112,7 +1203,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const t = tile(id, true);
          t.classList.toggle("broken", c.status !== "ok");
          t.removeAttribute("aria-hidden");
-         t.title = c.status === "ok" ? `${accountName(id)}: ${c.inboxUnread ?? "?"} unread` : `${accountName(id)}: needs attention`;
+         t.title =
+            c.status === "ok"
+               ? `${accountName(id)}: ${c.inboxUnread ?? "?"} unread`
+               : `${accountName(id)}: needs attention`;
          t.setAttribute("aria-label", t.title);
          tilesEl.appendChild(t);
       }
@@ -1126,26 +1220,44 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       live.textContent = text;
    };
 
-   const senderLabel = (name: string, addr: string): string => (name && addr && name !== addr ? `${name} <${addr}>` : addr || name);
+   const senderLabel = (name: string, addr: string): string =>
+      name && addr && name !== addr ? `${name} <${addr}>` : addr || name;
 
    /* --- reader ------------------------------------------------------------- */
    const discussRef = (r: Reader): EmailRef => ({
       accountId: r.row.accountId,
       messageId: r.row.messageId,
       /* "Name <addr>": the chip (stored with the chat message) never shows a display name alone. */
-      sender: senderLabel(r.message?.fromName ?? r.row.fromName, r.message?.fromAddr ?? r.row.fromAddr),
+      sender: senderLabel(
+         r.message?.fromName ?? r.row.fromName,
+         r.message?.fromAddr ?? r.row.fromAddr
+      ),
       subject: r.message?.subject ?? r.row.subject
    });
 
-   const addrList = (list: Array<{ name: string; addr: string }>): string => list.map((a) => (a.name ? `${a.name} <${a.addr}>` : a.addr)).join(", ");
+   const addrList = (list: Array<{ name: string; addr: string }>): string =>
+      list.map((a) => (a.name ? `${a.name} <${a.addr}>` : a.addr)).join(", ");
 
    /* The rendered body for the open message, once per (message, images shown). */
-   const bodyFor = (r: Reader, m: EmailMessage): { node: Node; images: number; designWidth: number } => {
+   const bodyFor = (
+      r: Reader,
+      m: EmailMessage
+   ): { node: Node; images: number; designWidth: number } => {
       if (!bodyCache || bodyCache.key !== r.key || bodyCache.showImages !== r.showImages) {
          const rendered = renderEmailBody({ html: m.bodyHtml, text: m.bodyText }, r.showImages);
-         bodyCache = { key: r.key, showImages: r.showImages, node: rendered.fragment, images: rendered.images, designWidth: rendered.designWidth };
+         bodyCache = {
+            key: r.key,
+            showImages: r.showImages,
+            node: rendered.fragment,
+            images: rendered.images,
+            designWidth: rendered.designWidth
+         };
       }
-      return { node: bodyCache.node.cloneNode(true), images: bodyCache.images, designWidth: bodyCache.designWidth };
+      return {
+         node: bodyCache.node.cloneNode(true),
+         images: bodyCache.images,
+         designWidth: bodyCache.designWidth
+      };
    };
 
    /* The open message's neighbors in the list order (null at an end; Next past the loaded rows
@@ -1153,7 +1265,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const neighbors = (): { prev: EmailRow | null; next: EmailRow | null; more: boolean } => {
       const i = reader ? rows.findIndex((x) => rowKey(x) === reader!.key) : -1;
       if (i < 0) return { prev: null, next: null, more: false };
-      return { prev: rows[i - 1] ?? null, next: rows[i + 1] ?? null, more: !rows[i + 1] && cursor !== null && rows.length < ROW_CAP };
+      return {
+         prev: rows[i - 1] ?? null,
+         next: rows[i + 1] ?? null,
+         more: !rows[i + 1] && cursor !== null && rows.length < ROW_CAP
+      };
    };
 
    const step = (dir: -1 | 1): void => {
@@ -1174,8 +1290,27 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       const id = reader.row.accountId;
       /* The read state is NOT here (the mark toggle flips in place, syncReaderActions): a rebuild
          would throw the reader back to the top. Trust IS, only as far as this message's bar shows it. */
-      const stopBar = !!reader.autoImages && !alwaysImages() && !!reader.fromKey && trustedSenders().has(reader.fromKey);
-      return [reader.key, reader.state, reader.showImages, stopBar, !!reader.message, split, compactDiscuss, canDiscuss(), isReadOnly(id), canArchive(id), canTrash(id), accountIndex.get(id), monograms.get(id), tz].join("\u0001");
+      const stopBar =
+         !!reader.autoImages &&
+         !alwaysImages() &&
+         !!reader.fromKey &&
+         trustedSenders().has(reader.fromKey);
+      return [
+         reader.key,
+         reader.state,
+         reader.showImages,
+         stopBar,
+         !!reader.message,
+         split,
+         compactDiscuss,
+         canDiscuss(),
+         isReadOnly(id),
+         canArchive(id),
+         canTrash(id),
+         accountIndex.get(id),
+         monograms.get(id),
+         tz
+      ].join("\u0001");
    };
 
    const renderReader = (): void => {
@@ -1209,7 +1344,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (r.state !== "gone") {
          /* A read / unread toggle in every mode, so "Only when I choose" has a control here. */
          const local = rows.find((x) => rowKey(x) === r.key) ?? r.row;
-         const markBtn = iconButton("mail-r-mark", local.unread ? "read" : "unread", local.unread ? "Mark read" : "Mark unread");
+         const markBtn = iconButton(
+            "mail-r-mark",
+            local.unread ? "read" : "unread",
+            local.unread ? "Mark read" : "Mark unread"
+         );
          markBtn.addEventListener("click", () => {
             const cur = rows.find((x) => rowKey(x) === r.key) ?? r.row;
             cancelMark();
@@ -1273,7 +1412,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       /* The full Discuss buttons are used only while the bar really fits them: measured, not guessed
          (the actions it holds vary by account and by what DAWN supports). Remember the width they
          needed, so widening the panel brings them back only once they'd fit again. */
-      if (!compactDiscuss && bar.scrollWidth > bar.clientWidth + 1 && bar.querySelector(".mail-discuss-private")) {
+      if (
+         !compactDiscuss &&
+         bar.scrollWidth > bar.clientWidth + 1 &&
+         bar.querySelector(".mail-discuss-private")
+      ) {
          fullDiscussNeeds = bar.scrollWidth + 8;
          compactDiscuss = true;
          readerSig = "";
@@ -1283,7 +1426,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
       const scroll = div("mail-reader-scroll");
       const headBlock = div("mail-reader-head");
-      const subj = div("mail-reader-subject", r.message?.subject ?? (r.row.subject || "(no subject)"));
+      const subj = div(
+         "mail-reader-subject",
+         r.message?.subject ?? (r.row.subject || "(no subject)")
+      );
       subj.tabIndex = -1;
       headBlock.appendChild(subj);
       const fromLine = div("mail-reader-from");
@@ -1296,21 +1442,28 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const m = r.message;
          const recips = [...m.to, ...m.cc];
          /* Count every recipient, including any DAWN cut from a long list. */
-         const totalRecips = Math.max(m.to.length, m.toTotal ?? 0) + Math.max(m.cc.length, m.ccTotal ?? 0);
+         const totalRecips =
+            Math.max(m.to.length, m.toTotal ?? 0) + Math.max(m.cc.length, m.ccTotal ?? 0);
          if (recips.length) {
             const own = account(m.accountId)?.address;
             const toMe = recips.some((a) => a.addr === own);
             const first = toMe ? "me" : addrList(recips.slice(0, 1));
             const more = totalRecips - 1;
             const toLine = div("mail-reader-to");
-            const expand = textButton("mail-link mail-to-toggle", `to ${first}${more > 0 ? `, +${more}` : ""}`);
+            const expand = textButton(
+               "mail-link mail-to-toggle",
+               `to ${first}${more > 0 ? `, +${more}` : ""}`
+            );
             expand.setAttribute("aria-expanded", "false");
             const full = div("mail-reader-to-full");
             full.hidden = true;
-            const cut = (shown: number, total?: number): string => (total && total > shown ? ` +${total - shown} more` : "");
+            const cut = (shown: number, total?: number): string =>
+               total && total > shown ? ` +${total - shown} more` : "";
             full.append(div("", `To: ${addrList(m.to)}${cut(m.to.length, m.toTotal)}`));
-            if (m.cc.length) full.append(div("", `Cc: ${addrList(m.cc)}${cut(m.cc.length, m.ccTotal)}`));
-            if (m.replyTo && m.replyTo.addr !== m.fromAddr) full.append(div("", `Reply-To: ${addrList([m.replyTo])}`));
+            if (m.cc.length)
+               full.append(div("", `Cc: ${addrList(m.cc)}${cut(m.cc.length, m.ccTotal)}`));
+            if (m.replyTo && m.replyTo.addr !== m.fromAddr)
+               full.append(div("", `Reply-To: ${addrList([m.replyTo])}`));
             expand.addEventListener("click", () => {
                full.hidden = !full.hidden;
                expand.setAttribute("aria-expanded", full.hidden ? "false" : "true");
@@ -1320,7 +1473,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          }
       }
       const meta = div("mail-reader-meta");
-      meta.append(tile(r.row.accountId, true), span("mail-reader-acct", account(r.row.accountId)?.address ?? ""), span("mail-reader-date", fullDate(r.message?.date ?? r.row.date)));
+      meta.append(
+         tile(r.row.accountId, true),
+         span("mail-reader-acct", account(r.row.accountId)?.address ?? ""),
+         span("mail-reader-date", fullDate(r.message?.date ?? r.row.date))
+      );
       headBlock.appendChild(meta);
       scroll.appendChild(headBlock);
 
@@ -1341,7 +1498,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             const ib = div("mail-images-bar");
             ib.title = "Remote images can tell the sender when you open the message";
             ib.appendChild(icon("image"));
-            ib.appendChild(span("", `${rendered.images} image${rendered.images === 1 ? "" : "s"} blocked · `));
+            ib.appendChild(
+               span("", `${rendered.images} image${rendered.images === 1 ? "" : "s"} blocked · `)
+            );
             const show = textButton("mail-link", "Show images");
             show.addEventListener("click", () => {
                if (reader && reader.key === r.key) {
@@ -1359,7 +1518,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                ib.appendChild(always);
             }
             scroll.appendChild(ib);
-         } else if (rendered.images > 0 && r.autoImages && r.fromKey && !alwaysImages() && trustedSenders().has(r.fromKey)) {
+         } else if (
+            rendered.images > 0 &&
+            r.autoImages &&
+            r.fromKey &&
+            !alwaysImages() &&
+            trustedSenders().has(r.fromKey)
+         ) {
             const addr = r.fromKey;
             const ib = div("mail-images-bar");
             ib.appendChild(icon("image"));
@@ -1377,7 +1542,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             fitTarget = { el: bodyEl, design: rendered.designWidth, width: -1 };
             bodyRo.observe(scroll, { box: "border-box" }); // a scrollbar coming or going is not a resize
          }
-         if (m.textTruncated || m.htmlTruncated) scroll.appendChild(div("mail-reader-trunc", "Shortened · the rest of this message wasn't loaded"));
+         if (m.textTruncated || m.htmlTruncated)
+            scroll.appendChild(
+               div("mail-reader-trunc", "Shortened · the rest of this message wasn't loaded")
+            );
          if (m.attachments.length) {
             const att = div("mail-attachments");
             for (const a of m.attachments) {
@@ -1388,7 +1556,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                chip.title = a.mime; // listed only (downloads are a later phase, not promised here)
                att.appendChild(chip);
             }
-            if (m.attachmentsTruncated) att.appendChild(span("mail-attachment-more", "More attachments than shown"));
+            if (m.attachmentsTruncated)
+               att.appendChild(span("mail-attachment-more", "More attachments than shown"));
             scroll.appendChild(att);
          }
       }
@@ -1399,7 +1568,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* Link state and prev/next availability change often and touch nothing else in the reader:
       apply them in place (a rebuild would reset the reader's scroll mid-read). */
    const syncReaderActions = (): void => {
-      readerCol.querySelectorAll<HTMLButtonElement>(".mail-r-act").forEach((b) => (b.disabled = !linked || !b.dataset.ready));
+      readerCol
+         .querySelectorAll<HTMLButtonElement>(".mail-r-act")
+         .forEach((b) => (b.disabled = !linked || !b.dataset.ready));
       const markBtn = readerCol.querySelector<HTMLButtonElement>(".mail-r-mark");
       if (markBtn && reader) {
          const unread = (rows.find((x) => rowKey(x) === reader!.key) ?? reader.row).unread;
@@ -1481,7 +1652,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       reader = { key: k, row, state: "loading", showImages: false };
       const seq = ++readSeq;
       render();
-      if (!split && focusReader) readerCol.querySelector<HTMLElement>(".mail-reader-subject")?.focus({ preventScroll: true });
+      if (!split && focusReader)
+         readerCol
+            .querySelector<HTMLElement>(".mail-reader-subject")
+            ?.focus({ preventScroll: true });
       /* Stepping (J/K, prev/next) shows the message at once but reads it (which marks it read)
          only once the selection rests, so holding J doesn't read and mark everything it passes. */
       if (settle) {
@@ -1559,7 +1733,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       });
       if (full) {
          const msg = "The trusted senders list is full. Remove one in Mail options first.";
-         if (toast && toast.tokens.length) announce(msg); // never take over a live Undo
+         if (toast && toast.tokens.length)
+            announce(msg); // never take over a live Undo
          else showToast(msg);
       }
    };
@@ -1571,7 +1746,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (destroyed) return;
       if (keys.includes(TRUSTED_SENDERS.key) || keys.includes(ALWAYS_IMAGES.key)) {
          if (reader && reader.state === "ready") {
-            const still = alwaysImages() || (!!reader.fromKey && trustedSenders().has(reader.fromKey));
+            const still =
+               alwaysImages() || (!!reader.fromKey && trustedSenders().has(reader.fromKey));
             if (reader.autoImages && !still) {
                reader.showImages = false; // Stop: the images unload, the bar returns
                reader.autoImages = false;
@@ -1589,10 +1765,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    /* --- triage ------------------------------------------------------------- */
    const removeRows = (keys: string[]): void => {
       const set = new Set(keys);
-      if (refreshing) for (const k of keys) {
-         refreshing.dropped.add(k);
-         refreshing.added.delete(k);
-      }
+      if (refreshing)
+         for (const k of keys) {
+            refreshing.dropped.add(k);
+            refreshing.added.delete(k);
+         }
       rows = rows.filter((r) => !set.has(rowKey(r)));
       pendingNew = pendingNew.filter((r) => !set.has(rowKey(r)));
    };
@@ -1602,12 +1779,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       washTimer = 0;
       if (washed.size === 0) return;
       const next = Math.min(...washed.values());
-      washTimer = window.setTimeout(() => {
-         const now = performance.now();
-         for (const [k, t] of washed) if (t <= now) washed.delete(k);
-         render();
-         scheduleWash();
-      }, Math.max(16, next - performance.now() + 50));
+      washTimer = window.setTimeout(
+         () => {
+            const now = performance.now();
+            for (const [k, t] of washed) if (t <= now) washed.delete(k);
+            render();
+            scheduleWash();
+         },
+         Math.max(16, next - performance.now() + 50)
+      );
    };
 
    /* Whether a row belongs in the list as currently filtered. */
@@ -1651,7 +1831,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    };
 
    const moveRow = (row: EmailRow, kind: "archive" | "trash"): void => {
-      if (!linked || !(kind === "archive" ? canArchive(row.accountId) : canTrash(row.accountId))) return;
+      if (!linked || !(kind === "archive" ? canArchive(row.accountId) : canTrash(row.accountId)))
+         return;
       const k = rowKey(row);
       const seq = ++actionSeq;
       const index = rows.findIndex((r) => rowKey(r) === k);
@@ -1661,9 +1842,20 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          to the list (the default; split view keeps the next row selected, not opened). The end of
          the list falls back to the list; it never wraps. */
       const mode = afterMove();
-      const advanceTo = wasOpen && index >= 0 && mode !== "list" ? (mode === "next" ? rows[index + 1] : rows[index - 1]) : undefined;
+      const advanceTo =
+         wasOpen && index >= 0 && mode !== "list"
+            ? mode === "next"
+               ? rows[index + 1]
+               : rows[index - 1]
+            : undefined;
       /* "Next" past the loaded rows while more exist: open the first one the next page brings. */
-      const advanceLater = wasOpen && index >= 0 && mode === "next" && !rows[index + 1] && cursor !== null && rows.length < ROW_CAP;
+      const advanceLater =
+         wasOpen &&
+         index >= 0 &&
+         mode === "next" &&
+         !rows[index + 1] &&
+         cursor !== null &&
+         rows.length < ROW_CAP;
       removeRows([k]);
       if (wasOpen) {
          cancelMark();
@@ -1678,8 +1870,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          listEl.scrollTop = savedListScroll; // back from the narrow reader: where the list was
          if (next) rowEls.get(rowKey(next))?.el.scrollIntoView({ block: "nearest" });
       }
-      if (next && (wasOpen || listEl.contains(document.activeElement))) rowEls.get(focusKey!)?.el.focus({ preventScroll: true });
-      if (advanceTo) openRow(advanceTo, true, true); // marks read per the Mark as read setting
+      if (next && (wasOpen || listEl.contains(document.activeElement)))
+         rowEls.get(focusKey!)?.el.focus({ preventScroll: true });
+      if (advanceTo)
+         openRow(advanceTo, true, true); // marks read per the Mark as read setting
       else if (advanceLater) {
          advanceFrom = index; // after the removal, the next page's first row lands here
          loadMore();
@@ -1717,7 +1911,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                /* It may have moved (or been copied without the original going): never retry; reload
                   so the list shows what's really there (DAWN's email_changed says it too). */
                /* DAWN counts all of these as "may have moved": never put the row back or retry. */
-               reportFailure(seq, code === "NOT_REMOVED" ? `Couldn't ${verb} cleanly; refreshed the list` : `DAWN didn't confirm it; refreshed the list`);
+               reportFailure(
+                  seq,
+                  code === "NOT_REMOVED"
+                     ? `Couldn't ${verb} cleanly; refreshed the list`
+                     : `DAWN didn't confirm it; refreshed the list`
+               );
                refreshList();
                return;
             case "BUSY":
@@ -1728,14 +1927,21 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             case "NO_TRASH":
                return restore("this account has no Trash folder");
             case "FOLDER_MISSING":
-               return restore(kind === "archive" ? "this account has no Archive folder" : "its folder is missing");
+               return restore(
+                  kind === "archive"
+                     ? "this account has no Archive folder"
+                     : "its folder is missing"
+               );
             case "READ_ONLY":
                return restore("this account is read-only");
             default:
                return restore(message);
          }
       };
-      const call = kind === "archive" ? source.archive(row.accountId, [row.messageId]) : source.trash(row.accountId, [row.messageId]);
+      const call =
+         kind === "archive"
+            ? source.archive(row.accountId, [row.messageId])
+            : source.trash(row.accountId, [row.messageId]);
       call
          .then((res) => {
             if (destroyed) return;
@@ -1747,7 +1953,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                group, or opens one when no other action's Undo is on screen. */
             /* A newer message (a failure) stays readable beside the Undo this result brings. */
             const carry = toast && !toast.move && seq !== actionSeq ? toast.baseText : "";
-            if (tokens.length || seq === actionSeq || !toast || !toast.tokens.length) toastMove(kind, row.accountId, tokens);
+            if (tokens.length || seq === actionSeq || !toast || !toast.tokens.length)
+               toastMove(kind, row.accountId, tokens);
             else announce(kind === "archive" ? "Archived" : "Moved to Trash");
             if (carry && toast && toast.move) {
                toast.note = carry;
@@ -1801,7 +2008,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const GROUP_MAX_MS = 45_000;
    const UNDO_LIFE_MS = 55_000; // just inside DAWN's 60 s token life, from the group's first move
    const groupOpen = (): boolean =>
-      !!toast && toast.move && toast.tokens.length > 0 && performance.now() - toast.groupStart < GROUP_MAX_MS;
+      !!toast &&
+      toast.move &&
+      toast.tokens.length > 0 &&
+      performance.now() - toast.groupStart < GROUP_MAX_MS;
    const groupText = (archived: number, trashed: number): string => {
       if (!trashed) return archived === 1 ? "Archived" : `Archived ${archived}`;
       if (!archived) return trashed === 1 ? "Moved to Trash" : `Moved ${trashed} to Trash`;
@@ -1838,7 +2048,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    toastEl.append(toastText, toastUndo, toastBar);
 
    const paintToast = (): void => {
-      if (toast) toastText.textContent = toast.note ? `${toast.baseText} · ${toast.note}` : toast.baseText;
+      if (toast)
+         toastText.textContent = toast.note ? `${toast.baseText} · ${toast.note}` : toast.baseText;
    };
    const hideToast = (): void => {
       if (toast) {
@@ -1854,7 +2065,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       toast.startedAt = performance.now();
       toast.timer = window.setTimeout(hideToast, toast.remaining);
    };
-   const showToast = (text: string, tokens: Array<{ accountId: number; token: string }> = [], kind?: "archive" | "trash"): void => {
+   const showToast = (
+      text: string,
+      tokens: Array<{ accountId: number; token: string }> = [],
+      kind?: "archive" | "trash"
+   ): void => {
       if (destroyed) return;
       hideToast(); // one at a time: a new action replaces the older undo
       toast = {
@@ -1903,57 +2118,71 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (!toast || !toast.tokens.length) return;
       /* DAWN's undo is per account: one call each, at once, merged into one result. */
       const byAccount = new Map<number, string[]>();
-      for (const { accountId, token } of toast.tokens) byAccount.set(accountId, [...(byAccount.get(accountId) ?? []), token]);
+      for (const { accountId, token } of toast.tokens)
+         byAccount.set(accountId, [...(byAccount.get(accountId) ?? []), token]);
       const seq = ++actionSeq;
       hideToast();
-      void Promise.allSettled([...byAccount].map(([acct, toks]) => source.undo(acct, toks))).then((results) => {
-         if (destroyed) return;
-         let unreadable = false;
-         let restored = 0;
-         let unknown = false;
-         let firstWhy = "";
-         let failed = 0;
-         const why = (code: string, message: string): string =>
-            code === "UNDO_EXPIRED"
-               ? "it's too late"
-               : code === "NOT_FOUND"
-                 ? "it's no longer in Trash or Archive"
-                 : code === "FOLDER_MISSING"
-                   ? "the folder it came from is gone"
-                   : message;
-         results.forEach((r, i) => {
-            if (r.status === "rejected") {
-               if (errorCode(r.reason) === "OUTCOME_UNKNOWN") unknown = true;
-               else {
-                  failed += [...byAccount][i][1].length;
-                  firstWhy ||= errorText(r.reason);
+      void Promise.allSettled([...byAccount].map(([acct, toks]) => source.undo(acct, toks))).then(
+         (results) => {
+            if (destroyed) return;
+            let unreadable = false;
+            let restored = 0;
+            let unknown = false;
+            let firstWhy = "";
+            let failed = 0;
+            const why = (code: string, message: string): string =>
+               code === "UNDO_EXPIRED"
+                  ? "it's too late"
+                  : code === "NOT_FOUND"
+                    ? "it's no longer in Trash or Archive"
+                    : code === "FOLDER_MISSING"
+                      ? "the folder it came from is gone"
+                      : message;
+            results.forEach((r, i) => {
+               if (r.status === "rejected") {
+                  if (errorCode(r.reason) === "OUTCOME_UNKNOWN") unknown = true;
+                  else {
+                     failed += [...byAccount][i][1].length;
+                     firstWhy ||= errorText(r.reason);
+                  }
+                  return;
                }
-               return;
-            }
-            for (const x of r.value.restored) {
-               restored++;
-               if (!x.row) {
-                  unreadable = true; // back, but DAWN couldn't read it: reload shows it
-                  continue;
-               }
-               const row = x.row;
-               /* The restore's own `created` echo may have queued it behind the pill: drop it
+               for (const x of r.value.restored) {
+                  restored++;
+                  if (!x.row) {
+                     unreadable = true; // back, but DAWN couldn't read it: reload shows it
+                     continue;
+                  }
+                  const row = x.row;
+                  /* The restore's own `created` echo may have queued it behind the pill: drop it
                   there, and only put it in the list if it fits the current view. */
-               pendingNew = pendingNew.filter((p) => rowKey(p) !== rowKey(row));
-               if (matchesView(row)) insertSorted(row);
-            }
-            for (const f of r.value.failed) {
-               failed++;
-               firstWhy ||= why(f.code, f.message);
-            }
-            /* A token in neither list: DAWN didn't say what became of it. */
-            if (r.value.restored.length + r.value.failed.length < [...byAccount][i][1].length) unknown = true;
-         });
-         if (unreadable || unknown) refreshList();
-         if (unknown) reportFailure(seq, `DAWN didn't confirm all of the undo; refreshed the list${failed ? ` (${failed} couldn't be: ${firstWhy})` : ""}`);
-         else if (failed) reportFailure(seq, restored ? `Restored ${restored}; ${failed} couldn't be: ${firstWhy}` : `Couldn't undo: ${firstWhy}`);
-         render();
-      });
+                  pendingNew = pendingNew.filter((p) => rowKey(p) !== rowKey(row));
+                  if (matchesView(row)) insertSorted(row);
+               }
+               for (const f of r.value.failed) {
+                  failed++;
+                  firstWhy ||= why(f.code, f.message);
+               }
+               /* A token in neither list: DAWN didn't say what became of it. */
+               if (r.value.restored.length + r.value.failed.length < [...byAccount][i][1].length)
+                  unknown = true;
+            });
+            if (unreadable || unknown) refreshList();
+            if (unknown)
+               reportFailure(
+                  seq,
+                  `DAWN didn't confirm all of the undo; refreshed the list${failed ? ` (${failed} couldn't be: ${firstWhy})` : ""}`
+               );
+            else if (failed)
+               reportFailure(
+                  seq,
+                  restored
+                     ? `Restored ${restored}; ${failed} couldn't be: ${firstWhy}`
+                     : `Couldn't undo: ${firstWhy}`
+               );
+            render();
+         }
+      );
    });
 
    /* --- popover: Mail options, two levels (3.9) ------------------------------ */
@@ -1970,7 +2199,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       fs.appendChild(lg);
       return fs;
    };
-   const checkRow = (label: string, checked: boolean, focusId: string, onChange: (on: boolean) => void): HTMLLabelElement => {
+   const checkRow = (
+      label: string,
+      checked: boolean,
+      focusId: string,
+      onChange: (on: boolean) => void
+   ): HTMLLabelElement => {
       const lab = document.createElement("label");
       lab.className = "mail-pop-row";
       const box = document.createElement("input");
@@ -1981,7 +2215,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       lab.append(box, span("mail-pop-name", label));
       return lab;
    };
-   const radioGroup = <T extends string>(legend: string, name: string, value: T, options: Array<[T, string]>, onPick: (v: T) => void): HTMLFieldSetElement => {
+   const radioGroup = <T extends string>(
+      legend: string,
+      name: string,
+      value: T,
+      options: Array<[T, string]>,
+      onPick: (v: T) => void
+   ): HTMLFieldSetElement => {
       const fs = fieldset(legend, "mail-pop-radios");
       for (const [v, label] of options) {
          const lab = document.createElement("label");
@@ -2002,7 +2242,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       popLevel = level;
       confirmAlways = false;
       renderPopover();
-      popover.querySelector<HTMLElement>(level === 2 ? ".mail-pop-back" : ".mail-pop-more")?.focus();
+      popover
+         .querySelector<HTMLElement>(level === 2 ? ".mail-pop-back" : ".mail-pop-more")
+         ?.focus();
    };
 
    const renderLevel1 = (): void => {
@@ -2036,11 +2278,20 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             renderPopover();
          });
          const c = counts.get(a.id);
-         lab.append(box, tile(a.id, true), span("mail-pop-name", a.address), span("mail-pop-count", c && c.inboxUnread ? String(c.inboxUnread) : ""));
+         lab.append(
+            box,
+            tile(a.id, true),
+            span("mail-pop-name", a.address),
+            span("mail-pop-count", c && c.inboxUnread ? String(c.inboxUnread) : "")
+         );
          row.append(lab);
          /* New-mail notifications need the source's live changes: no bell until it has them. */
          if (source.supportsLiveChanges()) {
-            const bell = iconButton("mail-pop-bell", "bell", `Notify me of new mail in ${a.displayName || a.address}`);
+            const bell = iconButton(
+               "mail-pop-bell",
+               "bell",
+               `Notify me of new mail in ${a.displayName || a.address}`
+            );
             bell.dataset.focusId = `bell-${a.id}`;
             const on = prefs.notify.includes(a.id);
             bell.classList.toggle("on", on);
@@ -2059,7 +2310,11 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       popover.appendChild(fs);
       if (notifyOn()) {
          const nf = fieldset("Notifications");
-         nf.appendChild(checkRow("Show the sender only", userPrefs.get(SENDER_ONLY), "sender", (on) => userPrefs.set(SENDER_ONLY, on)));
+         nf.appendChild(
+            checkRow("Show the sender only", userPrefs.get(SENDER_ONLY), "sender", (on) =>
+               userPrefs.set(SENDER_ONLY, on)
+            )
+         );
          nf.appendChild(
             checkRow("Chime for new mail", prefs.chime, "chime", (on) => {
                prefs.chime = on;
@@ -2098,7 +2353,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       });
       alwaysRow.querySelector("input")?.setAttribute("aria-describedby", descId);
       img.appendChild(alwaysRow);
-      const desc = div("mail-pop-desc", "Anyone who emails you, spammers included, can see when and roughly where you open it.");
+      const desc = div(
+         "mail-pop-desc",
+         "Anyone who emails you, spammers included, can see when and roughly where you open it."
+      );
       desc.id = descId;
       desc.hidden = !always && !confirmAlways;
       img.appendChild(desc);
@@ -2125,20 +2383,36 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
       const rd = fieldset("Reading");
       rd.appendChild(
-         radioGroup<MarkRead>("Mark as read", "markread", markReadMode(), [
-            ["immediately", "Immediately"],
-            ["delayed", "After 3 seconds"],
-            ["manual", "Only when I choose"]
-         ], (v) => userPrefs.set(MARK_READ, v))
+         radioGroup<MarkRead>(
+            "Mark as read",
+            "markread",
+            markReadMode(),
+            [
+               ["immediately", "Immediately"],
+               ["delayed", "After 3 seconds"],
+               ["manual", "Only when I choose"]
+            ],
+            (v) => userPrefs.set(MARK_READ, v)
+         )
       );
       rd.appendChild(
-         radioGroup<AfterMove>("After archive or trash", "aftermove", afterMove(), [
-            ["list", "Go back to the list"],
-            ["next", "Open the next message (older)"],
-            ["previous", "Open the previous message (newer)"]
-         ], (v) => userPrefs.set(AFTER_MOVE, v))
+         radioGroup<AfterMove>(
+            "After archive or trash",
+            "aftermove",
+            afterMove(),
+            [
+               ["list", "Go back to the list"],
+               ["next", "Open the next message (older)"],
+               ["previous", "Open the previous message (newer)"]
+            ],
+            (v) => userPrefs.set(AFTER_MOVE, v)
+         )
       );
-      rd.appendChild(checkRow("Preview line under each message", previews(), "previews", (on) => userPrefs.set(PREVIEWS, on)));
+      rd.appendChild(
+         checkRow("Preview line under each message", previews(), "previews", (on) =>
+            userPrefs.set(PREVIEWS, on)
+         )
+      );
       popover.appendChild(rd);
    };
 
@@ -2151,11 +2425,15 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const renderTrusted = (alwaysOn: boolean): HTMLElement => {
       const wrap = div("mail-pop-trusted");
       const list = userPrefs.get(TRUSTED_SENDERS).slice().sort(trustOrder);
-      const head = div("mail-pop-trusted-head", `Trusted senders${list.length ? ` (${list.length})` : ""}`);
+      const head = div(
+         "mail-pop-trusted-head",
+         `Trusted senders${list.length ? ` (${list.length})` : ""}`
+      );
       head.tabIndex = -1;
       head.dataset.focusId = "trusted-head";
       wrap.appendChild(head);
-      if (alwaysOn && list.length) wrap.appendChild(div("mail-pop-desc", "Not needed while Always show images is on."));
+      if (alwaysOn && list.length)
+         wrap.appendChild(div("mail-pop-desc", "Not needed while Always show images is on."));
       if (removed) {
          const r = removed;
          const undo = div("mail-pop-removed");
@@ -2174,7 +2452,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          wrap.appendChild(undo);
       }
       if (!list.length) {
-         wrap.appendChild(div("mail-pop-desc", "None yet · trust a sender from the images bar in a message."));
+         wrap.appendChild(
+            div("mail-pop-desc", "None yet · trust a sender from the images bar in a message.")
+         );
          return wrap;
       }
       const ul = document.createElement("ul");
@@ -2215,7 +2495,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             const timer = window.setTimeout(() => {
                removed = null;
                if (popover.hidden) return;
-               const onUndo = (document.activeElement as HTMLElement | null)?.dataset?.focusId === "trust-undo";
+               const onUndo =
+                  (document.activeElement as HTMLElement | null)?.dataset?.focusId === "trust-undo";
                renderPopover();
                if (onUndo) focusPop("trusted-head"); // never drop focus to the page (Escape lives on the panel)
             }, 5000);
@@ -2268,7 +2549,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       readerCol.querySelectorAll<HTMLElement>(".mail-discuss-pop").forEach((m) => {
          if (!m.hidden && !(except && m.parentElement?.contains(except))) {
             m.hidden = true;
-            m.parentElement?.querySelector(".mail-discuss-btn")?.setAttribute("aria-expanded", "false");
+            m.parentElement
+               ?.querySelector(".mail-discuss-btn")
+               ?.setAttribute("aria-expanded", "false");
             closed = true;
          }
       });
@@ -2291,7 +2574,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          id: `mail-new:${accountId}`,
          kind: "mail",
          summary: st.count === 1 ? `New mail · ${name}` : `${st.count} new · ${name}`,
-         detail: senderOnly() ? `From ${sender}` : `${sender}: ${st.last.subject || "(no subject)"}`,
+         detail: senderOnly()
+            ? `From ${sender}`
+            : `${sender}: ${st.last.subject || "(no subject)"}`,
          tone: "nominal",
          open: { kind: "email", accountId, messageId: st.last.messageId }
       });
@@ -2302,7 +2587,13 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       notifyState.delete(accountId);
    };
    const queueNotice = (row: EmailRow): void => {
-      if (!source.supportsLiveChanges() || !prefs.notify.includes(row.accountId) || !row.unread || !vis.isVisible()) return;
+      if (
+         !source.supportsLiveChanges() ||
+         !prefs.notify.includes(row.accountId) ||
+         !row.unread ||
+         !vis.isVisible()
+      )
+         return;
       if (onScreen()) return; // they're looking at the list: the arrival itself is the signal
       const st = notifyState.get(row.accountId);
       /* The window runs from the LAST arrival, so the card's count and the coalescing agree. */
@@ -2341,7 +2632,9 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       statusEl.hidden = !s;
       renderBanners();
       newPill.hidden = pendingNew.length === 0 && !searchNewMail;
-      newPill.textContent = searchNewMail ? "New mail · Clear search" : `${pendingNew.length}${pendingOverflow ? "+" : ""} new`;
+      newPill.textContent = searchNewMail
+         ? "New mail · Clear search"
+         : `${pendingNew.length}${pendingOverflow ? "+" : ""} new`;
       renderList();
       renderReader();
       syncReaderActions();
@@ -2359,7 +2652,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       let nextCompact = readerW < Math.max(COMPACT_DISCUSS, fullDiscussNeeds);
       /* Narrowing while the full buttons show: if the bar on screen now overflows, go compact. */
       const bar = readerCol.querySelector<HTMLElement>(".mail-reader-bar");
-      if (!compactDiscuss && bar && bar.querySelector(".mail-discuss-private") && bar.scrollWidth > bar.clientWidth + 1) {
+      if (
+         !compactDiscuss &&
+         bar &&
+         bar.querySelector(".mail-discuss-private") &&
+         bar.scrollWidth > bar.clientWidth + 1
+      ) {
          fullDiscussNeeds = bar.scrollWidth + 8;
          nextCompact = true;
       }
@@ -2464,7 +2762,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
    const onPointerMove = (e: PointerEvent): void => {
       pointerX = e.clientX;
       pointerY = e.clientY;
-      if (lockUntil && Math.hypot(pointerX - lockX, pointerY - lockY) > REFLOW_UNLOCK_PX) lockUntil = 0;
+      if (lockUntil && Math.hypot(pointerX - lockX, pointerY - lockY) > REFLOW_UNLOCK_PX)
+         lockUntil = 0;
    };
    window.addEventListener("pointermove", onPointerMove, { passive: true });
 
@@ -2525,8 +2824,17 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
 
    const onKeyDown = (e: KeyboardEvent): void => {
       /* J / K step through messages while one is open (never while typing in a field). */
-      const typing = (e.target as HTMLElement).closest("input, textarea, select, [contenteditable]");
-      if (reader && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "j" || e.key === "k")) {
+      const typing = (e.target as HTMLElement).closest(
+         "input, textarea, select, [contenteditable]"
+      );
+      if (
+         reader &&
+         !typing &&
+         !e.ctrlKey &&
+         !e.metaKey &&
+         !e.altKey &&
+         (e.key === "j" || e.key === "k")
+      ) {
          e.preventDefault();
          step(e.key === "j" ? 1 : -1);
          return;
@@ -2534,7 +2842,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
       if (e.key !== "Escape") return;
       if (!popover.hidden) {
          e.preventDefault();
-         if (popLevel === 2) setLevel(1); // level 2 -> level 1 -> closed
+         if (popLevel === 2)
+            setLevel(1); // level 2 -> level 1 -> closed
          else closePopover(true);
       } else if (closeDiscussMenus()) {
          e.preventDefault();
@@ -2609,7 +2918,8 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             searchNewMail = true;
             continue;
          }
-         const busy = listEl.scrollTop > 4 || pointerOverList || listEl.contains(document.activeElement);
+         const busy =
+            listEl.scrollTop > 4 || pointerOverList || listEl.contains(document.activeElement);
          if (!busy) {
             insertSorted(c);
          } else if (pendingNew.length < PAGE) {
@@ -2666,7 +2976,12 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
                   a.displayName === accounts[i].displayName &&
                   a.readOnly === accounts[i].readOnly
             );
-         const sameCaps = sameIdentity && list.every((a, i) => a.canTrash === accounts[i].canTrash && a.canArchive === accounts[i].canArchive);
+         const sameCaps =
+            sameIdentity &&
+            list.every(
+               (a, i) =>
+                  a.canTrash === accounts[i].canTrash && a.canArchive === accounts[i].canArchive
+            );
          if (sameCaps && accountsKnown) return; // a reconnect re-sent the same accounts: keep the list (and its scroll)
          if (sameIdentity && accountsKnown) {
             /* Only what they can move to changed (learned from a list page): redraw the actions. */
@@ -2701,9 +3016,10 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
             if (!accountsKnown) render();
             else if (!source.supportsLiveChanges()) {
                /* No change feed to catch up from: what arrived while down is learned by loading again. */
-               if (panelEffective()) (rows.length ? refreshInPlace() : reload());
+               if (panelEffective()) rows.length ? refreshInPlace() : reload();
                else listStale = true;
-            } else if (panelEffective() && (listStale || rows.length === 0)) (rows.length ? refreshInPlace() : reload());
+            } else if (panelEffective() && (listStale || rows.length === 0))
+               rows.length ? refreshInPlace() : reload();
             else catchUp();
          }
          render();
@@ -2736,7 +3052,16 @@ export function mountEmailPanel(root: HTMLElement, opts: EmailPanelOptions): Ema
          const k = keyOf(accountId, messageId);
          const row =
             rows.find((r) => rowKey(r) === k) ??
-            ({ accountId, messageId, fromName: "", fromAddr: "", subject: "", date: Math.floor(Date.now() / 1000), preview: "", unread: true } as EmailRow);
+            ({
+               accountId,
+               messageId,
+               fromName: "",
+               fromAddr: "",
+               subject: "",
+               date: Math.floor(Date.now() / 1000),
+               preview: "",
+               unread: true
+            } as EmailRow);
          opts.removeNotice(`mail-new:${accountId}`);
          clearNotifyState(accountId);
          openRow(row);

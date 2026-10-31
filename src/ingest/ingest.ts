@@ -127,7 +127,12 @@ export interface ConversationSink {
       `renderAppended` renders a `message_appended` we did NOT stream, deduped on message id. */
    linkStream(convId: number, streamId: number): void;
    adoptId(convId: number, streamId: number, messageId: number): boolean;
-   renderAppended(item: { role: "user" | "assistant"; text: string; messageId: number; email?: EmailRef }): void;
+   renderAppended(item: {
+      role: "user" | "assistant";
+      text: string;
+      messageId: number;
+      email?: EmailRef;
+   }): void;
    /* A tool reset the conversation — empty the surface. */
    clear(): void;
    /* Current activity (thinking / using tools / ...) or null to clear it. */
@@ -215,8 +220,18 @@ export interface MusicQueue {
 export type MusicLibraryPage =
    | { kind: "stats"; tracks: number; artists: number; albums: number }
    | { kind: "tracks"; tracks: MusicTrack[]; offset: number; total: number }
-   | { kind: "artists"; artists: Array<{ name: string; albums: number; tracks: number }>; offset: number; total: number }
-   | { kind: "albums"; albums: Array<{ name: string; artist: string; tracks: number }>; offset: number; total: number }
+   | {
+        kind: "artists";
+        artists: Array<{ name: string; albums: number; tracks: number }>;
+        offset: number;
+        total: number;
+     }
+   | {
+        kind: "albums";
+        albums: Array<{ name: string; artist: string; tracks: number }>;
+        offset: number;
+        total: number;
+     }
    | { kind: "artist"; name: string; tracks: MusicTrack[] }
    | { kind: "album"; name: string; tracks: MusicTrack[] };
 
@@ -427,7 +442,8 @@ export interface WatchesSink {
 
 export type StockStatus = "ok" | "not_connected" | "rate_limited" | "token_expired" | "error";
 export type StockMarket = "regular" | "pre" | "post" | "closed";
-export type StockAssetType = "equity" | "etf" | "option" | "mutual_fund" | "cash_equivalent" | "other";
+export type StockAssetType =
+   "equity" | "etf" | "option" | "mutual_fund" | "cash_equivalent" | "other";
 
 /* One holding. `qty`/`price`/`value` are raw; the view formats. `dayChangePct` /
    `unrealizedPlPct` are signed (18.82 = +18.82%). `dayChange` can be negative honestly. */
@@ -564,8 +580,7 @@ export interface NoticeAction {
 /* What tapping a click-to-open notice opens. The notify layer only reports it; main.ts routes
    each kind to its view. */
 export type NoticeOpen =
-   | { kind: "conversation"; id: number }
-   | { kind: "email"; accountId: number; messageId: string };
+   { kind: "conversation"; id: number } | { kind: "email"; accountId: number; messageId: string };
 
 export interface Notice {
    id: string;
@@ -638,7 +653,10 @@ export interface LibraryItem {
    appends a page; `searching` marks a search result set so the panel can guard a stale late
    response after the query was cleared; `hasMore` drives the load-more affordance. */
 export interface LibrarySink {
-   setItems(items: LibraryItem[], opts: { append: boolean; searching: boolean; hasMore: boolean }): void;
+   setItems(
+      items: LibraryItem[],
+      opts: { append: boolean; searching: boolean; hasMore: boolean }
+   ): void;
 }
 
 /* One item DAWN pulled into context for a turn (a focus-block candidate). Read off the
@@ -782,7 +800,17 @@ export interface Ingest {
       `attachments` field for a DAWN taking `document_attachments`; otherwise the caller inlines them
       into `text`. `attachments.turnRef` rides as `client_ref` under `turn_refs`. `attachments.fromVisual` marks a
       rendered visual's prompt (`from_visual`), so DAWN lets no confirm count in that turn. */
-   submit(text: string, attachments?: { turnRef?: string; documents?: OutDocument[]; images?: OutImage[]; imageIds?: string[]; fromVisual?: boolean; emailRefs?: EmailRef[] }): void;
+   submit(
+      text: string,
+      attachments?: {
+         turnRef?: string;
+         documents?: OutDocument[];
+         images?: OutImage[];
+         imageIds?: string[];
+         fromVisual?: boolean;
+         emailRefs?: EmailRef[];
+      }
+   ): void;
    /* Upload a document to DAWN (POST /api/documents, multipart) so the composer can attach
       it to the next turn. A sanctioned conversation-input write, same class as chat submit.
       Returns the extracted text + metadata; rejects on failure. */
@@ -865,7 +893,11 @@ export interface Ingest {
       Tier-C writes (like set_private / music transport): delete is DESTRUCTIVE (cascades images +
       child jobs server-side) and MUST be confirm-gated by the caller. --- */
    listConversations(opts: { limit: number; offset: number }): void;
-   searchConversations(query: string, content: boolean, opts?: { limit?: number; offset?: number }): void;
+   searchConversations(
+      query: string,
+      content: boolean,
+      opts?: { limit?: number; offset?: number }
+   ): void;
    loadConversation(id: number): void;
    /* Start a fresh conversation. Plain: lazy (the first message creates it). `private: true`:
       created now and resolved only once DAWN has confirmed it private (false on failure or a
@@ -905,7 +937,9 @@ export interface Ingest {
       document with no uploaded original (e.g. a generated research report), or the
       extracted text of one that has. Resolves with the text + metadata, or null when
       unavailable (owner-scoped, requires stored full text). A read, over the WS. */
-   getDocumentText(id: number): Promise<{ text: string; filename: string; filetype: string } | null>;
+   getDocumentText(
+      id: number
+   ): Promise<{ text: string; filename: string; filetype: string } | null>;
    /* --- Library WRITE verbs (the reader's Edit button). User-scoped writes on the user's OWN
       content (in-charter, same class as memory deletes); non-destructive - DAWN archives the
       prior version server-side, so an edit is undoable. Each resolves null on success or a

@@ -62,7 +62,11 @@ export interface PanelLock {
 /* Add the padlock to a movable view. `storageKey` is the view's position key (its lock is kept
    beside it). By default it sits in the view's top-left corner; `slot` places it inline instead
    (a header whose left edge holds a control, or a readout with no header). */
-export function mountPanelLock(el: HTMLElement, storageKey: string, slot?: (btn: HTMLButtonElement) => void): PanelLock {
+export function mountPanelLock(
+   el: HTMLElement,
+   storageKey: string,
+   slot?: (btn: HTMLButtonElement) => void
+): PanelLock {
    const ownKey = `${storageKey}.locked`;
    let own = read(ownKey);
    const locked = (): boolean => allLocked || own;

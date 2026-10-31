@@ -130,7 +130,9 @@ export class Store {
       target.forEach((e, i) => (e.dockOrder = i));
 
       if (from && from !== side) {
-         this.pinnedOn(from, id).sort(byOrder).forEach((e, i) => (e.dockOrder = i));
+         this.pinnedOn(from, id)
+            .sort(byOrder)
+            .forEach((e, i) => (e.dockOrder = i));
       }
       el.revision = ++this.revision;
    }

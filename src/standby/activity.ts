@@ -80,7 +80,8 @@ export function mountActivity(opts: {
          /* Swallow input-producing keys so the wake keystroke does not reach the composer.
             Leave bare modifiers, function keys, and modifier-combo shortcuts (Ctrl+F, Cmd+V)
             alone so a shortcut used to wake still fires - but still wake in all cases. */
-         const bare = e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta";
+         const bare =
+            e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta";
          const fkey = /^F\d{1,2}$/.test(e.key);
          const combo = e.ctrlKey || e.metaKey || e.altKey;
          if (!bare && !fkey && !combo) {

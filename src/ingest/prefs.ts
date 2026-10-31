@@ -57,7 +57,8 @@ interface Stored {
 function clean(o: unknown): Raw {
    const out: Raw = Object.create(null) as Raw;
    if (o && typeof o === "object" && !Array.isArray(o)) {
-      for (const [k, v] of Object.entries(o as Record<string, unknown>)) if (KEY_RE.test(k)) out[k] = v;
+      for (const [k, v] of Object.entries(o as Record<string, unknown>))
+         if (KEY_RE.test(k)) out[k] = v;
    }
    return out;
 }
@@ -83,7 +84,9 @@ export class LocalUserPrefs implements UserPrefs {
                v: 1,
                values: clean(p.values),
                authority: p.authority === "dawn" ? "dawn" : "local",
-               dirty: Array.isArray(p.dirty) ? p.dirty.filter((k): k is string => typeof k === "string" && KEY_RE.test(k)) : []
+               dirty: Array.isArray(p.dirty)
+                  ? p.dirty.filter((k): k is string => typeof k === "string" && KEY_RE.test(k))
+                  : []
             };
          }
       } catch {

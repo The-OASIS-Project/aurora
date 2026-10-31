@@ -7,8 +7,16 @@
 
 import type { StockAssetType, StockMarket } from "../ingest/ingest.ts";
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-const usdSigned = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", signDisplay: "exceptZero" });
+const usd = new Intl.NumberFormat("en-US", {
+   style: "currency",
+   currency: "USD",
+   maximumFractionDigits: 2
+});
+const usdSigned = new Intl.NumberFormat("en-US", {
+   style: "currency",
+   currency: "USD",
+   signDisplay: "exceptZero"
+});
 
 export function fmtUsd(n: number): string {
    return usd.format(n);

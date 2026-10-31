@@ -167,8 +167,7 @@ export class Css3dRenderer implements Renderer {
       const z = Z_BACK + (Z_FRONT - Z_BACK) * n.depth;
       const blur = (1 - n.depth) * MAX_BLUR;
 
-      slot.root.style.transform =
-         `translate(-50%, -50%) translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, ${z.toFixed(1)}px)`;
+      slot.root.style.transform = `translate(-50%, -50%) translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, ${z.toFixed(1)}px)`;
       slot.root.style.opacity = n.presence.toFixed(3);
       slot.root.style.filter = blur > 0.05 ? `blur(${blur.toFixed(2)}px)` : "none";
 

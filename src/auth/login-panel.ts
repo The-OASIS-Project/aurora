@@ -128,7 +128,15 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       /* A silent retry after the link dropped, or a page load waiting for DAWN (both say why in
          `detail`; a plain "connecting" while a reload resumes doesn't, so F5 never flashes it).
          The attempts in between say nothing, so it holds until the link is back. */
-      if (linked || status === "stale" || status === "idle" || status === "error" || status === "disconnected" || status === "superseded") lost = false;
+      if (
+         linked ||
+         status === "stale" ||
+         status === "idle" ||
+         status === "error" ||
+         status === "disconnected" ||
+         status === "superseded"
+      )
+         lost = false;
       else if (status === "connecting" && detail && !manual) lost = true;
       const offline = lost && !manual && status === "connecting";
       /* The corner chip: "link is up" (including the unstable "stale" state, still a live socket,
@@ -150,7 +158,9 @@ export function mountLogin(root: HTMLElement, opts: LoginOptions): LoginControll
       chip.hidden = !chipVisible;
       chip.dataset.state = offline ? "offline" : status;
       chipText.textContent = offline ? "Disconnected" : label;
-      chip.title = offline ? "Reconnecting to DAWN… (connection / log out)" : "Connection / Log out";
+      chip.title = offline
+         ? "Reconnecting to DAWN… (connection / log out)"
+         : "Connection / Log out";
       if (linked) password.value = "";
    };
    setStatus("checking");

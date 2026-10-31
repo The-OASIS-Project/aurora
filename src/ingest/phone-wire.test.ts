@@ -8,22 +8,45 @@ function setup() {
    const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
    const shown = new Map<string, Notice>();
    const removed: string[] = [];
-   const chime = { ring: false, startRing() { this.ring = true; }, stopRing() { this.ring = false; } };
+   const chime = {
+      ring: false,
+      startRing() {
+         this.ring = true;
+      },
+      stopRing() {
+         this.ring = false;
+      }
+   };
    const phone = new PhoneCalls(
       (m) => sent.push(m),
-      () => ({ notify: (n: Notice) => shown.set(n.id, n), remove: (id: string) => { shown.delete(id); removed.push(id); } }),
+      () => ({
+         notify: (n: Notice) => shown.set(n.id, n),
+         remove: (id: string) => {
+            shown.delete(id);
+            removed.push(id);
+         }
+      }),
       chime as unknown as AlarmChime
    );
    return { phone, sent, shown, removed, chime, card: () => shown.get(PHONE_NOTICE_ID) };
 }
 
-beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance", "Date"] }));
+beforeEach(() =>
+   vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance", "Date"]
+   })
+);
 afterEach(() => vi.useRealTimers());
 
 describe("phone calls", () => {
    it("rings with Answer / Reject, then answers and shows the call with a live duration", () => {
       const t = setup();
-      t.phone.onFrame({ status: "ringing", name: "Jordan Avery", number: "+15550100", photo: { data: "iVBORw0KGgo=", mime: "image/png" } });
+      t.phone.onFrame({
+         status: "ringing",
+         name: "Jordan Avery",
+         number: "+15550100",
+         photo: { data: "iVBORw0KGgo=", mime: "image/png" }
+      });
       expect(t.chime.ring).toBe(true);
       expect(t.card()?.kind).toBe("Incoming call");
       expect(t.card()?.summary).toBe("Jordan Avery");
@@ -38,7 +61,12 @@ describe("phone calls", () => {
       expect(t.card()?.kind).toBe("Answering…");
       expect(t.card()?.actions?.every((a) => a.disabled)).toBe(true);
 
-      t.phone.onFrame({ status: "active", name: "Jordan Avery", number: "+15550100", elapsed_sec: 0 });
+      t.phone.onFrame({
+         status: "active",
+         name: "Jordan Avery",
+         number: "+15550100",
+         elapsed_sec: 0
+      });
       expect(t.card()?.kind).toBe("On call");
       expect(t.card()?.sticky).toBe(true);
       expect(t.card()?.image).toBe("data:image/png;base64,iVBORw0KGgo="); // kept from the ringing frame
@@ -48,7 +76,14 @@ describe("phone calls", () => {
 
    it("never gives a different caller the previous caller's name or photo", () => {
       const t = setup();
-      t.phone.onFrame({ status: "active", call_id: 7, name: "Jordan", number: "+1", photo: { data: "iVBORw0KGgo=", mime: "image/png" }, elapsed_sec: 0 });
+      t.phone.onFrame({
+         status: "active",
+         call_id: 7,
+         name: "Jordan",
+         number: "+1",
+         photo: { data: "iVBORw0KGgo=", mime: "image/png" },
+         elapsed_sec: 0
+      });
       t.phone.onFrame({ status: "ringing", call_id: 8, name: "", number: "+2" });
       expect(t.card()?.kind).toBe("Incoming call");
       expect(t.card()?.summary).toBe("+2");

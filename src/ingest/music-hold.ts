@@ -27,7 +27,13 @@ export class MusicStateHold {
    private timer = 0;
 
    /* `apply` runs the held state through the normal handling, given when it arrived. */
-   constructor(private readonly apply: (payload: Record<string, unknown>, state: MusicState, arrivedAt: number) => void) {}
+   constructor(
+      private readonly apply: (
+         payload: Record<string, unknown>,
+         state: MusicState,
+         arrivedAt: number
+      ) => void
+   ) {}
 
    /* Hold this state for `ms`, then apply it. Any state already held is applied first. */
    hold(payload: Record<string, unknown>, state: MusicState, ms: number): void {

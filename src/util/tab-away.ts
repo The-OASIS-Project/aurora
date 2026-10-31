@@ -13,7 +13,10 @@ export interface TabAway {
    dispose(): void;
 }
 
-export function watchTabAway(onChange: (away: boolean) => void, graceMs = TAB_AWAY_GRACE_MS): TabAway {
+export function watchTabAway(
+   onChange: (away: boolean) => void,
+   graceMs = TAB_AWAY_GRACE_MS
+): TabAway {
    let away = document.hidden;
    let timer = 0;
    const set = (next: boolean): void => {

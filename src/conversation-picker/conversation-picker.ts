@@ -256,7 +256,9 @@ export function mountConversationPicker(
       };
       act("cpick-act-pin", c.isPinned ? "Unpin" : "Pin", () => togglePin(c));
       act("cpick-act-rename", "Rename", () => beginRename(row, c));
-      act("cpick-act-forget", "Forget memories", () => confirmForgetMemories(c.title, () => opts.onForgetMemories(c.id)));
+      act("cpick-act-forget", "Forget memories", () =>
+         confirmForgetMemories(c.title, () => opts.onForgetMemories(c.id))
+      );
       act("cpick-act-delete", "Delete", () => confirmDelete(c));
       if (c.isPinned) row.classList.add("pinned");
 

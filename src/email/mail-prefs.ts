@@ -15,7 +15,9 @@ export const MARK_READ_DELAY_MS = 3000;
 const oneOf =
    <T extends string>(values: readonly T[]) =>
    (raw: unknown): T | undefined =>
-      typeof raw === "string" && (values as readonly string[]).includes(raw) ? (raw as T) : undefined;
+      typeof raw === "string" && (values as readonly string[]).includes(raw)
+         ? (raw as T)
+         : undefined;
 const bool = (raw: unknown): boolean | undefined => (typeof raw === "boolean" ? raw : undefined);
 
 /* The trusted list's JSON must fit DAWN's per-value cap (9.14): capped by bytes, not count. */
@@ -80,7 +82,11 @@ export const TRUSTED_SENDERS = definePref<string[]>({
    default: [],
    parse: (raw) => (Array.isArray(raw) ? cleanTrusted(raw) : undefined)
 });
-export const ALWAYS_IMAGES = definePref<boolean>({ key: "mail.always_images", default: false, parse: bool });
+export const ALWAYS_IMAGES = definePref<boolean>({
+   key: "mail.always_images",
+   default: false,
+   parse: bool
+});
 export const MARK_READ = definePref<MarkRead>({
    key: "mail.mark_read",
    default: "immediately",
@@ -92,7 +98,11 @@ export const AFTER_MOVE = definePref<AfterMove>({
    parse: oneOf(["list", "next", "previous"] as const)
 });
 export const PREVIEWS = definePref<boolean>({ key: "mail.previews", default: true, parse: bool });
-export const SENDER_ONLY = definePref<boolean>({ key: "mail.sender_only", default: false, parse: bool });
+export const SENDER_ONLY = definePref<boolean>({
+   key: "mail.sender_only",
+   default: false,
+   parse: bool
+});
 
 /* Keys that loosen privacy: never uploaded from a browser to DAWN on first sync (8.7), and held to
    their strict default until this connection's settings have loaded (3.9). */

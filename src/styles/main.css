@@ -684,8 +684,8 @@ body.engaged #docks {
    margin: -6px;
    border-radius: 50%;
    border: 1.5px solid color-mix(in srgb, var(--accent) 60%, transparent);
-   background:
-      radial-gradient(circle, var(--accent) 0%, transparent 62%) no-repeat center / 15px 15px;
+   background: radial-gradient(circle, var(--accent) 0%, transparent 62%) no-repeat center / 15px
+      15px;
    cursor: pointer;
    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-glow) 40%, transparent);
 }
@@ -719,8 +719,8 @@ body.engaged #docks {
 .composer-mic.mic-off {
    opacity: 0.4;
    border-color: color-mix(in srgb, var(--text) 25%, transparent);
-   background:
-      radial-gradient(circle, var(--text-faint) 0%, transparent 62%) no-repeat center / 15px 15px;
+   background: radial-gradient(circle, var(--text-faint) 0%, transparent 62%) no-repeat center /
+      15px 15px;
    box-shadow: none;
    cursor: default;
 }
@@ -753,7 +753,10 @@ body.engaged #docks {
    color: color-mix(in srgb, var(--accent) 82%, transparent);
    cursor: pointer;
    filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent-glow) 35%, transparent));
-   transition: color 200ms ease, opacity 200ms ease, filter 200ms ease;
+   transition:
+      color 200ms ease,
+      opacity 200ms ease,
+      filter 200ms ease;
 }
 .composer-tts .tts-ico {
    display: block;
@@ -874,7 +877,9 @@ body.engaged #docks {
    text-align: left;
    cursor: pointer;
    color: var(--text-dim);
-   transition: background 140ms ease, color 140ms ease;
+   transition:
+      background 140ms ease,
+      color 140ms ease;
 }
 .emoji-row.active {
    background: color-mix(in srgb, var(--accent) 24%, transparent);
@@ -965,7 +970,9 @@ body.engaged #docks {
    color: var(--text-dim);
    cursor: pointer;
    opacity: 0;
-   transition: opacity 0.18s ease, color 0.18s ease;
+   transition:
+      opacity 0.18s ease,
+      color 0.18s ease;
 }
 .movable-lock::before {
    content: "";

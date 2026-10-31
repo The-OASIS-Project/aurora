@@ -75,11 +75,14 @@ export function fitImages(root: HTMLElement, ratio: number): void {
          fitNatural(img, ratio);
       } else if (!img.dataset.fitWatch) {
          img.dataset.fitWatch = "1";
-         img.addEventListener("load", () => fitNatural(img, Number(root.dataset.fitRatio) || 1), { once: true });
+         img.addEventListener("load", () => fitNatural(img, Number(root.dataset.fitRatio) || 1), {
+            once: true
+         });
       }
    }
 }
 
 function fitNatural(img: HTMLImageElement, ratio: number): void {
-   img.style.width = ratio < 1 && img.naturalWidth ? `${Math.round(img.naturalWidth * ratio)}px` : "";
+   img.style.width =
+      ratio < 1 && img.naturalWidth ? `${Math.round(img.naturalWidth * ratio)}px` : "";
 }
