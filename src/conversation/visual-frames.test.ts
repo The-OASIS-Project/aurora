@@ -9,7 +9,7 @@ function visualWindow(): { w: Window & typeof globalThis; run: (code: string) =>
       `<!DOCTYPE html><html><head>${VISUAL_PRELUDE}</head><body></body></html>`,
       { runScripts: "dangerously" }
    );
-   const w = dom.window as unknown as Window & typeof globalThis;
+   const w = dom.window as Window & typeof globalThis;
    return { w, run: (code) => (w as unknown as { eval: (c: string) => unknown }).eval(code) };
 }
 
@@ -29,6 +29,9 @@ describe("no frames inside a visual", () => {
          'document.createElement("iframe")',
          'document.createElementNS("http://www.w3.org/1999/xhtml","iframe")',
          'document.body.innerHTML = "<iframe></iframe>"',
+         /* With attributes and whitespace, as real markup has them (the setter check once missed these). */
+         'document.body.innerHTML = "<iframe src=about:blank></iframe>"',
+         'document.body.innerHTML = "<IFRAME\\tsrcdoc=x></IFRAME>"',
          'document.body.insertAdjacentHTML("beforeend", "<object></object>")',
          'var t = document.createElement("div"); t.outerHTML; document.body.appendChild(t); t.outerHTML = "<embed>"',
          'var f = new DOMParser().parseFromString("<iframe></iframe>", "text/html").body.firstChild; document.body.appendChild(document.importNode(f, true))',

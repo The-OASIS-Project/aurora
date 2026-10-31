@@ -199,7 +199,7 @@ export const VISUAL_PRELUDE =
    "<scr" +
    "ipt>(function(){try{delete window.RTCPeerConnection;delete window.webkitRTCPeerConnection;" +
    "window.RTCPeerConnection=undefined;window.webkitRTCPeerConnection=undefined}catch(e){}" +
-   `var TAG=/^(${FRAME_TAGS})$/i,SEL="${FRAME_TAGS.split("|").join(",")}",MARK=/<\s*(${FRAME_TAGS})[\s/>]/i;` +
+   `var TAG=/^(${FRAME_TAGS})$/i,SEL="${FRAME_TAGS.split("|").join(",")}",MARK=/<\\s*(${FRAME_TAGS})[\\s/>]/i;` + // \\s: a template literal would make a bare \s an "s"
    'function no(){throw new TypeError("Frames are not allowed in a visual")}' +
    'function bad(n){if(!n||typeof n!=="object")return false;if(n.nodeType===1&&TAG.test(n.localName))return true;' +
    "return!!(n.querySelector&&n.querySelector(SEL))}" +
