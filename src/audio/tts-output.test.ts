@@ -5,6 +5,7 @@ import { TtsPlayback } from "./tts.ts";
 /* A minimal AudioContext that records how the graph is wired. */
 const wiring: Array<[string, string]> = [];
 const contexts: FakeContext[] = [];
+const sources: Array<{ onended: (() => void) | null; started: boolean }> = [];
 let streamDestinations = 0;
 class FakeNode {
    constructor(readonly name: string) {}
@@ -31,7 +32,17 @@ class FakeContext {
       return { getChannelData: () => new Float32Array(length) };
    }
    createBufferSource(): object {
-      return Object.assign(new FakeNode("segment"), { buffer: null, onended: null, start() {}, stop() {} });
+      const src = Object.assign(new FakeNode("segment"), {
+         buffer: null,
+         onended: null as (() => void) | null,
+         started: false,
+         start() {
+            src.started = true;
+         },
+         stop() {}
+      });
+      sources.push(src);
+      return src;
    }
    createMediaStreamDestination(): object {
       streamDestinations++;
@@ -48,6 +59,7 @@ class FakeContext {
 beforeEach(() => {
    wiring.length = 0;
    contexts.length = 0;
+   sources.length = 0;
    streamDestinations = 0;
    vi.stubGlobal("AudioContext", FakeContext);
    vi.stubGlobal("requestAnimationFrame", () => 0);
@@ -79,6 +91,26 @@ describe("TTS output", () => {
       await Promise.resolve();
       expect(contexts.length).toBe(2);
       expect(wiring.filter(([from, to]) => from === "analyser" && to === "speakers").length).toBe(2);
+      tts.dispose();
+   });
+
+   it("ignores a dropped source's late ended event", async () => {
+      const tts = new TtsPlayback({ onLevels: () => {} });
+      tts.queue(new Uint8Array([0, 0, 0, 16]));
+      tts.play();
+      await Promise.resolve();
+      contexts[0].state = "closed";
+      tts.queue(new Uint8Array([0, 0, 0, 16]));
+      tts.play(); // recovery: the stuck first source is dropped, the second plays
+      await Promise.resolve();
+      tts.queue(new Uint8Array([0, 0, 0, 16]));
+      tts.play(); // a third waits behind the second
+      sources[0].onended?.(); // the dropped first source's ended event arrives late
+      expect(tts.isSpeaking()).toBe(true); // still playing the second
+      expect(sources.filter((s) => s.started).length).toBe(2); // the third didn't start over it
+      sources[1].onended?.(); // the second really ends: now the third plays
+      await Promise.resolve();
+      expect(sources.filter((s) => s.started).length).toBe(3);
       tts.dispose();
    });
 });

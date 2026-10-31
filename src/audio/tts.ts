@@ -173,7 +173,12 @@ export class TtsPlayback {
          this.current = src;
          this.startSampling();
 
-         src.onended = (): void => this.afterSegment();
+         /* Only while it's still the current source: a source dropped by stop() or by the
+            closed-context recovery can still deliver its ended event later, and must not end
+            (or advance past) whatever is playing by then. */
+         src.onended = (): void => {
+            if (this.current === src) this.afterSegment();
+         };
          src.start(0);
       } catch {
          this.playing = false;
