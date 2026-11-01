@@ -113,33 +113,44 @@ describe("DAWN URL tagging (property)", () => {
          })
       );
    });
-   it("tagIfDawnApi tags this origin's /api/ URLs exactly once, and leaves everything else untouched", () => {
-      const origin = () => window.location.origin;
-      fc.assert(
-         fc.property(
-            fc.oneof(
-               fc.webUrl(),
-               path,
-               path.map((p) => origin() + "/api" + p),
-               fc.constantFrom("/api/../x", "/api%2F..", "/api/x?app=aurora", origin() + "/api/x#f")
-            ),
-            (url) => {
-               setAppLogins(true);
-               const out = tagIfDawnApi(url);
-               const u = new URL(url, window.location.href);
-               if (u.origin !== window.location.origin || !u.pathname.startsWith("/api/")) {
-                  expect(out).toBe(url);
-                  return;
+   /* Generating web URLs is costly (~2 s for this property alone on the Jetson), so it gets room
+      like the other heavy properties rather than the default 5 s. */
+   it(
+      "tagIfDawnApi tags this origin's /api/ URLs exactly once, and leaves everything else untouched",
+      { timeout: 30_000 },
+      () => {
+         const origin = () => window.location.origin;
+         fc.assert(
+            fc.property(
+               fc.oneof(
+                  fc.webUrl(),
+                  path,
+                  path.map((p) => origin() + "/api" + p),
+                  fc.constantFrom(
+                     "/api/../x",
+                     "/api%2F..",
+                     "/api/x?app=aurora",
+                     origin() + "/api/x#f"
+                  )
+               ),
+               (url) => {
+                  setAppLogins(true);
+                  const out = tagIfDawnApi(url);
+                  const u = new URL(url, window.location.href);
+                  if (u.origin !== window.location.origin || !u.pathname.startsWith("/api/")) {
+                     expect(out).toBe(url);
+                     return;
+                  }
+                  const tagged = new URL(out, window.location.href);
+                  expect(tagged.searchParams.getAll("app")).toEqual(
+                     u.searchParams.has("app") ? u.searchParams.getAll("app") : ["aurora"]
+                  );
+                  expect(tagIfDawnApi(out)).toBe(out); // idempotent
                }
-               const tagged = new URL(out, window.location.href);
-               expect(tagged.searchParams.getAll("app")).toEqual(
-                  u.searchParams.has("app") ? u.searchParams.getAll("app") : ["aurora"]
-               );
-               expect(tagIfDawnApi(out)).toBe(out); // idempotent
-            }
-         )
-      );
-   });
+            )
+         );
+      }
+   );
 });
 
 /* Attachment markers as they appear in a message, valid and hostile. */

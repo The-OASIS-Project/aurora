@@ -115,14 +115,29 @@ describe("the mail body pipeline (property)", () => {
             const box = document.createElement("div");
             // eslint-disable-next-line no-unsanitized/property -- checking what the escaped text renders to
             box.innerHTML = html;
-            /* Only line breaks and text: no markup was injected. */
-            for (const el of allElements(box)) expect(el.localName).toBe("br");
+            /* Only line breaks and text: no markup was injected. A hard break (two spaces before a
+               newline) is a <br> and stands for that line break in the comparison below. */
+            for (const el of allElements(box)) {
+               expect(el.localName).toBe("br");
+               el.replaceWith("\n");
+            }
             /* escapeMd drops NUL (its sentinel); whitespace is normalized on both sides. */
             const NUL = String.fromCharCode(0);
             const norm = (t: string): string => t.split(NUL).join("").replace(/\s+/g, " ").trim();
             expect(norm(box.textContent ?? "")).toBe(norm(s));
          })
       );
+   });
+
+   it("a hard break in the text is a line break, not an escaping failure", () => {
+      const md = new Marked({
+         gfm: true,
+         tokenizer: { url: () => undefined, autolink: () => undefined }
+      });
+      const box = document.createElement("div");
+      // eslint-disable-next-line no-unsanitized/property -- checking what the escaped text renders to
+      box.innerHTML = md.parseInline(escapeMd("a  \nb"), { async: false });
+      expect(Array.from(box.querySelectorAll("*")).map((e) => e.localName)).toEqual(["br"]);
    });
 
    it("escapes text that markdown would otherwise turn into a code block or a link", () => {
