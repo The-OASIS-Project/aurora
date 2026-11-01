@@ -102,20 +102,40 @@ describe("the mail body pipeline (property)", () => {
    });
 
    it("escapeMd text renders back as exactly that text, inert", () => {
-      const md = new Marked();
+      /* Escaping is about inline markup, so parse inline, with autolinks and bare URLs off as the
+         mail renderer has them (render-body.ts): block layout (an indented line becoming a code
+         block) and automatic linking aren't what escaping promises. */
+      const md = new Marked({
+         gfm: true,
+         tokenizer: { url: () => undefined, autolink: () => undefined }
+      });
       fc.assert(
          fc.property(fc.string(), (s) => {
-            const html = md.parse(escapeMd(s), { async: false });
+            const html = md.parseInline(escapeMd(s), { async: false });
             const box = document.createElement("div");
             // eslint-disable-next-line no-unsanitized/property -- checking what the escaped text renders to
             box.innerHTML = html;
-            /* Only paragraphs, line breaks and text: no markup was injected. */
-            for (const el of allElements(box)) expect(["p", "br"]).toContain(el.localName);
+            /* Only line breaks and text: no markup was injected. */
+            for (const el of allElements(box)) expect(el.localName).toBe("br");
             /* escapeMd drops NUL (its sentinel); whitespace is normalized on both sides. */
             const NUL = String.fromCharCode(0);
             const norm = (t: string): string => t.split(NUL).join("").replace(/\s+/g, " ").trim();
             expect(norm(box.textContent ?? "")).toBe(norm(s));
          })
       );
+   });
+
+   it("escapes text that markdown would otherwise turn into a code block or a link", () => {
+      const md = new Marked({
+         gfm: true,
+         tokenizer: { url: () => undefined, autolink: () => undefined }
+      });
+      for (const s of ["    x", "http://x", "<http://x>", "[a](javascript:alert(1))"]) {
+         const box = document.createElement("div");
+         // eslint-disable-next-line no-unsanitized/property -- checking what the escaped text renders to
+         box.innerHTML = md.parseInline(escapeMd(s), { async: false });
+         expect(box.querySelector("*")).toBeNull();
+         expect(box.textContent?.trim()).toBe(s.trim());
+      }
    });
 });

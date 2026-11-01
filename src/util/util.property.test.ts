@@ -23,8 +23,8 @@ describe("str: a DAWN frame field read as text (property)", () => {
    });
 });
 
-/* Zones with clock changes at midnight, half-hour offsets, a day that didn't exist (Apia) and a
-   repeated midnight (Vostok, Gaza), over 1990-2036. */
+/* Zones with clock changes at midnight, half-hour offsets, a day that didn't exist (Apia), a
+   repeated midnight (Vostok, Gaza) and days far from 24 hours long (Vostok), over 1990-2036. */
 const ZONES = [
    "UTC",
    "America/New_York",
@@ -41,7 +41,7 @@ const ZONES = [
 ];
 describe("todayWindow (property)", () => {
    it(
-      "contains the instant, spans one calendar day of the zone, and lasts 23 to 25 hours",
+      "contains the instant and spans exactly one calendar day of the zone",
       { timeout: 60_000 },
       () => {
          fc.assert(
@@ -55,15 +55,30 @@ describe("todayWindow (property)", () => {
                   expect(t).toBeLessThan(end);
                   expect(isoDate(start, zone)).toBe(isoDate(t, zone));
                   expect(isoDate(start - 1, zone)).not.toBe(isoDate(t, zone));
+                  expect(isoDate(end - 1, zone)).toBe(isoDate(t, zone));
                   expect(isoDate(end, zone)).not.toBe(isoDate(t, zone));
-                  expect(end - start).toBeGreaterThanOrEqual(22 * 3600);
-                  expect(end - start).toBeLessThanOrEqual(26 * 3600);
+                  /* No fixed length: a zone's day can run far from 24 h (Vostok had a 31-hour and a
+               17-hour day in 1994); the calendar boundaries above are the invariant. */
                }
             ),
             { numRuns: 600 }
          );
       }
    );
+});
+
+describe("todayWindow on days far from 24 hours", () => {
+   it("covers Vostok's 31-hour and 17-hour days of 1994", () => {
+      for (const [ms, date] of [
+         [Date.UTC(1994, 0, 31, 12), "1994-01-31"],
+         [Date.UTC(1994, 10, 1, 12), "1994-11-01"]
+      ] as const) {
+         const { start, end } = todayWindow("Antarctica/Vostok", ms);
+         expect(isoDate(start, "Antarctica/Vostok")).toBe(date);
+         expect(isoDate(end - 1, "Antarctica/Vostok")).toBe(date);
+         expect(isoDate(end, "Antarctica/Vostok")).not.toBe(date);
+      }
+   });
 });
 
 describe("DAWN URL tagging (property)", () => {

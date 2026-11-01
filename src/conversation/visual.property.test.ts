@@ -87,3 +87,12 @@ describe("splitVisualSegments (property)", () => {
       );
    });
 });
+
+describe("frame inspection across DOM realms", () => {
+   it("finds a frame inside a <template> of a document from another jsdom", () => {
+      const html =
+         "<!DOCTYPE html><html><body><template><iframe></iframe></template></body></html>";
+      const other = (new JSDOM(html).window as Window).document;
+      expect(allElements(other).some((el) => el.localName === "iframe")).toBe(true);
+   });
+});

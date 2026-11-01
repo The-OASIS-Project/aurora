@@ -171,7 +171,10 @@ export function allElements(root: ParentNode): Element[] {
    const out: Element[] = [];
    for (const el of Array.from(root.querySelectorAll("*"))) {
       out.push(el);
-      if (el instanceof HTMLTemplateElement) out.push(...allElements(el.content));
+      /* By namespace and name, not instanceof: a document from another jsdom (the scripting-enabled
+         parse) has its own HTMLTemplateElement, so instanceof would skip its templates. */
+      if (el.localName === "template" && el.namespaceURI === "http://www.w3.org/1999/xhtml")
+         out.push(...allElements((el as HTMLTemplateElement).content));
    }
    return out;
 }
