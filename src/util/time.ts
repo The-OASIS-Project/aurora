@@ -145,12 +145,38 @@ export function dayStart(y: number, mo: number, d: number, zone: string | undefi
 }
 
 /* Today in the zone (browser-local when unset or invalid), as epoch seconds [first instant,
-   the next day's first instant): 23 or 25 hours across a clock change, not always 24. */
+   the moment the clock reaches tomorrow for good): usually tomorrow's first instant, with the
+   day 23 or 25 hours long across a clock change, but later when the clock goes back across
+   midnight and returns to today. Always contains `nowMs`. */
 export function todayWindow(
    tz?: string | null,
    nowMs: number = Date.now()
 ): { start: number; end: number } {
    const zone = safeTimeZone(tz);
    const w = wallParts(nowMs, zone);
-   return { start: dayStart(w.y, w.mo, w.d, zone), end: dayStart(w.y, w.mo, w.d + 1, zone) };
+   const start = dayStart(w.y, w.mo, w.d, zone);
+   let end = dayStart(w.y, w.mo, w.d + 1, zone);
+   if (end * 1000 <= nowMs) {
+      /* Today was revisited: a clock set back across midnight returns to today after tomorrow's
+         first midnight (St. John's, 28 Oct 1990: 00:01 back to 23:01). The day lasts until the
+         clock reaches tomorrow again, the first midnight after now, under the offset in force
+         now (or a day on, should another change come first). */
+      const next = new Date(Date.UTC(w.y, w.mo - 1, w.d + 1));
+      const wallNext = next.getTime();
+      for (const at of [nowMs, nowMs + 86400_000]) {
+         const t = wallNext - offsetSecAt(at, zone) * 1000;
+         const p = wallParts(t, zone);
+         const isNextMidnight =
+            p.y === next.getUTCFullYear() &&
+            p.mo === next.getUTCMonth() + 1 &&
+            p.d === next.getUTCDate() &&
+            p.h === 0 &&
+            p.mi === 0;
+         if (t > nowMs && isNextMidnight) {
+            end = Math.floor(t / 1000);
+            break;
+         }
+      }
+   }
+   return { start, end };
 }
