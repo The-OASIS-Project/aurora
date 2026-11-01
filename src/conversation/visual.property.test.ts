@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import fc from "fast-check";
 import { JSDOM } from "jsdom";
+import { parse } from "parse5";
 import { describe, expect, it } from "vitest";
 import { neutralizeFrames, splitVisualSegments, VISUAL_PRELUDE } from "./visual.ts";
 import { allElements, hostileMarkup } from "../test/hostile.ts";
@@ -17,16 +18,42 @@ const srcdocFor = (code: string): string =>
    neutralizeFrames(code) +
    "</body></html>";
 
-/* Parsed twice: with scripting enabled, as the sandboxed frame parses it (<noscript> is raw text
-   there; jsdom's "outside-only" sets the flag but runs no script in the page), and with scripting
-   disabled (DOMParser), where <noscript> content becomes elements. A frame in either fails. */
-function framesIn(html: string): string[] {
-   const scripted = (new JSDOM(html, { runScripts: "outside-only" }).window as Window).document;
-   const unscripted = new DOMParser().parseFromString(html, "text/html");
-   return [...allElements(scripted), ...allElements(unscripted)]
-      .map((el) => el.localName.toLowerCase())
-      .filter((n) => FRAMES.has(n));
+/* Parsed twice: with scripting enabled, as the sandboxed frame parses it (<noscript> content is
+   raw text there), and with scripting disabled (DOMParser), where it becomes elements. A frame in
+   either fails. The scripting-enabled parse is parse5 (jsdom's own parser) with
+   scriptingEnabled, which parses as a scripting browser does and runs nothing; jsdom itself only
+   sets that flag with runScripts: "dangerously", which would execute the markup's scripts. */
+interface P5Node {
+   nodeName: string;
+   childNodes?: P5Node[];
+   content?: P5Node;
 }
+function p5Names(node: P5Node, out: string[] = []): string[] {
+   out.push(node.nodeName.toLowerCase());
+   for (const child of node.childNodes ?? []) p5Names(child, out);
+   if (node.content) p5Names(node.content, out); // a <template>'s contents
+   return out;
+}
+const scriptingParse = (html: string): string[] =>
+   p5Names(parse(html, { scriptingEnabled: true }) as unknown as P5Node);
+function framesIn(html: string): string[] {
+   const unscripted = new DOMParser().parseFromString(html, "text/html");
+   return [
+      ...scriptingParse(html),
+      ...allElements(unscripted).map((el) => el.localName.toLowerCase())
+   ].filter((n) => FRAMES.has(n));
+}
+
+describe("the two parses really differ where scripting matters", () => {
+   it("<noscript> content is text with scripting on, elements with it off", () => {
+      const html =
+         "<!DOCTYPE html><html><body><noscript><iframe></iframe></noscript></body></html>";
+      expect(scriptingParse(html)).not.toContain("iframe");
+      expect(
+         allElements(new DOMParser().parseFromString(html, "text/html")).map((e) => e.localName)
+      ).toContain("iframe");
+   });
+});
 
 /* The heavier properties (each run parses documents in jsdom) get a sized run count and an
    explicit timeout: they are a fuzz-style workload, and their time follows the machine's load. */
