@@ -34,8 +34,7 @@ function p5Names(node: P5Node, out: string[] = []): string[] {
    if (node.content) p5Names(node.content, out); // a <template>'s contents
    return out;
 }
-const scriptingParse = (html: string): string[] =>
-   p5Names(parse(html, { scriptingEnabled: true }) as unknown as P5Node);
+const scriptingParse = (html: string): string[] => p5Names(parse(html, { scriptingEnabled: true }));
 function framesIn(html: string): string[] {
    const unscripted = new DOMParser().parseFromString(html, "text/html");
    return [
