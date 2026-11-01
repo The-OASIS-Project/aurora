@@ -95,3 +95,19 @@ describe("off-origin images in rendered markdown wait for a click (4.7)", () => 
       expect(root.textContent).toContain("☐ todo");
    });
 });
+
+describe("nothing else in rendered markdown loads or restyles the page", () => {
+   it("drops a <style> element, even inside a table cell (its @import fetches; its rules hit the whole page)", () => {
+      const html = renderMarkdown("<td><style>@import url(https://evil.example/x.css)</style>");
+      expect(html).not.toContain("<style");
+      expect(renderMarkdown("<style>body{display:none}</style>")).not.toContain("<style");
+   });
+
+   it("keeps a raster data: image but drops any other data: image (text/html, svg)", () => {
+      expect(renderMarkdown("![p](data:image/png;base64,iVBORw0KGgo=)")).toContain(
+         'src="data:image/png'
+      );
+      expect(renderMarkdown("![h](data:text/html,<b>x</b>)")).not.toContain("<img");
+      expect(renderMarkdown("![s](data:image/svg+xml,<svg></svg>)")).not.toContain("<img");
+   });
+});
