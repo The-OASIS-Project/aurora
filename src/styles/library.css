@@ -18,7 +18,6 @@
    background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
    backdrop-filter: blur(7px);
-   -webkit-backdrop-filter: blur(7px);
 }
 /* Operator hid the card from the Panels menu: gone entirely, no pointer capture. */
 .library.library-off {

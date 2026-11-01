@@ -15,7 +15,6 @@
    padding: 4vh 3vw;
    background: color-mix(in srgb, var(--ground) 72%, transparent);
    backdrop-filter: blur(6px);
-   -webkit-backdrop-filter: blur(6px);
    animation: docview-in 160ms ease;
 }
 .docview {
@@ -33,7 +32,6 @@
       color-mix(in srgb, var(--ground-raise) 54%, transparent) 88%
    );
    backdrop-filter: blur(9px);
-   -webkit-backdrop-filter: blur(9px);
    box-shadow:
       0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
       0 18px 60px color-mix(in srgb, var(--ground) 70%, transparent);

@@ -194,7 +194,9 @@ describe("htmlToMarkdown", () => {
       expect(Array.from(root.querySelectorAll("p")).map((p) => p.textContent)).toEqual(["z"]);
    });
 
-   it("survives deep nesting", () => {
+   /* A stress test of the depth handling (no stack overflow), not of speed: its time follows
+      the machine's load, so it gets room beyond the default 5 s. */
+   it("survives deep nesting", { timeout: 30_000 }, () => {
       const deep = "<div>".repeat(5000) + "deep" + "</div>".repeat(5000);
       expect(htmlToMarkdown(deep).markdown).toContain("deep");
    });

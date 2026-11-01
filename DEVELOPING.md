@@ -11,10 +11,11 @@ toolchain.
 
 ## Prerequisites
 
-- **Node.js.** Use the version in [`.nvmrc`](.nvmrc) (Node 22). With
-  [nvm](https://github.com/nvm-sh/nvm): `nvm use` in the repo root. The `engines`
-  field in `package.json` accepts Node 20.19+ and 22.13+ (what the dependencies
-  need), but 22 is what development happens on.
+- **Node.js.** Use the version in [`.nvmrc`](.nvmrc): the latest Node 22 LTS (`lts/jod`).
+  With [nvm](https://github.com/nvm-sh/nvm): `nvm install` then `nvm use` in the repo root.
+  The `engines` field asks for Node 22.22.2+, 24.15+ or 26+, what jsdom and Vitest need.
+  Avoid Node 22.21.0 in particular: an HTTP/2 regression there crashes the HTTPS dev server
+  on its first WebSocket (fixed in 22.21.1).
 - **npm** (ships with Node). No global tooling to install.
 - **A browser.** Chrome or Edge. Aurora leans on modern web APIs (WebCodecs,
   AudioWorklet, CSS 3D); it is not tested on Firefox/Safari.
@@ -24,7 +25,7 @@ toolchain.
 ## Getting started
 
 ```
-nvm use            # or make sure you are on Node 22
+nvm install        # the Node in .nvmrc (latest 22 LTS), then: nvm use
 npm install
 npm run dev        # https://localhost:5273
 ```

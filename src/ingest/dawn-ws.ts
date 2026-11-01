@@ -6094,7 +6094,7 @@ export class DawnIngest implements Ingest {
 
    /* Raw binary to the main socket (mic audio). The opcode is prepended by the caller;
       guarded so a frame that arrives after a drop is dropped, not thrown. */
-   private sendBinary(bytes: Uint8Array): void {
+   private sendBinary(bytes: Uint8Array<ArrayBuffer>): void {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(bytes);
    }
 

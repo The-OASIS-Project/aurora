@@ -35,7 +35,6 @@
       0 0 calc(22px * var(--notice-glow, 0))
          color-mix(in srgb, var(--node-accent-glow, var(--accent-glow)) 45%, transparent);
    backdrop-filter: blur(8px);
-   -webkit-backdrop-filter: blur(8px);
    /* opacity / transform (translateZ) / filter (DOF blur) are driven per-frame by the
       importance model (src/notify/notifications.ts) - no CSS transition on them, or it
       would double-ease. box-shadow (the emphasis glow) may still transition. */

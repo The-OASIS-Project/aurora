@@ -42,7 +42,6 @@
    /* Frosted glass: a light blur of the nebula behind so the panel reads as
       clear lit glass, not a solid card. */
    backdrop-filter: blur(4px);
-   -webkit-backdrop-filter: blur(4px);
    will-change: transform, opacity, filter;
    transform-style: preserve-3d;
    /* Clickable to pin. The affordance is an outline, not a box-shadow, so it does
@@ -231,7 +230,6 @@
    box-shadow: inset 0 0 0 1px
       color-mix(in srgb, var(--node-accent, var(--accent)) 22%, transparent);
    backdrop-filter: blur(5px);
-   -webkit-backdrop-filter: blur(5px);
 }
 
 .dock-title {

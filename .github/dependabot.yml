@@ -29,3 +29,9 @@ updates:
       tooling:
         dependency-type: development
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 (the native compiler) is ahead of typescript-eslint, which supports
+      # TypeScript below 6.1: a TS 7 bump would break the type-aware lint (a required check).
+      # Move to it on purpose once typescript-eslint supports it.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
