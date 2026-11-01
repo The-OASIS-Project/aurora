@@ -6,6 +6,15 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
    test: {
       include: ["src/**/*.test.ts"],
-      environment: "node"
+      environment: "node",
+      /* `npm run test:coverage` (CI on main): which of Aurora's own code the unit tests run.
+         Reported, not gated: a number to watch and raise, not one to game. */
+      coverage: {
+         provider: "v8",
+         include: ["src/**/*.ts"],
+         exclude: ["src/**/*.test.ts", "src/**/*.d.ts"],
+         reporter: ["text-summary", "json-summary", "html"],
+         reportsDirectory: "coverage"
+      }
    }
 });
