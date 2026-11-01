@@ -68,7 +68,8 @@ Some changes have a guide of their own:
   cleared on logout and when another user signs in.
 
 Add or update tests with the change. Code that parses outside input (DAWN's frames, mail, markdown)
-should be tested with hostile input, not only the happy path.
+should be tested with hostile input, not only the happy path: a property test (`*.property.test.ts`,
+fast-check, with the generators in `src/test/hostile.ts`) states what must hold for any input.
 
 ## Commits and pull requests
 

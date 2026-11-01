@@ -59,7 +59,10 @@ The safety net is three things, and you are expected to use all of them:
    work). Tests sit next to the code they cover as `*.test.ts`; one that needs a DOM
    starts with `// @vitest-environment jsdom`. Logic with real state (the wire
    handling in `src/ingest/`, the time helpers, the panels' behaviour) gets tests,
-   including hostile and edge-case input.
+   including hostile and edge-case input. Code that reads outside input (markdown,
+   mail bodies, a visual's markup, DAWN's frames) also gets property tests
+   (`*.property.test.ts`, [fast-check](https://fast-check.dev/)): an invariant that must
+   hold for any input, tried against generated input from `src/test/hostile.ts`.
 3. **Browser verification.** Keep `npm run dev` open and exercise the actual feature
    in the browser. For anything touching audio, the reactor, or layout, a visual
    check is the only check.
