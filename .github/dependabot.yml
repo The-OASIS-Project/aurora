@@ -31,16 +31,20 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
-    # A dependency joins the first group that matches it, so three comes first.
+    # three and its types are excluded from the broader groups by name, not only by
+    # coming first: Dependabot documents first-match-wins, but it has put a dependency
+    # in a later group anyway (it grouped @types/three with tooling, ahead of three).
     groups:
       three:
         patterns: ["three", "@types/three"]
       runtime:
         dependency-type: production
         update-types: [minor, patch]
+        exclude-patterns: ["three", "@types/three"]
       tooling:
         dependency-type: development
         update-types: [minor, patch]
+        exclude-patterns: ["three", "@types/three"]
     ignore:
       # TypeScript 7 (the native compiler) is ahead of typescript-eslint, which supports
       # TypeScript below 6.1: a TS 7 bump would break the type-aware lint (a required check).
