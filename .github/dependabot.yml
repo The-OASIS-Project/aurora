@@ -7,6 +7,11 @@
 #   major version comes as its own PR: Vite, Vitest, TypeScript and the
 #   libraries Aurora renders with (three, marked, DOMPurify) change behaviour
 #   across majors, so each one is a deliberate, tested upgrade.
+# - three and @types/three move together in their own group: types that run
+#   ahead of the library would accept APIs the shipped three doesn't have.
+# - Cooldown: a release is proposed only once it is two weeks old, so a broken
+#   or compromised release has time to be caught and pulled first (the same rule
+#   applied to dependencies added by hand).
 
 version: 2
 updates:
@@ -14,6 +19,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
     groups:
       actions:
         patterns: ["*"]
@@ -22,7 +29,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
+    # A dependency joins the first group that matches it, so three comes first.
     groups:
+      three:
+        patterns: ["three", "@types/three"]
       runtime:
         dependency-type: production
         update-types: [minor, patch]
@@ -34,4 +46,9 @@ updates:
       # TypeScript below 6.1: a TS 7 bump would break the type-aware lint (a required check).
       # Move to it on purpose once typescript-eslint supports it.
       - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # @types/node describes one Node major; it follows the Node LTS line in .nvmrc
+      # (Node 22 today). A newer major's types would accept APIs the tooling's Node lacks.
+      # Move it with .nvmrc, on purpose.
+      - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
