@@ -103,6 +103,12 @@ describe("nothing else in rendered markdown loads or restyles the page", () => {
       expect(renderMarkdown("<style>body{display:none}</style>")).not.toContain("<style");
    });
 
+   it("drops a <template>, so no image can sit ungated inside its contents", () => {
+      const html = renderMarkdown('<template><img src="https://t.example.net/x.gif" alt="pixel">');
+      expect(html).not.toContain("<template");
+      expect(html).not.toContain('t.example.net/x.gif"');
+   });
+
    it("keeps a raster data: image but drops any other data: image (text/html, svg)", () => {
       expect(renderMarkdown("![p](data:image/png;base64,iVBORw0KGgo=)")).toContain(
          'src="data:image/png'

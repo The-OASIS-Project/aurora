@@ -44,10 +44,13 @@ const purify = DOMPurify(window);
    Everything else that loads on its own is removed here, and nothing can forge the click-to-load
    placeholder (no forms or buttons, no data-* attributes, no inline style). A <style> element is
    removed too: DOMPurify keeps it by default, but its @import / url() fetch on render, and its
-   rules restyle the whole page, not just the reply. */
+   rules restyle the whole page, not just the reply. So is <template>: the image gate can't see
+   inside its contents, so an image there would pass ungated (inert in place, live if anything
+   ever moved it out), and a reply has no use for one. */
 const FORBID_TAGS = [
    "style",
    "link",
+   "template",
    "video",
    "audio",
    "source",
