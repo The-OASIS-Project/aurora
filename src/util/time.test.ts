@@ -97,6 +97,11 @@ describe("todayWindow / dayStart", () => {
       expect(isoDate(end - 1, zone)).toBe("1990-10-27");
       expect(isoDate(end, zone)).toBe("1990-10-28");
       expect(end).toBe(Date.parse("1990-10-28T03:30:00Z") / 1000); // 00:00 NST, the second midnight
+      /* An instant with milliseconds gets the same, whole-second end (the offset is read to the
+         whole second). */
+      expect(todayWindow(zone, Date.parse("1990-10-28T03:00:00.750Z")).end).toBe(
+         Date.parse("1990-10-28T03:30:00Z") / 1000
+      );
       /* Before the rollback, today ends at the first midnight as usual. */
       expect(todayWindow(zone, Date.parse("1990-10-28T02:00:00Z")).end).toBe(
          Date.parse("1990-10-28T02:30:00Z") / 1000

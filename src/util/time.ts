@@ -111,8 +111,11 @@ function wallParts(
 
 /* Seconds the zone's clock reads ahead of UTC at an instant (epoch ms). */
 function offsetSecAt(ms: number, zone: string | undefined): number {
-   const w = wallParts(ms, zone);
-   return Math.round((Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi, w.s) - ms) / 1000);
+   /* The wall clock is read to the whole second, so compare it with the instant's whole second:
+      the milliseconds would otherwise round the offset off by one. */
+   const whole = Math.floor(ms / 1000) * 1000;
+   const w = wallParts(whole, zone);
+   return Math.round((Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi, w.s) - whole) / 1000);
 }
 
 /* The first instant (epoch seconds) of calendar date y-mo-d in the zone. Usually its midnight;
