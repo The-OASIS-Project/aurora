@@ -43,6 +43,7 @@ HTTPS). Log in with your DAWN username and password.
 | `npm run build` | `tsc` (full typecheck) then `vite build` to a static bundle in `dist/`. |
 | `npm run preview` | Serve the built `dist/` bundle locally to sanity-check a production build. |
 | `npm test` | The unit tests (vitest), once. `npm run test:watch` re-runs them as you edit. |
+| `npm run test:coverage` | The tests with V8 coverage: a summary in the terminal, the full report in `coverage/index.html`. |
 | `npm run lint` | ESLint (`eslint.config.js`): type-aware checks, HTML-sink safety, the architecture's layer rules. |
 | `npm run format` | Prettier rewrites the code to the house style (`npm run format:check` only reports). |
 | `npm run check:source` | The design rules a linter can't express (`scripts/check-source.mjs`). |
@@ -65,7 +66,8 @@ The safety net is three things, and you are expected to use all of them:
 
 CI runs the format check, the typecheck, the lint, the source checks, the tests and the
 build on every push and pull request, plus CodeQL and an audit of the runtime
-dependencies (`.github/workflows/`). See
+dependencies (`.github/workflows/`). Pushes to `main` also run the tests with coverage:
+the summary is on the run's page and the HTML report is an artifact. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how a change gets into `main`.
 
 ## Develop without a live DAWN
