@@ -68,7 +68,6 @@
    background: color-mix(in srgb, var(--ground-raise) 72%, transparent);
    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
    backdrop-filter: blur(12px);
-   -webkit-backdrop-filter: blur(12px);
 }
 /* Too low to open down: flip the panel ABOVE the header instead. */
 .cpick.cpick-up .cpick-panel {
@@ -205,7 +204,6 @@
    color: var(--accent);
    background: color-mix(in srgb, var(--ground-raise) 88%, transparent);
    backdrop-filter: blur(6px);
-   -webkit-backdrop-filter: blur(6px);
 }
 
 .cpick-row {

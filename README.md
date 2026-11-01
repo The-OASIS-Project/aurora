@@ -48,7 +48,7 @@ all day.
 
 - A running DAWN with its web interface turned on (default `wss://localhost:3000`).
 - A modern web browser (Chrome or Edge work best).
-- Node.js 20.19 or newer (22 recommended) if you're building or developing it.
+- Node.js 22.22 or newer (the latest Node 22 LTS) if you're building or developing it.
 
 Aurora has two sides: the machine that runs it and the screen where you watch it. Run it
 on anything (a PC, a home server, or the Jetson itself, right next to DAWN) and watch it
