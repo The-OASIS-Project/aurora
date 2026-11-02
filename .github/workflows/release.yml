@@ -1,0 +1,155 @@
+# Release pipeline: a version tag (v1.2.3) on main builds Aurora, checks it again from scratch, and
+# publishes a GitHub Release with the built bundle (aurora-<version>.tar.gz), its SHA256SUMS, and
+# a build attestation (GitHub's signed record of which workflow, from which commit, built that
+# exact file). Same shape as DAWN's release workflow; see RELEASING.md for cutting and verifying
+# one, and for how a DAWN release can bundle it.
+#
+# A manual run (workflow_dispatch) builds, checks and packages without publishing: a dry run of
+# the pipeline, whose archive is kept as a workflow artifact.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, check and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (full history, to check the tag is on main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          # No dependency cache: a release builds from the lockfile alone, nothing restored.
+
+      - name: The tag names this version, on main
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME doesn't match package.json's version $version" >&2
+            exit 1
+          fi
+          # On main's first-parent line: a merge commit or a direct commit, which went through
+          # main's ruleset (a PR's own intermediate commits are in main's history but never ran
+          # its required checks).
+          if ! git rev-list --first-parent origin/main | grep -qxF "$GITHUB_SHA"; then
+            echo "tag $GITHUB_REF_NAME isn't a commit on main's first-parent line" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          AURORA_BUILD_COMMIT="$(git rev-parse HEAD)" npm run build
+
+      # Packaged and uploaded straight after the build, before the smoke test downloads a
+      # browser and installs system packages: nothing else runs while dist/ is open to change.
+      # A failed smoke test still fails this job, and publish needs it.
+      - name: Package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" scripts/package-release.sh dist release
+
+      - name: Upload the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+
+      - name: Install Chromium (for the smoke test)
+        run: npx playwright install --with-deps chromium
+
+      # The same source in the smoke test's own build (smoke mode: no cert, no DAWN proxy).
+      - name: Smoke test
+        run: npm run test:smoke
+
+  publish:
+    name: Attest and publish
+    needs: build
+    # A tag push publishes; a manual run (even started on a tag) stops at the package.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and attach its files
+      id-token: write # sign the attestation (GitHub's OIDC token)
+      attestations: write # store the attestation
+    steps:
+      - name: Download the package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release/
+
+      - name: No version published twice
+        # A version, once published, never gets other contents (a re-run of a published tag
+        # stops here). A draft left by a failed run doesn't count: Publish finishes it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          published="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.draft | not) | .assets[].name')"
+          for f in release/*.tar.gz; do
+            if grep -qxF "${f##*/}" <<<"$published"; then
+              echo "${f##*/} is already published: bump the version" >&2
+              exit 1
+            fi
+          done
+
+      - name: Attest the build
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*.tar.gz
+
+      - name: Publish
+        # A draft first, then the files, then publish: a release is never visible half-uploaded,
+        # and this works with GitHub's immutable releases (files can only be added to a draft).
+        # Re-runnable: a draft a failed run left for this tag is reused and its files replaced.
+        # A version with a pre-release part (1.1.0-rc.1) publishes as a pre-release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          drafts="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.draft) | .tag_name' | grep -cxF "$GITHUB_REF_NAME" || true)"
+          if [ "$drafts" -gt 1 ]; then
+            echo "$drafts drafts for $GITHUB_REF_NAME: delete all but one, then re-run" >&2
+            exit 1
+          fi
+          pre=()
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          if [ "$drafts" -eq 0 ]; then
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag "${pre[@]}" \
+              --title "Aurora $GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false

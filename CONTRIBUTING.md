@@ -82,6 +82,11 @@ fast-check, with the generators in `src/test/hostile.ts`) states what must hold 
   without your context can follow.
 - By contributing you agree to license your contribution under GPLv3 or later.
 
+## Releases
+
+Releases are version tags on `main`, built, checked, attested and published by CI. How to cut one,
+verify one, and how a DAWN release can bundle Aurora: [RELEASING.md](RELEASING.md).
+
 ## How Aurora is developed
 
 Aurora is developed with an AI coding assistant (Claude Code). [CLAUDE.md](CLAUDE.md) holds the rules
