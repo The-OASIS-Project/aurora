@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { CLIENT_PROTOCOL } from "./src/ingest/contract.ts";
 
 // App version, read from package.json at config time and injected as a global
 // (__APP_VERSION__) so the About dialog can show it without a runtime JSON import.
@@ -9,6 +11,51 @@ const APP_VERSION = (
       version: string;
    }
 ).version;
+
+// The commit the build came from: AURORA_BUILD_COMMIT when set (the release workflow sets it to
+// the tagged commit), else this checkout's HEAD, marked "-dirty" when it has uncommitted changes;
+// omitted without git. (Not GITHUB_SHA: on a pull request that's a merge commit on no branch.)
+function buildCommit(): string | undefined {
+   if (process.env.AURORA_BUILD_COMMIT) return process.env.AURORA_BUILD_COMMIT;
+   try {
+      const git = (...args: string[]): string =>
+         execFileSync("git", args, {
+            encoding: "utf-8",
+            stdio: ["ignore", "pipe", "ignore"]
+         }).trim();
+      const head = git("rev-parse", "HEAD");
+      return git("status", "--porcelain") ? `${head}-dirty` : head;
+   } catch {
+      return undefined;
+   }
+}
+
+// aurora-release.json in every build: what this bundle is (version, commit) and the DAWN wire
+// protocol it speaks. A release archive carries it (RELEASING.md), so DAWN's packaging can check
+// an Aurora release speaks its protocol before bundling it; a deployed copy can be identified.
+function releaseManifest(): Plugin {
+   return {
+      name: "aurora-release-manifest",
+      apply: "build",
+      generateBundle() {
+         const commit = buildCommit();
+         this.emitFile({
+            type: "asset",
+            fileName: "aurora-release.json",
+            source: `${JSON.stringify(
+               {
+                  name: "aurora",
+                  version: APP_VERSION,
+                  ...(commit ? { commit } : {}),
+                  protocol: CLIENT_PROTOCOL
+               },
+               null,
+               3
+            )}\n`
+         });
+      }
+   };
+}
 
 // Minimal by design. Vite is the "make" of this project: one command to compile
 // TypeScript and serve with live-reload. The render layer is hand-rolled, so
@@ -60,7 +107,7 @@ export default defineConfig(({ mode }) => {
       // import.meta.env.BASE_URL so they resolve under this base too.
       base: "/aurora/",
       define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
-      plugins: smoke ? [] : [basicSsl()],
+      plugins: smoke ? [releaseManifest()] : [basicSsl(), releaseManifest()],
       server: smoke
          ? {}
          : {

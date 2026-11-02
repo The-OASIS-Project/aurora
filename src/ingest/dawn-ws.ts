@@ -99,6 +99,7 @@ import {
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
 import { safeTimeZone } from "../util/tz.ts";
+import { CLIENT_PROTOCOL } from "./contract.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
    type prefix then payload. TTS rides the MAIN socket; music rides ONLY the dedicated
@@ -920,11 +921,6 @@ function parseToolCalls(raw: unknown, results: Map<string, ReloadedToolResult>):
    }
    return out;
 }
-
-/* The wire-contract version this client speaks (DAWN's `protocol`, on `config` and
-   /api/auth/status). DAWN bumps it only when something is removed or changes incompatibly;
-   anything new or changed rides a named flag in `features` instead. */
-const CLIENT_PROTOCOL = 1;
 
 /* The message for a DAWN whose `protocol` this client doesn't speak. */
 function protocolMismatchText(serverProtocol: number, dawnVersion: string): string {

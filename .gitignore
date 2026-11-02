@@ -8,6 +8,7 @@ coverage/
 
 # Smoke test (tests/smoke/): its build and Playwright's output
 .smoke/
+release/
 test-results/
 playwright-report/
 
