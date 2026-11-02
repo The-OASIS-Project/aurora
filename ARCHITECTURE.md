@@ -35,9 +35,9 @@ ingest  ->  state  ->  choreography  ->  render
   feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
   HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar, watches,
   stocks, Home Assistant, library, context, notifications, conversation list, and the memory-forget
-  offer). `StubIngest` (fake data) and
-  `DawnIngest` (the real WebSocket client) are interchangeable; swapping DAWN in is one
-  line in `main.ts`.
+  offer). `DawnIngest` is the real WebSocket client. `StubIngest` (fake data) was its
+  stand-in, but no longer matches what `main.ts` needs; it is being replaced by a fake DAWN
+  the real client talks to (`tests/fake-dawn/`, see docs/FAKE_DAWN_PLAN.md).
 - **state** (`src/state/`) is the `Store` of `ElementState`: what is true right now
   (summary, importance, planar position, tone), with zero notion of pixels. `spike()`
   raises importance; `tick()` decays it back toward a floor. That is the whole "spike

@@ -44,11 +44,12 @@ HTTPS). Log in with your DAWN username and password.
 | `npm run preview` | Serve the built `dist/` bundle locally to sanity-check a production build. |
 | `npm test` | The unit tests (vitest), once. `npm run test:watch` re-runs them as you edit. |
 | `npm run test:coverage` | The tests with V8 coverage: a summary in the terminal, the full report in `coverage/index.html`. |
+| `npm run test:smoke` | The smoke test: the production build in headless Chromium against a fake DAWN (`tests/smoke/`). Run `npx playwright install chromium` once first. |
 | `npm run lint` | ESLint (`eslint.config.js`): type-aware checks, HTML-sink safety, the architecture's layer rules. |
 | `npm run format` | Prettier rewrites the code to the house style (`npm run format:check` only reports). |
 | `npm run check:source` | The design rules a linter can't express (`scripts/check-source.mjs`). |
 
-The safety net is three things, and you are expected to use all of them:
+The safety net is four things, and you are expected to use all of them:
 
 1. **Strict TypeScript.** `tsconfig.json` runs `strict`, `noUnusedLocals`, and
    `noUnusedParameters`. This is not incidental: the render seam (see
@@ -63,39 +64,35 @@ The safety net is three things, and you are expected to use all of them:
    mail bodies, a visual's markup, DAWN's frames) also gets property tests
    (`*.property.test.ts`, [fast-check](https://fast-check.dev/)): an invariant that must
    hold for any input, tried against generated input from `src/test/hostile.ts`.
-3. **Browser verification.** Keep `npm run dev` open and exercise the actual feature
+3. **The smoke test.** `npm run test:smoke` builds the production bundle (into `.smoke/`,
+   never `dist/`), serves it, and loads it in headless Chromium against a fake DAWN
+   (`tests/fake-dawn/`): canned replies in DAWN's own wire format, served to the real
+   client. It checks that Aurora starts and stands up signed out, signed in (resuming the
+   open conversation), against an older DAWN without feature flags, and against a newer
+   protocol, and fails on any uncaught exception, console error, or request the fake
+   doesn't expect. A new request the client sends needs a rule in
+   `tests/fake-dawn/fake-dawn.ts`; a changed DAWN reply needs its fixture updated in
+   `tests/fake-dawn/scenarios.ts`. Design: [docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md).
+4. **Browser verification.** Keep `npm run dev` open and exercise the actual feature
    in the browser. For anything touching audio, the reactor, or layout, a visual
    check is the only check.
 
-CI runs the format check, the typecheck, the lint, the source checks, the tests and the
-build on every push and pull request, plus CodeQL and an audit of the runtime
+CI runs the format check, the typecheck, the lint, the source checks, the tests, the
+build and the smoke test on every push and pull request, plus CodeQL and an audit of the runtime
 dependencies (`.github/workflows/`). Pushes to `main` also run the tests with coverage:
 the summary is on the run's page and the HTML report is an artifact. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how a change gets into `main`.
 
 ## Develop without a live DAWN
 
-The single most useful fact for UI work: Aurora can run against **fake data** with no
-DAWN at all.
-
-`ingest` is the only boundary to DAWN. `DawnIngest` (`src/ingest/dawn-ws.ts`) is the
-real WebSocket client; `StubIngest` (`src/ingest/stub.ts`) emits canned data into the
-same sinks. They are interchangeable, so swapping is one line in
-[`src/main.ts`](src/main.ts):
-
-```
-// import { DawnIngest } from "./ingest/dawn-ws.ts";
-import { StubIngest } from "./ingest/stub.ts";
-
-// const dawn = new DawnIngest();
-const dawn = new StubIngest();
-```
-
-With `StubIngest` you get the reactor, the store-backed ambient panels, and the
-choreography seam driven by fake spikes, with no login and no daemon. It is the
-fastest way to work on rendering, the seam, and the store/choreography path (which
-the live DAWN path does not even exercise; see the notification note in
-ARCHITECTURE.md). **Revert the swap before committing.**
+`ingest` is the only boundary to DAWN, and `DawnIngest` (`src/ingest/dawn-ws.ts`) is the
+real WebSocket client. The older way to work without a daemon, swapping in `StubIngest`
+(`src/ingest/stub.ts`, a second client that emits canned data), no longer builds: the real
+client has long outgrown it. It is being replaced by a fake DAWN that the real client talks
+to (`tests/fake-dawn/`), so offline work exercises the same login, resume and frame
+handling a real DAWN does. The smoke test uses it today; a dev server on it
+(`npm run dev:fake`) is the next step ([docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md)).
+Until then, UI work runs against a DAWN instance (below).
 
 ## Pointing at a DAWN instance
 

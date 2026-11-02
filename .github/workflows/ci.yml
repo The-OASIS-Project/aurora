@@ -198,6 +198,51 @@ jobs:
         run: npm run build
 
   # -------------------------------------------------------------------------
+  # Smoke test: the production build, in headless Chromium, against a fake
+  # DAWN at the protocol level (tests/smoke/, docs/FAKE_DAWN_PLAN.md): it must
+  # start and stand up signed out, signed in, against an older DAWN, and say so
+  # against a newer protocol. One worker, no retries; the trace, screenshots
+  # and each test's frame log are uploaded when it fails.
+  # -------------------------------------------------------------------------
+  smoke:
+    runs-on: ubuntu-24.04
+    # A hung server or test would otherwise hold the runner for the 6-hour default.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The Chromium build pinned by the locked Playwright, with its system
+      # libraries. Not cached: Playwright advises against it (restoring takes
+      # about as long as downloading, and the system libraries aren't covered).
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke test
+        run: npm run test:smoke
+
+      - name: Upload the report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  # -------------------------------------------------------------------------
   # Dependency audit: known advisories in what ships to the browser. Dev-only
   # tooling (Vite, Vitest, jsdom) never reaches a user's browser; its advisories
   # come through Dependabot alerts and security updates, and the ones rooted in

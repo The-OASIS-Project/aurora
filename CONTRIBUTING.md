@@ -27,6 +27,7 @@ npm run lint          # ESLint: type-aware checks, HTML-sink safety, the layer r
 npm run check:source  # colors from tokens, DAWN URLs tagged, no em dashes
 npm test              # the unit tests (vitest)
 npm run build         # the production bundle
+npm run test:smoke    # the build in a browser, against a fake DAWN (once: npx playwright install chromium)
 ```
 
 CI also runs CodeQL and an audit of the runtime dependencies. (`./install-git-hooks.sh` installs a
