@@ -1,9 +1,14 @@
 /* The fake DAWN's scenarios and the frames it answers with, in DAWN's wire format.
 
-   Provenance: each builder names the DAWN source it mirrors (checked against DAWN 7d4a4c93,
-   2026-10-31) and, where it has one, the section of DAWN's docs/WEBSOCKET_PROTOCOL.md. When DAWN
-   changes one of these shapes, update the builder and its note together. Times are relative to now,
+   Provenance: each builder names the DAWN source it mirrors (checked against the DAWN commit in
+   CHECKED_AGAINST below, 2026-11-02) and, where it has one, the section of DAWN's
+   docs/WEBSOCKET_PROTOCOL.md. When DAWN changes one of these shapes, update the builder and its
+   note together. Times are relative to now,
    so "today" views stay populated whenever the test runs. */
+
+/* The DAWN commit these fixtures were last checked against (`npm run check:fixtures` reports what
+   has changed in DAWN's WebUI and protocol doc since). */
+export const CHECKED_AGAINST = "d93ba620";
 
 /* The behaviour flags this DAWN advertises (webui_protocol.c's always-on table; the email flags
    depend on the email service, which these scenarios leave out). */

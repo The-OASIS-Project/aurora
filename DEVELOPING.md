@@ -48,6 +48,7 @@ HTTPS). Log in with your DAWN username and password.
 | `npm run lint` | ESLint (`eslint.config.js`): type-aware checks, HTML-sink safety, the architecture's layer rules. |
 | `npm run format` | Prettier rewrites the code to the house style (`npm run format:check` only reports). |
 | `npm run check:source` | The design rules a linter can't express (`scripts/check-source.mjs`). |
+| `npm run check:fixtures` | The smoke test's fake-DAWN fixtures against DAWN itself (local; needs DAWN at `../dawn`). |
 
 The safety net is four things, and you are expected to use all of them:
 
@@ -72,7 +73,12 @@ The safety net is four things, and you are expected to use all of them:
    protocol, and fails on any uncaught exception, console error, or request the fake
    doesn't expect. A new request the client sends needs a rule in
    `tests/fake-dawn/fake-dawn.ts`; a changed DAWN reply needs its fixture updated in
-   `tests/fake-dawn/scenarios.ts`. Design: [docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md).
+   `tests/fake-dawn/scenarios.ts`. Two things keep those fixtures honest:
+   `src/ingest/fake-dawn-fixtures.test.ts` (part of `npm test`) runs each one through the
+   real client and checks what it means there, and `npm run check:fixtures` (local, with
+   DAWN checked out at `../dawn`) lists any name DAWN's protocol doc doesn't mention and
+   the DAWN commits since the fixtures were last checked. Design:
+   [docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md).
 4. **Browser verification.** Keep `npm run dev` open and exercise the actual feature
    in the browser. For anything touching audio, the reactor, or layout, a visual
    check is the only check.

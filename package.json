@@ -15,6 +15,7 @@
       "format": "prettier --write .",
       "format:check": "prettier --check .",
       "check:source": "node scripts/check-source.mjs",
+      "check:fixtures": "node scripts/check-fixtures.mjs",
       "build": "tsc && vite build",
       "preview": "vite preview",
       "test": "vitest run",
