@@ -6,6 +6,11 @@ dist/
 *.tsbuildinfo
 coverage/
 
+# Smoke test (tests/smoke/): its build and Playwright's output
+.smoke/
+test-results/
+playwright-report/
+
 # Local / machine-specific
 *.local
 .claude/settings.local.json

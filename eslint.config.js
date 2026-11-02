@@ -89,7 +89,16 @@ const layer = (
 const LAYER_DIRS = ["anchor", "state", "choreography", "ingest", "render", "util"];
 
 export default tseslint.config(
-   { ignores: ["dist/", "node_modules/", "coverage/"] },
+   {
+      ignores: [
+         "dist/",
+         "node_modules/",
+         "coverage/",
+         ".smoke/",
+         "test-results/",
+         "playwright-report/"
+      ]
+   },
    js.configs.recommended,
    ...tseslint.configs.recommendedTypeChecked,
    {

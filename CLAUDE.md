@@ -150,7 +150,8 @@ spawning new tabs.
 (`src/ingest/`) is the single DAWN boundary; it feeds the four seam sinks (store, reactor,
 conversation, telemetry) plus the self-owned view sinks (music, calendar, ha, watches,
 stocks, watchlist, library, context, notifications, conversation list, memory forget). `DawnIngest` is the real WebSocket client and
-`StubIngest` is fake data, swapped in one line in `main.ts`. The `Store` holds importance;
+`StubIngest` is fake data that no longer matches `main.ts` (being replaced by the protocol-level
+fake DAWN in `tests/fake-dawn/`, which the smoke test uses; docs/FAKE_DAWN_PLAN.md). The `Store` holds importance;
 `spike()` / `tick()` are the spike-then-recede, and the choreographer maps importance to
 depth - but this seam is exercised only by `StubIngest` now (see the notification note
 below). The CSS-3D renderer is the only pixel code; Three.js lives only in the anchor

@@ -47,62 +47,70 @@ function stripCookieSecurity(setCookie: string[]): string[] {
    return setCookie.map((c) => c.replace(/;\s*SameSite=Strict/gi, "; SameSite=Lax"));
 }
 
-export default defineConfig({
-   // Served under /aurora when co-located behind DAWN (same-origin subpath, so DAWN's
-   // WebUI keeps "/"). One base for dev and build, so the dev server also serves at
-   // https://localhost:5273/aurora/. API/WS paths stay absolute at the root (/api, /ws,
-   // /music-ws) and are unaffected. Worklets live in public/worklets/ and are loaded via
-   // import.meta.env.BASE_URL so they resolve under this base too.
-   base: "/aurora/",
-   define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
-   plugins: [basicSsl()],
-   server: {
-      host: true,
-      port: 5273,
-      proxy: {
-         "/api": {
-            target: DAWN_TARGET,
-            changeOrigin: true,
-            secure: false,
-            configure: (proxy) => {
-               proxy.on("proxyRes", (proxyRes) => {
-                  const sc = proxyRes.headers["set-cookie"];
-                  if (sc) proxyRes.headers["set-cookie"] = stripCookieSecurity(sc);
-               });
-            }
-         },
-         "/ws": {
-            target: DAWN_TARGET,
-            changeOrigin: true,
-            secure: false,
-            ws: true
-         },
-         // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
-         // same-origin like /ws so it works for remote browsers too. It authenticates with
-         // the session token AND the login cookie (__Host-dawn_session, or __Host-dawn_session_aurora
-         // with DAWN's per-app logins; DAWN checks the cookie's user owns the session), which the
-         // browser sends here and the proxy forwards on the upgrade. NOTE: the path must NOT start with
-         // "/ws", or the broader "/ws" rule above captures it and routes it to the
-         // main server (which does not speak dawn-music). Hence "/music-ws".
-         "/music-ws": {
-            target: DAWN_MUSIC_TARGET,
-            changeOrigin: true,
-            secure: false,
-            ws: true
-         },
-         // Vendor scripts (Chart.js, ...) that model-generated `<dawn-visual type=html>`
-         // blocks reference as `<script src="/js/vendor/X">`; the visual renderer fetches
-         // and inlines them into its sandboxed iframe. DAWN serves them from its www root,
-         // and in production the HUD is same-origin with DAWN so this path resolves there too.
-         "/js/vendor": {
-            target: DAWN_TARGET,
-            changeOrigin: true,
-            secure: false
-         }
+// The `smoke` mode (`--mode smoke`, the smoke test's build and preview; tests/smoke/) drops the
+// HTTPS cert and the DAWN proxy: plain http on localhost (still a secure context), and nothing can
+// reach a real DAWN, since the test's fake DAWN answers every DAWN request in the page.
+export default defineConfig(({ mode }) => {
+   const smoke = mode === "smoke";
+   return {
+      // Served under /aurora when co-located behind DAWN (same-origin subpath, so DAWN's
+      // WebUI keeps "/"). One base for dev and build, so the dev server also serves at
+      // https://localhost:5273/aurora/. API/WS paths stay absolute at the root (/api, /ws,
+      // /music-ws) and are unaffected. Worklets live in public/worklets/ and are loaded via
+      // import.meta.env.BASE_URL so they resolve under this base too.
+      base: "/aurora/",
+      define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
+      plugins: smoke ? [] : [basicSsl()],
+      server: smoke
+         ? {}
+         : {
+              host: true,
+              port: 5273,
+              proxy: {
+                 "/api": {
+                    target: DAWN_TARGET,
+                    changeOrigin: true,
+                    secure: false,
+                    configure: (proxy) => {
+                       proxy.on("proxyRes", (proxyRes) => {
+                          const sc = proxyRes.headers["set-cookie"];
+                          if (sc) proxyRes.headers["set-cookie"] = stripCookieSecurity(sc);
+                       });
+                    }
+                 },
+                 "/ws": {
+                    target: DAWN_TARGET,
+                    changeOrigin: true,
+                    secure: false,
+                    ws: true
+                 },
+                 // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
+                 // same-origin like /ws so it works for remote browsers too. It authenticates with
+                 // the session token AND the login cookie (__Host-dawn_session, or __Host-dawn_session_aurora
+                 // with DAWN's per-app logins; DAWN checks the cookie's user owns the session), which the
+                 // browser sends here and the proxy forwards on the upgrade. NOTE: the path must NOT start with
+                 // "/ws", or the broader "/ws" rule above captures it and routes it to the
+                 // main server (which does not speak dawn-music). Hence "/music-ws".
+                 "/music-ws": {
+                    target: DAWN_MUSIC_TARGET,
+                    changeOrigin: true,
+                    secure: false,
+                    ws: true
+                 },
+                 // Vendor scripts (Chart.js, ...) that model-generated `<dawn-visual type=html>`
+                 // blocks reference as `<script src="/js/vendor/X">`; the visual renderer fetches
+                 // and inlines them into its sandboxed iframe. DAWN serves them from its www root,
+                 // and in production the HUD is same-origin with DAWN so this path resolves there too.
+                 "/js/vendor": {
+                    target: DAWN_TARGET,
+                    changeOrigin: true,
+                    secure: false
+                 }
+              }
+           },
+      build: {
+         target: "es2022",
+         outDir: "dist"
       }
-   },
-   build: {
-      target: "es2022",
-      outDir: "dist"
-   }
+   };
 });
