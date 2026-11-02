@@ -42,8 +42,15 @@ const purify = DOMPurify(window);
    result an attacker wrote), and replies re-render on every stream delta. So nothing in it may
    fetch a URL by itself: only <img src> can, and that one waits for a click (gateImages, 4.7).
    Everything else that loads on its own is removed here, and nothing can forge the click-to-load
-   placeholder (no forms or buttons, no data-* attributes, no inline style). */
+   placeholder (no forms or buttons, no data-* attributes, no inline style). A <style> element is
+   removed too: DOMPurify keeps it by default, but its @import / url() fetch on render, and its
+   rules restyle the whole page, not just the reply. So is <template>: the image gate can't see
+   inside its contents, so an image there would pass ungated (inert in place, live if anything
+   ever moved it out), and a reply has no use for one. */
 const FORBID_TAGS = [
+   "style",
+   "link",
+   "template",
    "video",
    "audio",
    "source",
@@ -110,7 +117,11 @@ function offOrigin(src: string): URL | null {
    } catch {
       return new URL("about:blank"); // unparseable: treat as off-origin (fail closed)
    }
-   if (u.protocol === "data:" || u.protocol === "blob:") return null;
+   /* Inline images: a raster data: URI (as isSafeImageDataUri allows) or a blob: this page made.
+      Any other data: (text/html, svg+xml) isn't an image this view offers: fail closed. */
+   if (u.protocol === "data:")
+      return /^data:image\/(jpeg|jpg|png|gif|webp)[;,]/i.test(src.trim()) ? null : u;
+   if (u.protocol === "blob:") return null;
    if (u.origin === window.location.origin) return null;
    return u;
 }

@@ -92,7 +92,13 @@ export function safeUrl(raw: string | null | undefined, kind: "link" | "image"):
    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
    /* Never Aurora's own host, on any port or scheme: the login cookie is host-scoped (cookies
       ignore the port), so another port on this host still rides it. */
-   if (typeof location !== "undefined" && location.hostname && u.hostname === location.hostname)
+   /* Compared without a trailing dot: "localhost." names the same host in DNS. */
+   const host = (h: string): string => h.replace(/\.$/, "");
+   if (
+      typeof location !== "undefined" &&
+      location.hostname &&
+      host(u.hostname) === host(location.hostname)
+   )
       return null;
    return u.href;
 }

@@ -36,6 +36,12 @@ function urlAttrs(root: HTMLElement): Array<[string, string, string]> {
 }
 
 describe("safeUrl", () => {
+   it("refuses this host written with a trailing dot (the same host in DNS)", () => {
+      const own = window.location.hostname;
+      expect(safeUrl(`http://${own}.:5273/x`, "link")).toBeNull();
+      expect(safeUrl(`https://${own}./img.png`, "image")).toBeNull();
+   });
+
    it("accepts absolute http(s) and mailto links only", () => {
       expect(safeUrl("https://a.example.com/x", "link")).toBe("https://a.example.com/x");
       expect(safeUrl("mailto:a@example.com", "link")).toBe("mailto:a@example.com");

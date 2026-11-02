@@ -86,4 +86,25 @@ describe("todayWindow / dayStart", () => {
    it("dayStart rolls over a month's end", () => {
       expect(dayStart(2026, 10, 32, "UTC")).toBe(Date.parse("2026-11-01T00:00:00Z") / 1000);
    });
+
+   it("a date revisited after midnight runs until the clock reaches tomorrow for good", () => {
+      /* St. John's, 28 Oct 1990: at 00:01 NDT the clock went back to 23:01 NST, 27 Oct again. */
+      const zone = "America/St_Johns";
+      const now = Date.parse("1990-10-28T03:00:00Z"); // 23:30 NST, 27 Oct (the second time)
+      const { start, end } = todayWindow(zone, now);
+      expect(start).toBeLessThanOrEqual(now / 1000);
+      expect(end).toBeGreaterThan(now / 1000);
+      expect(isoDate(end - 1, zone)).toBe("1990-10-27");
+      expect(isoDate(end, zone)).toBe("1990-10-28");
+      expect(end).toBe(Date.parse("1990-10-28T03:30:00Z") / 1000); // 00:00 NST, the second midnight
+      /* An instant with milliseconds gets the same, whole-second end (the offset is read to the
+         whole second). */
+      expect(todayWindow(zone, Date.parse("1990-10-28T03:00:00.750Z")).end).toBe(
+         Date.parse("1990-10-28T03:30:00Z") / 1000
+      );
+      /* Before the rollback, today ends at the first midnight as usual. */
+      expect(todayWindow(zone, Date.parse("1990-10-28T02:00:00Z")).end).toBe(
+         Date.parse("1990-10-28T02:30:00Z") / 1000
+      );
+   });
 });
