@@ -60,6 +60,8 @@ export class FakeDawn {
    readonly log: LogEntry[] = [];
    /* Every WebSocket request type the client sent, in order (for assertions). */
    readonly requests: string[] = [];
+   /* Every socket the client opened (its URL), whether or not it went on to send anything. */
+   readonly sockets: string[] = [];
    private readonly started = Date.now();
    private readonly appLogins: boolean;
    /* Whether the client has asked /api/auth/status tagged (Aurora's own login, with app_logins). */
@@ -104,9 +106,16 @@ export class FakeDawn {
       return { status: 404, body: { error: "Not found (fake DAWN)" } };
    }
 
-   /* The client opened a socket, asking for these subprotocols. Returns false to refuse it. */
-   open(url: URL, protocols: string[]): boolean {
-      this.note("ws", `open ${url.pathname}${url.search} [${protocols.join(", ")}]`);
+   /* The client opened a socket, asking for these subprotocols. `origin` is where DAWN serves its
+      socket (the page's own origin, as ws/wss): the client must open it same-origin, since the
+      login cookie rides the handshake and DAWN checks the Origin. Returns false to refuse it. */
+   open(url: URL, protocols: string[], origin: string): boolean {
+      this.sockets.push(url.href);
+      this.note("ws", `open ${url.href} [${protocols.join(", ")}]`);
+      if (url.origin !== origin) {
+         this.violate(`socket opened on ${url.origin}, not DAWN's ${origin}`);
+         return false;
+      }
       if (url.pathname !== "/ws") {
          this.violate(`unexpected socket: ${url.pathname}`);
          return false;

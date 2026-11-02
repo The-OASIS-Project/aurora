@@ -104,6 +104,7 @@ test("signed out: the login card, and no socket", async ({ page, dawn }) => {
    await expect(page.locator("#login-card .login-status")).toHaveText("Awaiting link");
    await expect(page.locator('#login-card input[name="username"]')).toBeEditable();
    await expect(page.locator("#link-chip")).toBeHidden();
+   expect(fake.sockets).toEqual([]);
    expect(fake.requests).toEqual([]);
 });
 
@@ -126,6 +127,7 @@ test("a newer DAWN protocol: says so, and opens nothing", async ({ page, dawn })
    await expect(page.locator("#login-card .login-status")).toHaveText(
       "Link failed: This DAWN is newer than this Aurora. Update Aurora to connect."
    );
+   expect(fake.sockets).toEqual([]);
    expect(fake.requests).toEqual([]);
 });
 

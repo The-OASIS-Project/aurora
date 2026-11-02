@@ -50,10 +50,12 @@ export async function attachFakeDawn(
       await route.abort();
    });
 
+   /* DAWN's socket is same-origin with the page (http -> ws, https -> wss). */
+   const wsOrigin = origin.replace(/^http/, "ws");
    await page.routeWebSocket(
       () => true,
       (ws) => {
-         if (!fake.open(new URL(ws.url()), ws.protocols())) {
+         if (!fake.open(new URL(ws.url()), ws.protocols(), wsOrigin)) {
             void ws.close({ code: 1008, reason: "fake DAWN: unexpected socket" });
             return;
          }
