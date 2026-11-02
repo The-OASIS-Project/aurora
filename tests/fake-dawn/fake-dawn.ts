@@ -9,7 +9,7 @@
 import { answerFrame, authStatus, connectFrames, unknownType, type Scenario } from "./scenarios.ts";
 
 /* Requests DAWN answers that the fake models (the client's core boot verbs, plus the heartbeat). */
-const ANSWERED = new Set([
+export const ANSWERED = new Set([
    "init",
    "reconnect",
    "get_config",
@@ -30,7 +30,7 @@ const ANSWERED = new Set([
 
 /* Requests DAWN takes without a reply in these scenarios. phone_status: DAWN answers only while a
    call is live (WEBSOCKET_PROTOCOL.md, Phone; checked in webui_phone.c). */
-const SILENT = new Set(["phone_status"]);
+export const SILENT = new Set(["phone_status"]);
 
 /* Requests of the optional subsystems these scenarios build DAWN without (Home Assistant and the
    calendar, each behind a build switch in webui_message_dispatch.c), listed by exact verb so a
@@ -67,7 +67,10 @@ export class FakeDawn {
    /* Whether the client has asked /api/auth/status tagged (Aurora's own login, with app_logins). */
    private askedTagged = false;
 
-   constructor(readonly scenario: Scenario) {
+   readonly scenario: Scenario;
+
+   constructor(scenario: Scenario) {
+      this.scenario = scenario;
       this.appLogins = scenario.features?.includes("app_logins") === true;
    }
 

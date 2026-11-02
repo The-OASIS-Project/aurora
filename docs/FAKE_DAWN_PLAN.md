@@ -1,6 +1,6 @@
 # A fake DAWN for tests and offline development
 
-Status: plan (2026-11-02), revised after a plan review. Phases 1a and 1b built; 1c, 2 and 3 follow.
+Status: plan (2026-11-02), revised after a plan review. Phase 1 built; phases 2 and 3 follow.
 
 ## Why
 
@@ -135,7 +135,9 @@ serves), starts the preview in smoke mode and runs the specs.
 - Vitest round-trips every fixture through the real `DawnIngest` (with recording sinks) and asserts
   what it produced, so a lenient parser can't hide a stale fixture.
 - `npm run check:fixtures` (local only, needs `../dawn`): lists frame and verb names in the fixtures
-  that DAWN's `WEBSOCKET_PROTOCOL.md` doesn't mention, for a human to look at.
+  that DAWN's `WEBSOCKET_PROTOCOL.md` doesn't mention, and the DAWN commits touching its WebUI or
+  protocol doc since `CHECKED_AGAINST` (the commit the fixtures were last checked against), for a
+  human to look at.
 
 ### Phase 2a: offline development
 
