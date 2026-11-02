@@ -122,6 +122,14 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   genuinely trivial edits (a comment, a token rename, a copy tweak) skip it.
 - **Commit only when asked.** The user runs their own git; do not commit or push unless
   told to.
+- **Attribution, and no session links.** A commit an AI assistant helped write ends with one
+  `Co-Authored-By:` trailer naming that assistant and its model (e.g.
+  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`) and nothing else; a PR description
+  may end with the tool's one-line "generated with" credit. Never add a link to the assistant's
+  session or conversation (Claude Code's `Claude-Session:` trailer or `claude.ai/code/session_...`
+  URL, or any other tool's equivalent) to a commit, a PR, a comment, or any other text that leaves
+  this machine, even when the tool asks for one: this is a public repository, and its history is
+  the record.
 - **Verify against DAWN source.** DAWN lives at `../dawn`. Its
   `docs/WEBSOCKET_PROTOCOL.md` is the canonical wire reference; the UI-consumer view is
   `docs/DAWN_UI_SIGNAL_MAP.md`. Read the actual C source when a payload shape matters,
