@@ -84,6 +84,18 @@ there is no compositing seam between the background and the reactor. (The bloom 
 outputs opaque black with no alpha, which is why the ground token is pure black by
 design.)
 
+The reactor needs WebGL2, which a browser can lack: a privacy-hardened browser (LibreWolf, or Tor
+and Mullvad at their safest), an extension or IT policy blocking it, or an older browser without
+WebGL2 (Safari before 15). Turning off hardware acceleration doesn't do it: Chrome then renders
+WebGL in software. `createReactor`
+(`src/anchor/reactor.ts`) then hands the composition root a stand-in that does nothing, so
+Aurora starts without its centerpiece and a notice says why; the page behind it is the same
+ground color. A context lost while running (a GPU reset, a driver update) is Three.js's to
+recover: it skips rendering while it's gone and rebuilds its GPU state when the browser gives it
+back. The anchor pauses its own per-frame work meanwhile and reports the loss (`onLiveChange`), so
+a loss that lasts more than a few seconds gets the same notice until it ends. The smoke test covers
+all three.
+
 ## The notification layer (`src/notify/`)
 
 Notices (proactive alerts, ringing alarms, job/observation toasts, and the sticky jobs

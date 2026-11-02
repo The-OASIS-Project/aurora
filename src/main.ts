@@ -55,7 +55,7 @@ import { Store } from "./state/store.ts";
 import { Choreographer } from "./choreography/choreographer.ts";
 import { Css3dRenderer } from "./render/css3d.ts";
 import { PanelDrag } from "./render/panel-drag.ts";
-import { Anchor } from "./anchor/anchor.ts";
+import { createReactor } from "./anchor/reactor.ts";
 import { DawnIngest } from "./ingest/dawn-ws.ts";
 import type { Ingest, MicCaptureState, ReactorSink } from "./ingest/ingest.ts";
 import { mountStandby } from "./standby/standby.ts";
@@ -131,7 +131,9 @@ const renderer = new Css3dRenderer(
    (id, over) => store.setHovered(id, over),
    closePanel
 );
-const anchor = new Anchor(canvas);
+/* The center reactor, or a stand-in that does nothing when this browser has no WebGL2: Aurora
+   still starts, and says why the center is empty (below, once notices can show). */
+const { reactor: anchor, live: reactorLive } = createReactor(canvas);
 const hud = mountHud(stage);
 
 /* Top-centre settings menu: enable/disable which panels the dashboard shows. */
@@ -191,6 +193,45 @@ const notifications = new Notifications(
       else emailPanel.openMessage(target.accountId, target.messageId);
    }
 );
+
+/* A context the browser takes away while running (a GPU reset, a driver update) usually comes back
+   within a moment, and the reactor carries on. One that stays gone (repeated GPU resets, a GPU
+   that went away) would leave the center black with no reason given, so after a few seconds the
+   same notice says so, until it comes back. */
+const CONTEXT_LOST_NOTICE_MS = 5000;
+let contextLostTimer = 0;
+anchor.onLiveChange((live) => {
+   window.clearTimeout(contextLostTimer);
+   if (live) {
+      notifications.remove("no-webgl");
+      return;
+   }
+   contextLostTimer = window.setTimeout(
+      () =>
+         notifications.notify({
+            id: "no-webgl",
+            kind: "notice",
+            summary: "The animated centerpiece stopped",
+            detail:
+               "The browser lost its graphics context (a GPU reset or a driver problem) and hasn't given it back. Everything else works. Reloading the page usually brings it back.",
+            tone: "nominal",
+            persist: true
+         }),
+      CONTEXT_LOST_NOTICE_MS
+   );
+});
+
+if (!reactorLive)
+   notifications.notify({
+      id: "no-webgl",
+      kind: "notice",
+      summary: "The animated centerpiece is off",
+      detail:
+         "It needs WebGL, which this browser has turned off or can't use. Everything else works. A browser setting, an extension or a privacy mode may be blocking it.",
+      tone: "nominal",
+      /* Kept until closed: a toast would expire while a signed-out user is still on the login card. */
+      persist: true
+   });
 
 /* Ambient standby (screensaver): after the configured inactivity it fades the chrome and
    dims the reactor to a resting ember; input / a live alert wakes it. Constructed here so the
@@ -926,6 +967,7 @@ function dispose(): void {
    hud.destroy();
    menu.destroy();
    login.destroy();
+   window.clearTimeout(contextLostTimer);
    anchor.dispose();
    renderer.dispose();
    panelDrag.dispose();

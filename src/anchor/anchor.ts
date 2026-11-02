@@ -64,6 +64,26 @@ const BAR_AMP_H = 0.42;
    elements are active, so the reactor always shows what DAWN is doing now. */
 export type ReactorState = "idle" | "listening" | "thinking" | "speaking" | "error";
 
+/* What the composition root drives: the Anchor, or reactor.ts's stand-in when the browser has no
+   WebGL2. */
+export interface Reactor {
+   resize(): void;
+   setState(state: ReactorState): void;
+   startBoot(): void;
+   setStarfield(on: boolean): void;
+   setClouds(on: boolean): void;
+   setBloom(on: boolean): void;
+   setStandby(on: boolean): void;
+   frame(time: number): void;
+   dispose(): void;
+   setLevels(bins: Float32Array | null): void;
+   setStrain(load: number): void;
+   setHesitation(load: number): void;
+   /* Called when the reactor stops or starts drawing at runtime: false when the browser takes its
+      WebGL context away (a GPU reset, a driver update), true when it gives it back. */
+   onLiveChange(listener: (live: boolean) => void): void;
+}
+
 interface StateParams {
    barGain: number; // bar-ring amplitude (voice FFT energy)
    coreBase: number; // core intensity floor
@@ -190,8 +210,13 @@ void main() {
    gl_FragColor = vec4(uColor * (0.55 + 0.85 * g), g * uOpacity);
 }`;
 
-export class Anchor {
+export class Anchor implements Reactor {
+   private canvas: HTMLCanvasElement;
    private renderer: THREE.WebGLRenderer;
+   /* The browser has taken the WebGL context away. Three.js skips rendering until it's restored
+      (and rebuilds its GPU state then); meanwhile frame() skips its CPU work too. */
+   private contextLost = false;
+   private liveListener: ((live: boolean) => void) | null = null;
    private scene: THREE.Scene;
    private camera: THREE.PerspectiveCamera;
    private composer: EffectComposer;
@@ -289,7 +314,11 @@ export class Anchor {
    private vTmp = new THREE.Vector3(); // scratch: spawn direction
 
    constructor(canvas: HTMLCanvasElement) {
+      this.canvas = canvas;
       this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      /* After the renderer's own handlers (it keeps the context restorable): only track it. */
+      canvas.addEventListener("webglcontextlost", this.onContextLost);
+      canvas.addEventListener("webglcontextrestored", this.onContextRestored);
       /* Clear/fog color come from the ground token so a palette pivot moves them
          too (they only happen to be black today). */
       const ground = new THREE.Color(PALETTE.ground);
@@ -719,7 +748,26 @@ export class Anchor {
       this.motTarget = on ? 0.25 : 1;
    }
 
+   private onContextLost = (): void => {
+      this.contextLost = true;
+      this.liveListener?.(false);
+   };
+
+   private onContextRestored = (): void => {
+      this.contextLost = false;
+      this.liveListener?.(true);
+   };
+
+   onLiveChange(listener: (live: boolean) => void): void {
+      this.liveListener = listener;
+   }
+
    frame(time: number): void {
+      /* Nothing can be drawn: skip the work, keeping the clock so dt doesn't jump on restore. */
+      if (this.contextLost) {
+         this.lastTime = time;
+         return;
+      }
       const dt = Math.min(Math.max(time - this.lastTime, 0), 0.05);
       this.lastTime = time;
       /* Reduced motion: freeze to a static representative frame. `motion` gates
@@ -871,6 +919,9 @@ export class Anchor {
    /* Free GPU resources and listeners (HMR / teardown). */
    dispose(): void {
       window.removeEventListener("pointermove", this.onPointerMove);
+      this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+      this.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+      this.liveListener = null;
       this.core.geometry.dispose();
       this.coreMat.dispose();
       this.nebula.geometry.dispose();

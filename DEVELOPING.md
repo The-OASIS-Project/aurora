@@ -69,8 +69,9 @@ The safety net is four things, and you are expected to use all of them:
    never `dist/`), serves it, and loads it in headless Chromium against a fake DAWN
    (`tests/fake-dawn/`): canned replies in DAWN's own wire format, served to the real
    client. It checks that Aurora starts and stands up signed out, signed in (resuming the
-   open conversation), against an older DAWN without feature flags, and against a newer
-   protocol, and fails on any uncaught exception, console error, or request the fake
+   open conversation), against an older DAWN without feature flags, against a newer
+   protocol, in a browser without WebGL, and through a lost and restored WebGL context, and
+   fails on any uncaught exception, console error, or request the fake
    doesn't expect. A new request the client sends needs a rule in
    `tests/fake-dawn/fake-dawn.ts`; a changed DAWN reply needs its fixture updated in
    `tests/fake-dawn/scenarios.ts`. Two things keep those fixtures honest:
