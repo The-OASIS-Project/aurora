@@ -48,7 +48,9 @@ jobs:
           # On main's first-parent line: a merge commit or a direct commit, which went through
           # main's ruleset (a PR's own intermediate commits are in main's history but never ran
           # its required checks).
-          if ! git rev-list --first-parent origin/main | grep -qxF "$GITHUB_SHA"; then
+          # grep reads the whole list (no -q): stopping at the match would SIGPIPE rev-list,
+          # which pipefail turns into a failure on a long enough history.
+          if ! git rev-list --first-parent origin/main | grep -xF "$GITHUB_SHA" >/dev/null; then
             echo "tag $GITHUB_REF_NAME isn't a commit on main's first-parent line" >&2
             exit 1
           fi
