@@ -8,8 +8,8 @@ import { isSafeImageDataUri, parseAttachments } from "../conversation/attachment
 
 afterEach(() => setAppLogins(false));
 
-/* The heavier properties (each run parses a document in jsdom) get a sized run count and an
-   explicit timeout: they are a fuzz-style workload, and their time follows the machine's load. */
+/* The heavier properties (each run parses a document in jsdom) get a sized run count; every
+   property test has a fuzz-sized timeout from vitest.config.ts (the "property" project). */
 describe("str: a DAWN frame field read as text (property)", () => {
    it("always gives a string, never an object's [object Object]", () => {
       fc.assert(
@@ -40,31 +40,27 @@ const ZONES = [
    "Antarctica/Vostok"
 ];
 describe("todayWindow (property)", () => {
-   it(
-      "contains the instant and spans exactly one calendar day of the zone",
-      { timeout: 60_000 },
-      () => {
-         fc.assert(
-            fc.property(
-               fc.constantFrom(...ZONES),
-               fc.integer({ min: Date.UTC(1990, 0, 1), max: Date.UTC(2036, 11, 31) }),
-               (zone, ms) => {
-                  const { start, end } = todayWindow(zone, ms);
-                  const t = Math.floor(ms / 1000);
-                  expect(start).toBeLessThanOrEqual(t);
-                  expect(t).toBeLessThan(end);
-                  expect(isoDate(start, zone)).toBe(isoDate(t, zone));
-                  expect(isoDate(start - 1, zone)).not.toBe(isoDate(t, zone));
-                  expect(isoDate(end - 1, zone)).toBe(isoDate(t, zone));
-                  expect(isoDate(end, zone)).not.toBe(isoDate(t, zone));
-                  /* No fixed length: a zone's day can run far from 24 h (Vostok had a 31-hour and a
+   it("contains the instant and spans exactly one calendar day of the zone", () => {
+      fc.assert(
+         fc.property(
+            fc.constantFrom(...ZONES),
+            fc.integer({ min: Date.UTC(1990, 0, 1), max: Date.UTC(2036, 11, 31) }),
+            (zone, ms) => {
+               const { start, end } = todayWindow(zone, ms);
+               const t = Math.floor(ms / 1000);
+               expect(start).toBeLessThanOrEqual(t);
+               expect(t).toBeLessThan(end);
+               expect(isoDate(start, zone)).toBe(isoDate(t, zone));
+               expect(isoDate(start - 1, zone)).not.toBe(isoDate(t, zone));
+               expect(isoDate(end - 1, zone)).toBe(isoDate(t, zone));
+               expect(isoDate(end, zone)).not.toBe(isoDate(t, zone));
+               /* No fixed length: a zone's day can run far from 24 h (Vostok had a 31-hour and a
                17-hour day in 1994); the calendar boundaries above are the invariant. */
-               }
-            ),
-            { numRuns: 600 }
-         );
-      }
-   );
+            }
+         ),
+         { numRuns: 600 }
+      );
+   });
 });
 
 describe("todayWindow on days far from 24 hours", () => {
@@ -113,44 +109,34 @@ describe("DAWN URL tagging (property)", () => {
          })
       );
    });
-   /* Generating web URLs is costly (~2 s for this property alone on the Jetson), so it gets room
-      like the other heavy properties rather than the default 5 s. */
-   it(
-      "tagIfDawnApi tags this origin's /api/ URLs exactly once, and leaves everything else untouched",
-      { timeout: 30_000 },
-      () => {
-         const origin = () => window.location.origin;
-         fc.assert(
-            fc.property(
-               fc.oneof(
-                  fc.webUrl(),
-                  path,
-                  path.map((p) => origin() + "/api" + p),
-                  fc.constantFrom(
-                     "/api/../x",
-                     "/api%2F..",
-                     "/api/x?app=aurora",
-                     origin() + "/api/x#f"
-                  )
-               ),
-               (url) => {
-                  setAppLogins(true);
-                  const out = tagIfDawnApi(url);
-                  const u = new URL(url, window.location.href);
-                  if (u.origin !== window.location.origin || !u.pathname.startsWith("/api/")) {
-                     expect(out).toBe(url);
-                     return;
-                  }
-                  const tagged = new URL(out, window.location.href);
-                  expect(tagged.searchParams.getAll("app")).toEqual(
-                     u.searchParams.has("app") ? u.searchParams.getAll("app") : ["aurora"]
-                  );
-                  expect(tagIfDawnApi(out)).toBe(out); // idempotent
+   /* Generating web URLs is costly (~2 s for this property alone on the Jetson). */
+   it("tagIfDawnApi tags this origin's /api/ URLs exactly once, and leaves everything else untouched", () => {
+      const origin = () => window.location.origin;
+      fc.assert(
+         fc.property(
+            fc.oneof(
+               fc.webUrl(),
+               path,
+               path.map((p) => origin() + "/api" + p),
+               fc.constantFrom("/api/../x", "/api%2F..", "/api/x?app=aurora", origin() + "/api/x#f")
+            ),
+            (url) => {
+               setAppLogins(true);
+               const out = tagIfDawnApi(url);
+               const u = new URL(url, window.location.href);
+               if (u.origin !== window.location.origin || !u.pathname.startsWith("/api/")) {
+                  expect(out).toBe(url);
+                  return;
                }
-            )
-         );
-      }
-   );
+               const tagged = new URL(out, window.location.href);
+               expect(tagged.searchParams.getAll("app")).toEqual(
+                  u.searchParams.has("app") ? u.searchParams.getAll("app") : ["aurora"]
+               );
+               expect(tagIfDawnApi(out)).toBe(out); // idempotent
+            }
+         )
+      );
+   });
 });
 
 /* Attachment markers as they appear in a message, valid and hostile. */

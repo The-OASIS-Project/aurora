@@ -39,26 +39,20 @@ function promiseBreaks(els: Element[]): string[] {
    return bad;
 }
 
-/* The heavier properties (each run parses documents in jsdom) get a sized run count and an
-   explicit timeout: they are a fuzz-style workload, and their time follows the machine's load. */
+/* The heavier properties (each run parses documents in jsdom) get a sized run count; every
+   property test has a fuzz-sized timeout from vitest.config.ts (the "property" project). */
 describe("renderMarkdown (property)", () => {
-   it(
-      "never emits anything that runs, fetches by itself, or forges the image gate",
-      { timeout: 60_000 },
-      () => {
-         fc.assert(
-            fc.property(fc.oneof(hostileMarkup, fc.string()), (text) => {
-               const els = parseLikeSink(renderMarkdown(text));
-               expect([
-                  ...executableBits(els),
-                  ...fetchingBits(els),
-                  ...promiseBreaks(els)
-               ]).toEqual([]);
-            }),
-            { numRuns: 500 }
-         );
-      }
-   );
+   it("never emits anything that runs, fetches by itself, or forges the image gate", () => {
+      fc.assert(
+         fc.property(fc.oneof(hostileMarkup, fc.string()), (text) => {
+            const els = parseLikeSink(renderMarkdown(text));
+            expect([...executableBits(els), ...fetchingBits(els), ...promiseBreaks(els)]).toEqual(
+               []
+            );
+         }),
+         { numRuns: 500 }
+      );
+   });
 
    it("never throws", () => {
       fc.assert(
