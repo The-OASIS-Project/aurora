@@ -36,29 +36,25 @@ function promiseBreaks(els: Element[], showImages: boolean): string[] {
    return bad;
 }
 
-/* The heavier properties (each run parses documents in jsdom) get a sized run count and an
-   explicit timeout: they are a fuzz-style workload, and their time follows the machine's load. */
+/* The heavier properties (each run parses documents in jsdom) get a sized run count; every
+   property test has a fuzz-sized timeout from vitest.config.ts (the "property" project). */
 describe("the mail body pipeline (property)", () => {
-   it(
-      "renders any HTML body to nothing that runs, fetches unasked, or links out unsafely",
-      { timeout: 60_000 },
-      () => {
-         fc.assert(
-            fc.property(hostileMarkup, fc.boolean(), (html, showImages) => {
-               const root = document.createElement("div");
-               root.append(renderEmailBody({ html, text: "" }, showImages).fragment);
-               /* Walk the nodes as inserted: the real sink never parses a string. */
-               const els = allElements(root);
-               expect([
-                  ...executableBits(els),
-                  ...fetchingBits(els),
-                  ...promiseBreaks(els, showImages)
-               ]).toEqual([]);
-            }),
-            { numRuns: 400 }
-         );
-      }
-   );
+   it("renders any HTML body to nothing that runs, fetches unasked, or links out unsafely", () => {
+      fc.assert(
+         fc.property(hostileMarkup, fc.boolean(), (html, showImages) => {
+            const root = document.createElement("div");
+            root.append(renderEmailBody({ html, text: "" }, showImages).fragment);
+            /* Walk the nodes as inserted: the real sink never parses a string. */
+            const els = allElements(root);
+            expect([
+               ...executableBits(els),
+               ...fetchingBits(els),
+               ...promiseBreaks(els, showImages)
+            ]).toEqual([]);
+         }),
+         { numRuns: 400 }
+      );
+   });
 
    it("htmlToMarkdown never throws and always returns text", () => {
       fc.assert(

@@ -64,7 +64,9 @@ The safety net is four things, and you are expected to use all of them:
    including hostile and edge-case input. Code that reads outside input (markdown,
    mail bodies, a visual's markup, DAWN's frames) also gets property tests
    (`*.property.test.ts`, [fast-check](https://fast-check.dev/)): an invariant that must
-   hold for any input, tried against generated input from `src/test/hostile.ts`.
+   hold for any input, tried against generated input from `src/test/hostile.ts`. They run as
+   their own Vitest project with a 60 s timeout (their time follows the machine's load);
+   unit tests keep the default 5 s.
 3. **The smoke test.** `npm run test:smoke` builds the production bundle (into `.smoke/`,
    never `dist/`), serves it, and loads it in headless Chromium against a fake DAWN
    (`tests/fake-dawn/`): canned replies in DAWN's own wire format, served to the real

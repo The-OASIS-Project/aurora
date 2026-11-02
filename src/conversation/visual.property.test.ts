@@ -54,8 +54,9 @@ describe("the two parses really differ where scripting matters", () => {
    });
 });
 
-/* The heavier properties (each run parses documents in jsdom) get a sized run count and an
-   explicit timeout: they are a fuzz-style workload, and their time follows the machine's load. */
+/* The heavier properties (each run parses documents in jsdom) get a sized run count; every
+   property test has a fuzz-sized timeout from vitest.config.ts (the "property" project), and the
+   heaviest (two parses per run) gets more. */
 describe("neutralizeFrames (property)", () => {
    /* A generated visual's markup is model output (reachable by prompt injection). Frame tags in it
       are neutralized as text before the sandbox parses it: a nested frame would bring back the
