@@ -229,7 +229,8 @@ if (!reactorLive)
       detail:
          "It needs WebGL, which this browser has turned off or can't use. Everything else works. A browser setting, an extension or a privacy mode may be blocking it.",
       tone: "nominal",
-      hold: 12
+      /* Kept until closed: a toast would expire while a signed-out user is still on the login card. */
+      persist: true
    });
 
 /* Ambient standby (screensaver): after the configured inactivity it fades the chrome and
