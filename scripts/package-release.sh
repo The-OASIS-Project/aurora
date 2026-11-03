@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Package a built dist/ as a release archive: aurora-<version>.tar.gz (one top-level directory,
-# aurora-<version>/) plus SHA256SUMS. Reproducible: files in sorted order, owner and group 0,
-# modes normalized (so the builder's umask doesn't show), every timestamp set to the commit's time
-# (SOURCE_DATE_EPOCH), no gzip name or time, so the same commit gives the same bytes and anyone can
-# rebuild a release and compare (RELEASING.md). Needs GNU tar.
+# Package a built dist/ for a release:
+#  - aurora-<version>.tar.gz: the bundle, in one top-level aurora-<version>/ directory;
+#  - aurora-<version>.files.sha256: every file's SHA-256 (scripts/bundle-files.sh), which is what a
+#    rebuild is compared on: the same commit builds the same files (RELEASING.md);
+#  - SHA256SUMS: the checksums of those two.
+# The archive is consistent for a given tar and gzip (sorted, owner and group 0, modes normalized
+# so the builder's umask doesn't show, every timestamp the commit's time, no gzip name or time),
+# but its bytes can differ between tar or gzip versions, which is why rebuilds compare the file
+# list. Needs GNU tar.
 #
 #   scripts/package-release.sh <dist-dir> <out-dir>
 #
@@ -34,5 +38,6 @@ tar --format=posix --sort=name --owner=0 --group=0 --numeric-owner --mode=u=rwX,
    --mtime="@$epoch" \
    --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
    -C "$stage" -cf - "$name" | gzip -9n > "$out/$name.tar.gz"
-(cd "$out" && sha256sum "$name.tar.gz" > SHA256SUMS)
+"$(dirname "$0")/bundle-files.sh" "$stage/$name" > "$out/$name.files.sha256"
+(cd "$out" && sha256sum "$name.tar.gz" "$name.files.sha256" > SHA256SUMS)
 cat "$out/SHA256SUMS"
