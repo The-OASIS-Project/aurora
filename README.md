@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/The-OASIS-Project/aurora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/The-OASIS-Project/aurora/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/The-OASIS-Project/aurora/badge)](https://scorecard.dev/viewer/?uri=github.com/The-OASIS-Project/aurora)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16307/badge)](https://www.bestpractices.dev/projects/16307)
 
 Aurora is a next-generation interface for D.A.W.N., the voice assistant at the heart of
 The OASIS Project. It's a calm, always-on, JARVIS-style screen that shows what DAWN is
