@@ -6,9 +6,11 @@ the same source) and publishes a GitHub Release with:
 
 - `aurora-<version>.tar.gz`: the built bundle (what DAWN serves at `/aurora`), in one
   `aurora-<version>/` directory, with `aurora-release.json` inside saying what it is;
-- `SHA256SUMS`: the archive's checksum;
-- a build attestation: GitHub's signed record of which workflow, from which commit, built that
-  exact archive;
+- `aurora-<version>.files.sha256`: the SHA-256 of every file in the bundle, which a rebuild is
+  compared on (below);
+- `SHA256SUMS`: the checksums of those two;
+- a build attestation for both: GitHub's signed record of which workflow, from which commit,
+  built those exact files;
 - release notes generated from the pull requests merged since the last release.
 
 ## Versions
@@ -62,20 +64,22 @@ have run from the release's tag, which only an admin can create and nobody can m
 ties the archive to a reviewed commit on `main`. `SHA256SUMS` sits beside the archive, so on its
 own it shows the download is intact, not where it came from.
 
-The archive is reproducible: the same commit gives the same bytes. To rebuild one yourself from
-the tag and compare (on Linux, with GNU tar and the Node version in `.nvmrc`):
+The build is reproducible: the same commit builds the same files (checked between GitHub's x86
+runners and an arm64 machine). To rebuild a release yourself and compare:
 
 ```bash
 git switch --detach v<x.y.z>
 npm ci
 npm run build
-SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" scripts/package-release.sh dist /tmp/aurora-rebuild
+scripts/bundle-files.sh dist | diff - aurora-<x.y.z>.files.sha256 && echo "same files"
 ```
 
-`/tmp/aurora-rebuild/SHA256SUMS` should match the release's. The build records the commit in
-`aurora-release.json` (a checkout with uncommitted changes would mark it `-dirty`, and the archive
-would differ). `.nvmrc` names Node 22 LTS rather than an exact release, so a rebuild long after
-the release may need the Node 22 release current when it was made.
+What's compared is the files, not the archive's bytes: the archive is packed the same way every
+time, but different versions of tar or gzip can encode the same files differently. The build
+records the commit in `aurora-release.json`, so the rebuild has to be from a clean checkout of
+the tag (uncommitted changes mark it `-dirty`, and that file would differ). `.nvmrc` names Node
+22 LTS rather than an exact release, so a rebuild long after the release may need the Node 22
+release current when it was made.
 
 ## Pairing with DAWN
 
