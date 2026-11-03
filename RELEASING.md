@@ -72,7 +72,11 @@ done
 
 To check against the attestation file attached to the release instead of asking GitHub for it,
 add `--bundle aurora-<x.y.z>.intoto.jsonl` to the same command (every release after v1.0.0; v1.0.0's
-attestation is kept by GitHub only).
+attestation is kept by GitHub only). That still fetches Sigstore's trust roots. To check on a
+machine without internet access, also save them while online with
+`gh attestation trusted-root > trusted_root.jsonl` and add
+`--custom-trusted-root trusted_root.jsonl` (refresh the saved file before checking a newer
+release: Sigstore rotates its keys).
 
 `gh attestation` needs a current GitHub CLI (from [cli.github.com](https://cli.github.com/)); the
 `gh` some Linux distributions package is too old to have it. All three flags matter. `--repo`
