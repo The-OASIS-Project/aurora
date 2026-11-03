@@ -10,8 +10,9 @@ the same source) and publishes a GitHub Release with:
   compared on (below);
 - `SHA256SUMS`: the checksums of those two;
 - a build attestation for both: GitHub's signed record of which workflow, from which commit,
-  built those exact files;
-- release notes generated from the pull requests merged since the last release.
+  built those exact files, kept by GitHub and also attached as `aurora-<version>.intoto.jsonl`;
+- release notes, first generated from the pull requests merged since the last release, then
+  replaced with a written summary (step 5 below).
 
 ## Versions
 
@@ -47,6 +48,13 @@ handles each optional DAWN feature flag being absent.
    through `main`'s checks), and a version that's already published. If it fails after creating
    the release's draft (a network error while uploading), "Re-run failed jobs" finishes that
    same draft.
+5. **Write the release notes.** The workflow publishes GitHub's generated list of merged pull
+   requests; replace it with a short summary for people who use Aurora (Releases, Edit, or
+   `gh release edit v<x.y.z> --notes-file notes.md`): what Aurora is (for a first-time reader),
+   what's new or fixed in words a user would use, which DAWN versions it works with, anything to
+   do when upgrading, and a link to the full list of changes
+   (`https://github.com/The-OASIS-Project/aurora/compare/v<previous>...v<x.y.z>`). Notes can
+   still be edited on an immutable release; its files and tag can't.
 
 ## Verifying a release
 
@@ -61,6 +69,10 @@ for f in aurora-<x.y.z>.tar.gz aurora-<x.y.z>.files.sha256; do
       --source-ref refs/tags/v<x.y.z> --deny-self-hosted-runners
 done
 ```
+
+To check against the attestation file attached to the release instead of asking GitHub for it,
+add `--bundle aurora-<x.y.z>.intoto.jsonl` to the same command (every release after v1.0.0; v1.0.0's
+attestation is kept by GitHub only).
 
 `gh attestation` needs a current GitHub CLI (from [cli.github.com](https://cli.github.com/)); the
 `gh` some Linux distributions package is too old to have it. All three flags matter. `--repo`
