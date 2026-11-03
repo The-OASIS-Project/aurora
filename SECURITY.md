@@ -22,8 +22,9 @@ not be.
 
 ## Supported versions
 
-Aurora doesn't publish versioned releases yet; fixes land on `main`. Run a current
-`main` and update when an advisory is published.
+Security fixes go into the latest release (see [Releases](https://github.com/The-OASIS-Project/aurora/releases))
+and land on `main` first. Older releases aren't patched: update to the latest when an advisory is
+published. How releases are made and verified: [RELEASING.md](RELEASING.md).
 
 ## Scope
 

@@ -107,8 +107,13 @@ purify.addHook("afterSanitizeAttributes", (node) => {
    placeholder naming its host; same-origin images (DAWN's /api/images), data: and blob: load as
    before. A click loads it, and that URL then stays loaded across re-renders for this page. */
 const allowedImages = new Set<string>();
-/* Marks the placeholders this module made (sanitized markdown can't carry data-* attributes). */
-const GATE_NONCE = (globalThis.crypto?.randomUUID?.() ?? String(Math.random())).replace(/-/g, "");
+/* Marks the placeholders this module made (sanitized markdown can't carry data-* attributes, so
+   this is a second lock). From the secure random source, which every browser offers in every
+   context (randomUUID exists only in a secure context, so a plain-http address fell back to
+   Math.random, which a page can predict). */
+const GATE_NONCE = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+   b.toString(16).padStart(2, "0")
+).join("");
 
 function offOrigin(src: string): URL | null {
    let u: URL;
