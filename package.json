@@ -1,7 +1,7 @@
 {
    "name": "aurora",
    "private": true,
-   "version": "1.0.0",
+   "version": "1.0.1",
    "type": "module",
    "description": "Aurora: a calm, dark, sci-fi ambient interface for DAWN, the user's own surface over DAWN's WebSocket streams.",
    "license": "GPL-3.0-or-later",
