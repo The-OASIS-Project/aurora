@@ -50,36 +50,45 @@ handles each optional DAWN feature flag being absent.
 
 ## Verifying a release
 
+Download the release's files into a folder of their own (not inside an Aurora checkout), then, in
+that folder:
+
 ```bash
 sha256sum -c SHA256SUMS
-gh attestation verify aurora-<x.y.z>.tar.gz --repo The-OASIS-Project/aurora \
-   --signer-workflow The-OASIS-Project/aurora/.github/workflows/release.yml \
-   --source-ref refs/tags/v<x.y.z> --deny-self-hosted-runners
+for f in aurora-<x.y.z>.tar.gz aurora-<x.y.z>.files.sha256; do
+   gh attestation verify "$f" --repo The-OASIS-Project/aurora \
+      --signer-workflow The-OASIS-Project/aurora/.github/workflows/release.yml \
+      --source-ref refs/tags/v<x.y.z> --deny-self-hosted-runners
+done
 ```
 
 `gh attestation` needs a current GitHub CLI (from [cli.github.com](https://cli.github.com/)); the
-`gh` some Linux distributions package is too old to have it. All three flags matter. `--repo` alone accepts an attestation from any workflow on any branch of
-the repository. `--signer-workflow` names the release workflow, and `--source-ref` requires it to
-have run from the release's tag, which only an admin can create and nobody can move. That is what
-ties the archive to a reviewed commit on `main`. `SHA256SUMS` sits beside the archive, so on its
-own it shows the download is intact, not where it came from.
+`gh` some Linux distributions package is too old to have it. All three flags matter. `--repo`
+alone accepts an attestation from any workflow on any branch of the repository.
+`--signer-workflow` names the release workflow, and `--source-ref` requires it to have run from
+the release's tag, which only an admin can create and nobody can move. That is what ties each
+file to a reviewed commit on `main`. Both files are verified: the file list is what a rebuild is
+compared on, so it must be the release's own. `SHA256SUMS` sits beside them, so on its own it
+shows the download is intact, not where it came from.
 
 The build is reproducible: the same commit builds the same files (checked between GitHub's x86
-runners and an arm64 machine). To rebuild a release yourself and compare:
+runners and an arm64 machine). To rebuild a release yourself and compare against its verified
+file list (here in `~/aurora-<x.y.z>`, the download folder above):
 
 ```bash
 git switch --detach v<x.y.z>
+git status --porcelain    # must print nothing: a clean checkout of the tag
 npm ci
 npm run build
-scripts/bundle-files.sh dist | diff - aurora-<x.y.z>.files.sha256 && echo "same files"
+scripts/bundle-files.sh dist | diff - ~/aurora-<x.y.z>/aurora-<x.y.z>.files.sha256 && echo "same files"
 ```
 
 What's compared is the files, not the archive's bytes: the archive is packed the same way every
 time, but different versions of tar or gzip can encode the same files differently. The build
-records the commit in `aurora-release.json`, so the rebuild has to be from a clean checkout of
-the tag (uncommitted changes mark it `-dirty`, and that file would differ). `.nvmrc` names Node
-22 LTS rather than an exact release, so a rebuild long after the release may need the Node 22
-release current when it was made.
+records the commit in `aurora-release.json`, so the checkout must be clean: any uncommitted or
+untracked file (a release download left in it, say) marks the commit `-dirty`, and that file
+would differ. `.nvmrc` names Node 22 LTS rather than an exact release, so a rebuild long after
+the release may need the Node 22 release current when it was made.
 
 ## Pairing with DAWN
 
