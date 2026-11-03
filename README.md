@@ -132,6 +132,9 @@ to the latest of the conversation automatically.
 
 ## Contributing, security and license
 
+- **Bugs and ideas:** open an [issue](https://github.com/The-OASIS-Project/aurora/issues). Say
+  what you did, what you expected, and what happened, with your browser and the DAWN and Aurora
+  versions (System → About shows both).
 - `CONTRIBUTING.md` - how a change gets into Aurora: the checks it has to pass and the
   standards it has to meet.
 - `SECURITY.md` - how to report a security problem privately.
