@@ -61,6 +61,19 @@ function isObject(v: unknown): v is Record<string, unknown> {
    return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/* How long a CSRF token is good for, and how many issued and used tokens are remembered. */
+const CSRF_TTL_MS = 600_000;
+const CSRF_KEEP = 1024;
+
+/* Adds to an insertion-ordered set or map's key list, dropping the oldest past `max`. */
+function remember(keys: Set<string> | Map<string, number>, max: number): void {
+   while (keys.size > max) {
+      const oldest = keys.keys().next().value;
+      if (oldest === undefined) break;
+      keys.delete(oldest);
+   }
+}
+
 export class FakeDawn {
    readonly violations: string[] = [];
    readonly log: LogEntry[] = [];
@@ -76,10 +89,14 @@ export class FakeDawn {
    readonly scenario: Scenario;
    /* Who is signed in now: starts as the scenario says, and changes with a login or logout. */
    private signedIn: { authenticated: boolean; username: string };
-   /* CSRF tokens handed out by /api/auth/csrf, and the ones a login has used. Like DAWN's signed
-      tokens, several can be valid at once (two tabs), and each works for one login attempt. */
-   private readonly csrfIssued = new Set<string>();
+   /* CSRF tokens handed out by /api/auth/csrf (with when), and the ones a login has used. Like
+      DAWN's signed tokens, several can be valid at once (two tabs), each works for one login
+      attempt, and each expires; both records are bounded like DAWN's, so a dev server on the LAN
+      can't be grown without limit (auth_crypto.h AUTH_CSRF_TIMEOUT_SEC, webui_http.c
+      CSRF_USED_NONCE_COUNT). */
+   private readonly csrfIssued = new Map<string, number>();
    private readonly csrfUsed = new Set<string>();
+   private csrfCount = 0;
    /* The transport's hook for a login ending (logout): DAWN then tells each of the login's
       sockets (force_logout) and closes it with 4002. */
    onSessionEnd: (() => void) | null = null;
@@ -145,8 +162,9 @@ export class FakeDawn {
       this.checkTag(url, false);
       /* The login flow (webui_http.c handle_auth_csrf / handle_auth_login / handle_auth_logout). */
       if (method === "GET" && url.pathname === "/api/auth/csrf") {
-         const token = `fake-csrf-${this.csrfIssued.size + 1}-${Date.now()}`;
-         this.csrfIssued.add(token);
+         const token = `fake-csrf-${++this.csrfCount}-${Date.now()}`;
+         this.csrfIssued.set(token, Date.now());
+         remember(this.csrfIssued, CSRF_KEEP);
          return { status: 200, body: { csrf_token: token } };
       }
       if (method === "POST" && url.pathname === "/api/auth/login") return this.login(body);
@@ -202,7 +220,8 @@ export class FakeDawn {
          return refuse(400, "Missing CSRF token");
       }
       const token = typeof req.csrf_token === "string" ? req.csrf_token : "";
-      if (!this.csrfIssued.has(token)) {
+      const issuedAt = this.csrfIssued.get(token);
+      if (issuedAt === undefined || Date.now() - issuedAt > CSRF_TTL_MS) {
          this.violate("a login with a CSRF token this DAWN didn't hand out");
          return refuse(403, "Invalid or expired token. Please refresh.");
       }
@@ -211,6 +230,7 @@ export class FakeDawn {
          return refuse(403, "Token already used. Please refresh.");
       }
       this.csrfUsed.add(token);
+      remember(this.csrfUsed, CSRF_KEEP);
       if (typeof req.username !== "string" || typeof req.password !== "string")
          return refuse(400, "Missing username or password");
       if (req.app !== undefined && req.app !== "aurora") return refuse(400, "Invalid app");

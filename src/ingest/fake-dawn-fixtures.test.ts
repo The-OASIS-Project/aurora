@@ -508,3 +508,47 @@ describe("the fake on JSON that isn't an object", () => {
       expect(login("1").body).toEqual({ success: false, error: "Missing CSRF token" });
    });
 });
+
+describe("the fake's CSRF records are bounded and expire, like DAWN's", () => {
+   const at = (path: string): URL => new URL(path, "https://localhost:5274");
+   const token = (fake: FakeDawn): string =>
+      (fake.http("GET", at("/api/auth/csrf?app=aurora")).body as { csrf_token: string }).csrf_token;
+   afterEach(() => vi.useRealTimers());
+
+   it("refuses a token older than ten minutes", () => {
+      vi.useFakeTimers();
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      const t = token(fake);
+      vi.advanceTimersByTime(600_001);
+      const r = fake.http(
+         "POST",
+         at("/api/auth/login?app=aurora"),
+         JSON.stringify({ csrf_token: t, username: "u", password: "p", app: "aurora" })
+      );
+      expect(r).toEqual({
+         status: 403,
+         body: { success: false, error: "Invalid or expired token. Please refresh." }
+      });
+   });
+
+   it("remembers at most 1024 issued and 1024 used tokens", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut) as unknown as Record<string, any>;
+      for (let i = 0; i < 3000; i++) token(fake as unknown as FakeDawn);
+      expect(fake.csrfIssued.size).toBe(1024);
+      for (const t of [...fake.csrfIssued.keys()])
+         (fake as unknown as FakeDawn).http(
+            "POST",
+            at("/api/auth/login?app=aurora"),
+            JSON.stringify({ csrf_token: t, username: "", password: "", app: "aurora" })
+         );
+      for (let i = 0; i < 1500; i++) {
+         const t = token(fake as unknown as FakeDawn);
+         (fake as unknown as FakeDawn).http(
+            "POST",
+            at("/api/auth/login?app=aurora"),
+            JSON.stringify({ csrf_token: t, username: "", password: "", app: "aurora" })
+         );
+      }
+      expect(fake.csrfUsed.size).toBe(1024);
+   });
+});

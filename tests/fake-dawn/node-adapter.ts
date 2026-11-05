@@ -48,6 +48,16 @@ function printable(line: string): string {
    );
 }
 
+/* The request's URL, or null when its Host header or path can't make one (a malformed request
+   from the LAN must not throw out of a server event handler, which would stop the dev server). */
+function parseUrl(req: IncomingMessage, secure: boolean, ws: boolean): URL | null {
+   try {
+      return new URL(req.url ?? "/", requestOrigin(req, secure, ws));
+   } catch {
+      return null;
+   }
+}
+
 /* A text frame's data as a string (ws hands it over as one Buffer, a list of them, or an
    ArrayBuffer). */
 function frameText(data: RawData): string {
@@ -90,7 +100,11 @@ export function attachFakeDawn(
    });
 
    const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
-      const url = new URL(req.url ?? "/", requestOrigin(req, opts.secure, true));
+      const url = parseUrl(req, opts.secure, true);
+      if (!url) {
+         socket.destroy(); // a Host or path no URL can be built from: not a request to answer
+         return;
+      }
       if (url.pathname !== "/ws" && url.pathname !== "/music-ws") return; // not DAWN's
       const protocols = (req.headers["sec-websocket-protocol"] ?? "")
          .split(",")
@@ -127,7 +141,12 @@ export function attachFakeDawn(
    server.on("upgrade", onUpgrade);
 
    const middleware = (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
-      const url = new URL(req.url ?? "/", requestOrigin(req, opts.secure, false));
+      const url = parseUrl(req, opts.secure, false);
+      if (!url) {
+         res.statusCode = 400;
+         res.end();
+         return;
+      }
       if (!url.pathname.startsWith("/api/")) {
          next();
          return;
