@@ -1,6 +1,7 @@
 /* A fake DAWN at the protocol level: canned HTTP replies and WebSocket frames, in DAWN's own wire
    format, for the REAL client (DawnIngest) to talk to. Transport-agnostic: an adapter (Playwright
-   today, a Node server later) feeds it requests and frames and sends back what it returns. Plan:
+   for the smoke test, tests/smoke/fake-dawn-page.ts; a Node server for `npm run dev:fake`,
+   node-adapter.ts) feeds it requests and frames and sends back what it returns. Plan:
    docs/FAKE_DAWN_PLAN.md.
 
    Every request is checked against what DAWN would accept, and anything the fake doesn't expect is
@@ -68,19 +69,50 @@ export class FakeDawn {
    private askedTagged = false;
 
    readonly scenario: Scenario;
+   /* Who is signed in now: starts as the scenario says, and changes with a login or logout. */
+   private signedIn: { authenticated: boolean; username: string };
+   /* CSRF tokens handed out by /api/auth/csrf, and the ones a login has used. Like DAWN's signed
+      tokens, several can be valid at once (two tabs), and each works for one login attempt. */
+   private readonly csrfIssued = new Set<string>();
+   private readonly csrfUsed = new Set<string>();
+   /* The transport's hook for a login ending (logout): DAWN then tells each of the login's
+      sockets (force_logout) and closes it with 4002. */
+   onSessionEnd: (() => void) | null = null;
+   /* Called with each violation as it happens (a dev server logs it; the smoke test reads the
+      list at the end). */
+   onViolation: ((what: string) => void) | null = null;
 
-   constructor(scenario: Scenario) {
+   /* At most this many log entries are kept (the oldest dropped), and the request and socket
+      lists are bounded the same way; a long `npm run dev:fake` session sets it. Unbounded by
+      default: the smoke test reads the whole transcript. */
+   private readonly maxLog: number;
+
+   constructor(scenario: Scenario, opts: { maxLog?: number } = {}) {
       this.scenario = scenario;
+      this.maxLog = opts.maxLog ?? Infinity;
       this.appLogins = scenario.features?.includes("app_logins") === true;
+      this.signedIn = { authenticated: scenario.authenticated, username: scenario.username };
+   }
+
+   /* The scenario as it stands now (who is signed in may have changed since it started). */
+   private current(): Scenario {
+      return { ...this.scenario, ...this.signedIn };
+   }
+
+   /* Appends to a list, dropping the oldest past maxLog. */
+   private keep<T>(list: T[], item: T): void {
+      list.push(item);
+      if (list.length > this.maxLog) list.splice(0, list.length - this.maxLog);
    }
 
    private note(dir: LogEntry["dir"], text: string): void {
-      this.log.push({ dir, at: Date.now() - this.started, text });
+      this.keep(this.log, { dir, at: Date.now() - this.started, text });
    }
 
    violate(what: string): void {
-      this.violations.push(what);
+      this.keep(this.violations, what);
       this.note("ws", `VIOLATION: ${what}`);
+      this.onViolation?.(what);
    }
 
    /* Whether a DAWN URL carries the app tag, and whether it should. The first /api/auth/status is
@@ -95,25 +127,88 @@ export class FakeDawn {
          this.violate(`${url.pathname} is missing ?app=aurora (this DAWN keeps per-app logins)`);
    }
 
-   /* An HTTP request to DAWN. Routed by pathname: the query only carries the app tag. */
-   http(method: string, url: URL): HttpReply {
+   /* An HTTP request to DAWN, with its body for a POST. Routed by pathname: the query only
+      carries the app tag. */
+   http(method: string, url: URL, body?: string): HttpReply {
       this.note("http", `${method} ${url.pathname}${url.search}`);
       if (method === "GET" && url.pathname === "/api/auth/status") {
          this.checkTag(url, true);
          const tagged = url.searchParams.get("app") === "aurora";
          if (tagged) this.askedTagged = true;
-         return { status: 200, body: authStatus(this.scenario, tagged) };
+         return { status: 200, body: authStatus(this.current(), tagged) };
       }
       this.checkTag(url, false);
+      /* The login flow (webui_http.c handle_auth_csrf / handle_auth_login / handle_auth_logout). */
+      if (method === "GET" && url.pathname === "/api/auth/csrf") {
+         const token = `fake-csrf-${this.csrfIssued.size + 1}-${Date.now()}`;
+         this.csrfIssued.add(token);
+         return { status: 200, body: { csrf_token: token } };
+      }
+      if (method === "POST" && url.pathname === "/api/auth/login") return this.login(body);
+      /* DAWN always answers 200 and clears the cookie, signed in or not; only a login that
+         existed has sockets to end. */
+      if (method === "POST" && url.pathname === "/api/auth/logout") {
+         this.askedTagged = false;
+         if (this.signedIn.authenticated) {
+            this.signedIn = { authenticated: false, username: "" };
+            this.onSessionEnd?.();
+         }
+         return { status: 200, body: { success: true } };
+      }
       this.violate(`unanswered HTTP request: ${method} ${url.pathname}`);
       return { status: 404, body: { error: "Not found (fake DAWN)" } };
+   }
+
+   /* POST /api/auth/login, checked in DAWN's order with its statuses and text (webui_http.c
+      handle_auth_login): the JSON, the CSRF token (missing, not one handed out, already used;
+      it's spent before the credentials are looked at), the fields, the app. Any username is a
+      user here (this is a fake) except one DAWN couldn't have (empty, or padded with spaces:
+      DAWN looks names up exactly), and any non-empty password is right. A new login ends the
+      browser's previous one, as DAWN's does. */
+   private login(body: string | undefined): HttpReply {
+      const refuse = (status: number, error: string): HttpReply => ({
+         status,
+         body: { success: false, error }
+      });
+      let req: { csrf_token?: unknown; username?: unknown; password?: unknown; app?: unknown };
+      try {
+         req = JSON.parse(body ?? "") as typeof req;
+      } catch {
+         this.violate("a login whose body isn't JSON");
+         return refuse(400, "Invalid JSON");
+      }
+      if (!("csrf_token" in req)) {
+         this.violate("a login without a CSRF token");
+         return refuse(400, "Missing CSRF token");
+      }
+      const token = typeof req.csrf_token === "string" ? req.csrf_token : "";
+      if (!this.csrfIssued.has(token)) {
+         this.violate("a login with a CSRF token this DAWN didn't hand out");
+         return refuse(403, "Invalid or expired token. Please refresh.");
+      }
+      if (this.csrfUsed.has(token)) {
+         this.violate("a login reusing a CSRF token (fetch a new one per attempt)");
+         return refuse(403, "Token already used. Please refresh.");
+      }
+      this.csrfUsed.add(token);
+      if (typeof req.username !== "string" || typeof req.password !== "string")
+         return refuse(400, "Missing username or password");
+      if (req.app !== undefined && req.app !== "aurora") return refuse(400, "Invalid app");
+      if (this.appLogins && req.app !== "aurora")
+         this.violate('a login without "app":"aurora" (this DAWN keeps per-app logins)');
+      const username = req.username;
+      if (!username || username !== username.trim() || !req.password)
+         return refuse(401, "Invalid credentials");
+      if (this.signedIn.authenticated) this.onSessionEnd?.(); // the browser's previous login
+      this.signedIn = { authenticated: true, username };
+      return { status: 200, body: { success: true, username, is_admin: false } };
    }
 
    /* The client opened a socket, asking for these subprotocols. `origin` is where DAWN serves its
       socket (the page's own origin, as ws/wss): the client must open it same-origin, since the
       login cookie rides the handshake and DAWN checks the Origin. Returns false to refuse it. */
    open(url: URL, protocols: string[], origin: string): boolean {
-      this.sockets.push(url.href);
+      this.keep(this.sockets, url.href);
       this.note("ws", `open ${url.href} [${protocols.join(", ")}]`);
       if (url.origin !== origin) {
          this.violate(`socket opened on ${url.origin}, not DAWN's ${origin}`);
@@ -123,7 +218,12 @@ export class FakeDawn {
          this.violate(`unexpected socket: ${url.pathname}`);
          return false;
       }
-      if (!this.scenario.authenticated) this.violate("a socket opened while signed out");
+      if (!this.signedIn.authenticated) {
+         /* DAWN authenticates the socket from the login cookie: without a login there is no
+            session for it. */
+         this.violate("a socket opened while signed out");
+         return false;
+      }
       this.checkTag(url, false);
       /* Without dawn-1.0, real DAWN routes the socket to its HTTP handler and silently drops
          every frame. */
@@ -147,10 +247,10 @@ export class FakeDawn {
          return [];
       }
       const type = typeof msg.type === "string" ? msg.type : "";
-      this.requests.push(type);
+      this.keep(this.requests, type);
       const payload = (msg.payload ?? {}) as Record<string, unknown>;
       let out: object[];
-      if (type === "init" || type === "reconnect") out = connectFrames(this.scenario);
+      if (type === "init" || type === "reconnect") out = connectFrames(this.current());
       else if (ANSWERED.has(type)) out = answerFrame(type, payload);
       else if (SILENT.has(type)) out = [];
       /* DAWN reads `req` from the payload (webui_protocol.c webui_protocol_payload_req). */

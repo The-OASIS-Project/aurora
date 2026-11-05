@@ -4,13 +4,39 @@ import { defineConfig, type Plugin } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { CLIENT_PROTOCOL } from "./src/ingest/contract.ts";
 
+// The Node versions Aurora supports, from package.json's `engines` ("^22.22.2 || ^24.15.0 ||
+// >=26.0.0": a caret pins the major, >= is a floor). Checked here so `dev`, `dev:fake` and `build`
+// stop with a plain message on an older Node instead of a crash from inside it (Node 22.21's
+// HTTP/2 server, for one, crashes on the first WebSocket upgrade).
+const PACKAGE = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as {
+   version: string;
+   engines?: { node?: string };
+};
+function nodeSupported(version: string, range: string): boolean {
+   const parse = (v: string): number[] => v.split(".").map((n) => Number.parseInt(n, 10) || 0);
+   const atLeast = (v: number[], min: number[]): boolean => {
+      for (let i = 0; i < 3; i++)
+         if ((v[i] ?? 0) !== (min[i] ?? 0)) return (v[i] ?? 0) > (min[i] ?? 0);
+      return true;
+   };
+   const v = parse(version);
+   return range.split("||").some((part) => {
+      const m = /^\s*(\^|>=)\s*(\d+(?:\.\d+){0,2})\s*$/.exec(part);
+      if (!m) return false;
+      const min = parse(m[2]);
+      return m[1] === ">=" ? atLeast(v, min) : v[0] === min[0] && atLeast(v, min);
+   });
+}
+const nodeRange = PACKAGE.engines?.node;
+if (nodeRange && !nodeSupported(process.versions.node, nodeRange))
+   throw new Error(
+      `Aurora needs Node ${nodeRange}; this is Node ${process.versions.node}. ` +
+         "With nvm, run `nvm use` in this folder (it reads .nvmrc)."
+   );
+
 // App version, read from package.json at config time and injected as a global
 // (__APP_VERSION__) so the About dialog can show it without a runtime JSON import.
-const APP_VERSION = (
-   JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as {
-      version: string;
-   }
-).version;
+const APP_VERSION = PACKAGE.version;
 
 // The commit the build came from: AURORA_BUILD_COMMIT when set (the release workflow sets it to
 // the tagged commit), else this checkout's HEAD, marked "-dirty" when it has uncommitted changes;
@@ -57,6 +83,36 @@ function releaseManifest(): Plugin {
    };
 }
 
+// `npm run dev:fake` (`--mode fake`): the dev server with a fake DAWN in place of the real one
+// (tests/fake-dawn/, the same fake the smoke test uses), for working on Aurora with no daemon. The
+// real client talks to it as it would to DAWN; FAKE_DAWN_SCENARIO picks the scenario (default
+// signedIn; see tests/fake-dawn/scenarios.ts). Loaded only in that mode, so `dev` and `build` never
+// touch it. docs/FAKE_DAWN_PLAN.md phase 2.
+function fakeDawn(): Plugin {
+   return {
+      name: "aurora-fake-dawn",
+      apply: "serve",
+      async configureServer(server) {
+         const { SCENARIOS } = await import("./tests/fake-dawn/scenarios.ts");
+         const { attachFakeDawn } = await import("./tests/fake-dawn/node-adapter.ts");
+         const name = process.env.FAKE_DAWN_SCENARIO ?? "signedIn";
+         if (!Object.hasOwn(SCENARIOS, name))
+            throw new Error(
+               `FAKE_DAWN_SCENARIO=${name}: not a scenario (${Object.keys(SCENARIOS).join(", ")})`
+            );
+         if (!server.httpServer) return; // middleware mode: no server of our own to attach to
+         const node = attachFakeDawn(
+            server.httpServer as import("node:http").Server,
+            SCENARIOS[name as keyof typeof SCENARIOS],
+            { secure: true, log: (line) => server.config.logger.warn(line) }
+         );
+         server.middlewares.use(node.middleware);
+         server.httpServer.on("close", () => node.close());
+         server.config.logger.info(`  fake DAWN: scenario "${name}"`);
+      }
+   };
+}
+
 // Minimal by design. Vite is the "make" of this project: one command to compile
 // TypeScript and serve with live-reload. The render layer is hand-rolled, so
 // there is nothing framework-specific to configure.
@@ -99,6 +155,7 @@ function stripCookieSecurity(setCookie: string[]): string[] {
 // reach a real DAWN, since the test's fake DAWN answers every DAWN request in the page.
 export default defineConfig(({ mode }) => {
    const smoke = mode === "smoke";
+   const fake = mode === "fake";
    return {
       // Served under /aurora when co-located behind DAWN (same-origin subpath, so DAWN's
       // WebUI keeps "/"). One base for dev and build, so the dev server also serves at
@@ -107,54 +164,60 @@ export default defineConfig(({ mode }) => {
       // import.meta.env.BASE_URL so they resolve under this base too.
       base: "/aurora/",
       define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
-      plugins: smoke ? [releaseManifest()] : [basicSsl(), releaseManifest()],
+      plugins: smoke
+         ? [releaseManifest()]
+         : fake
+           ? [basicSsl(), releaseManifest(), fakeDawn()]
+           : [basicSsl(), releaseManifest()],
       server: smoke
          ? {}
-         : {
-              host: true,
-              port: 5273,
-              proxy: {
-                 "/api": {
-                    target: DAWN_TARGET,
-                    changeOrigin: true,
-                    secure: false,
-                    configure: (proxy) => {
-                       proxy.on("proxyRes", (proxyRes) => {
-                          const sc = proxyRes.headers["set-cookie"];
-                          if (sc) proxyRes.headers["set-cookie"] = stripCookieSecurity(sc);
-                       });
-                    }
-                 },
-                 "/ws": {
-                    target: DAWN_TARGET,
-                    changeOrigin: true,
-                    secure: false,
-                    ws: true
-                 },
-                 // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
-                 // same-origin like /ws so it works for remote browsers too. It authenticates with
-                 // the session token AND the login cookie (__Host-dawn_session, or __Host-dawn_session_aurora
-                 // with DAWN's per-app logins; DAWN checks the cookie's user owns the session), which the
-                 // browser sends here and the proxy forwards on the upgrade. NOTE: the path must NOT start with
-                 // "/ws", or the broader "/ws" rule above captures it and routes it to the
-                 // main server (which does not speak dawn-music). Hence "/music-ws".
-                 "/music-ws": {
-                    target: DAWN_MUSIC_TARGET,
-                    changeOrigin: true,
-                    secure: false,
-                    ws: true
-                 },
-                 // Vendor scripts (Chart.js, ...) that model-generated `<dawn-visual type=html>`
-                 // blocks reference as `<script src="/js/vendor/X">`; the visual renderer fetches
-                 // and inlines them into its sandboxed iframe. DAWN serves them from its www root,
-                 // and in production the HUD is same-origin with DAWN so this path resolves there too.
-                 "/js/vendor": {
-                    target: DAWN_TARGET,
-                    changeOrigin: true,
-                    secure: false
-                 }
-              }
-           },
+         : fake
+           ? { host: true, port: 5274 } // beside `npm run dev` (5273); no DAWN proxy
+           : {
+                host: true,
+                port: 5273,
+                proxy: {
+                   "/api": {
+                      target: DAWN_TARGET,
+                      changeOrigin: true,
+                      secure: false,
+                      configure: (proxy) => {
+                         proxy.on("proxyRes", (proxyRes) => {
+                            const sc = proxyRes.headers["set-cookie"];
+                            if (sc) proxyRes.headers["set-cookie"] = stripCookieSecurity(sc);
+                         });
+                      }
+                   },
+                   "/ws": {
+                      target: DAWN_TARGET,
+                      changeOrigin: true,
+                      secure: false,
+                      ws: true
+                   },
+                   // The dedicated dawn-music audio stream (subprotocol `dawn-music`), proxied
+                   // same-origin like /ws so it works for remote browsers too. It authenticates with
+                   // the session token AND the login cookie (__Host-dawn_session, or __Host-dawn_session_aurora
+                   // with DAWN's per-app logins; DAWN checks the cookie's user owns the session), which the
+                   // browser sends here and the proxy forwards on the upgrade. NOTE: the path must NOT start with
+                   // "/ws", or the broader "/ws" rule above captures it and routes it to the
+                   // main server (which does not speak dawn-music). Hence "/music-ws".
+                   "/music-ws": {
+                      target: DAWN_MUSIC_TARGET,
+                      changeOrigin: true,
+                      secure: false,
+                      ws: true
+                   },
+                   // Vendor scripts (Chart.js, ...) that model-generated `<dawn-visual type=html>`
+                   // blocks reference as `<script src="/js/vendor/X">`; the visual renderer fetches
+                   // and inlines them into its sandboxed iframe. DAWN serves them from its www root,
+                   // and in production the HUD is same-origin with DAWN so this path resolves there too.
+                   "/js/vendor": {
+                      target: DAWN_TARGET,
+                      changeOrigin: true,
+                      secure: false
+                   }
+                }
+             },
       build: {
          target: "es2022",
          outDir: "dist"

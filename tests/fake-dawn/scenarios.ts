@@ -143,6 +143,12 @@ export function connectFrames(s: Scenario): object[] {
    ];
 }
 
+/* What DAWN sends each socket of a login that just ended, before closing it with 4002
+   (webui_login_sweep.c webui_conn_end_login, webui_send.c send_force_logout_impl). */
+export function forceLogout(): object {
+   return { type: "force_logout", payload: { reason: "Signed out" } };
+}
+
 /* DAWN echoes request_type and req only when they're short, clean text (webui_protocol.c
    webui_protocol_echo_ok: at most 64 bytes of valid UTF-8, no control characters). */
 const echoOk = (v: string | undefined): v is string =>

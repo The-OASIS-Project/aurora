@@ -388,3 +388,102 @@ describe("/api/auth/status through the fake", () => {
 it("every verb the fake answers is round-tripped above", () => {
    expect([...ANSWERED].filter((v) => !tested.has(v))).toEqual([]);
 });
+
+describe("the fake's login flow", () => {
+   const at = (path: string): URL => new URL(path, "https://localhost:5274");
+   const login = (fake: FakeDawn, body: object) =>
+      fake.http("POST", at("/api/auth/login?app=aurora"), JSON.stringify(body));
+
+   it("signs in with the CSRF token it handed out, as the username given", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      const { csrf_token } = fake.http("GET", at("/api/auth/csrf?app=aurora")).body as {
+         csrf_token: string;
+      };
+      const r = login(fake, { csrf_token, username: "tester", password: "x", app: "aurora" });
+      expect(r).toEqual({
+         status: 200,
+         body: { success: true, username: "tester", is_admin: false }
+      });
+      expect(fake.http("GET", at("/api/auth/status?app=aurora")).body).toMatchObject({
+         authenticated: true,
+         username: "tester"
+      });
+      expect(fake.violations).toEqual([]);
+   });
+
+   const token = (fake: FakeDawn): string =>
+      (fake.http("GET", at("/api/auth/csrf?app=aurora")).body as { csrf_token: string }).csrf_token;
+   const creds = { username: "u", password: "p", app: "aurora" };
+
+   it("refuses a CSRF token it didn't hand out, and a missing one, as DAWN does", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      expect(login(fake, { ...creds, csrf_token: "forged" })).toEqual({
+         status: 403,
+         body: { success: false, error: "Invalid or expired token. Please refresh." }
+      });
+      expect(login(fake, creds)).toEqual({
+         status: 400,
+         body: { success: false, error: "Missing CSRF token" }
+      });
+   });
+
+   it("spends a token on the first attempt, even a failed one, and keeps two tabs' tokens valid", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      const a = token(fake);
+      const b = token(fake); // a second tab
+      expect(login(fake, { ...creds, csrf_token: a, password: "" }).status).toBe(401);
+      expect(login(fake, { ...creds, csrf_token: a }).body).toEqual({
+         success: false,
+         error: "Token already used. Please refresh."
+      });
+      expect(login(fake, { ...creds, csrf_token: b }).status).toBe(200);
+   });
+
+   it("refuses a name DAWN couldn't have (padded with spaces) and a wrong app", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      expect(login(fake, { ...creds, csrf_token: token(fake), username: " u" }).body).toEqual({
+         success: false,
+         error: "Invalid credentials"
+      });
+      expect(login(fake, { ...creds, csrf_token: token(fake), app: "webui2" }).body).toEqual({
+         success: false,
+         error: "Invalid app"
+      });
+   });
+
+   it("logging out ends the login and tells the transport; signed out it's still a 200", () => {
+      const fake = new FakeDawn(SCENARIOS.signedIn);
+      let ended = 0;
+      fake.onSessionEnd = () => ended++;
+      expect(fake.http("POST", at("/api/auth/logout?app=aurora")).body).toEqual({ success: true });
+      expect(ended).toBe(1);
+      expect(fake.http("GET", at("/api/auth/status?app=aurora")).body).toMatchObject({
+         authenticated: false
+      });
+      expect(fake.http("POST", at("/api/auth/logout?app=aurora"))).toEqual({
+         status: 200,
+         body: { success: true }
+      });
+      expect(ended).toBe(1); // no login, no sockets to end
+   });
+
+   it("a new login ends the browser's previous one, as DAWN's does", () => {
+      const fake = new FakeDawn(SCENARIOS.signedIn);
+      let ended = 0;
+      fake.onSessionEnd = () => ended++;
+      expect(login(fake, { ...creds, csrf_token: token(fake) }).status).toBe(200);
+      expect(ended).toBe(1);
+   });
+
+   it("refuses a socket while signed out", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      const ws = new URL("wss://localhost:5274/ws?app=aurora");
+      expect(fake.open(ws, ["dawn-1.0"], "wss://localhost:5274")).toBe(false);
+   });
+
+   it("keeps at most maxLog entries when asked to", () => {
+      const fake = new FakeDawn(SCENARIOS.signedIn, { maxLog: 3 });
+      for (let i = 0; i < 10; i++) fake.http("GET", at("/api/auth/status?app=aurora"));
+      expect(fake.log).toHaveLength(3);
+   });
+});
