@@ -39,6 +39,7 @@ HTTPS). Log in with your DAWN username and password.
 | Command | What it does |
 |---------|--------------|
 | `npm run dev` | Vite dev server with hot-module reload at `https://localhost:5273`. Edit a file, the browser updates. |
+| `npm run dev:fake` | The same, against a fake DAWN at `https://localhost:5274`: work on Aurora with no daemon (below). |
 | `npm run typecheck` | `tsc --noEmit`. The fast correctness check. Run this constantly. |
 | `npm run build` | `tsc` (full typecheck) then `vite build` to a static bundle in `dist/`. |
 | `npm run preview` | Serve the built `dist/` bundle locally to sanity-check a production build. |
@@ -94,14 +95,24 @@ the summary is on the run's page and the HTML report is an artifact. See
 
 ## Develop without a live DAWN
 
-`ingest` is the only boundary to DAWN, and `DawnIngest` (`src/ingest/dawn-ws.ts`) is the
-real WebSocket client. The older way to work without a daemon, swapping in `StubIngest`
-(`src/ingest/stub.ts`, a second client that emits canned data), no longer builds: the real
-client has long outgrown it. It is being replaced by a fake DAWN that the real client talks
-to (`tests/fake-dawn/`), so offline work exercises the same login, resume and frame
-handling a real DAWN does. The smoke test uses it today; a dev server on it
-(`npm run dev:fake`) is the next step ([docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md)).
-Until then, UI work runs against a DAWN instance (below).
+`npm run dev:fake` runs the dev server with a fake DAWN in place of the real one, at
+`https://localhost:5274` (beside `npm run dev` on 5273). The real client (`DawnIngest`) talks to it
+exactly as it would to DAWN, over the same `/api` and `/ws` paths, so login, resume and frame
+handling are the real code paths. The fake lives in `tests/fake-dawn/`, and the smoke test uses the
+same one.
+
+- **Scenarios:** `FAKE_DAWN_SCENARIO=signedOut npm run dev:fake` picks one from
+  `tests/fake-dawn/scenarios.ts` (the default is `signedIn`). Signed out, any non-empty username
+  and password sign in; logging out works as with DAWN.
+- **What it models today:** DAWN's connect frames, the core boot requests (settings, models, one
+  saved conversation with a transcript, jobs, music state, metrics, the heartbeat), empty watches
+  and library, and Home Assistant and the calendar as subsystems this DAWN lacks. Requests it
+  doesn't model get DAWN's "don't know that" answer, and the terminal names each one.
+- **Not yet:** sending a message, live replies, notices and fuller panel data (phase 2b in
+  [docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md)). For those, use a DAWN instance (below).
+
+`StubIngest` (`src/ingest/stub.ts`), the older second client that emitted canned data, no longer
+builds and is retired in phase 3.
 
 ## Pointing at a DAWN instance
 

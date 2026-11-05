@@ -1,6 +1,6 @@
 # A fake DAWN for tests and offline development
 
-Status: plan (2026-11-02), revised after a plan review. Phase 1 built; phases 2 and 3 follow.
+Status: plan (2026-11-02), revised after a plan review. Phases 1 and 2a built; 2b and 3 follow.
 
 ## Why
 
@@ -141,9 +141,13 @@ serves), starts the preview in smoke mode and runs the specs.
 
 ### Phase 2a: offline development
 
-A Node adapter (http + `ws`) over the same core, mounted by a Vite plugin under `npm run dev:fake`
-and also runnable standalone (a later login-flow test can use real cookies against it). `npm run
-dev` stays exactly as it is. Scenario chosen by a query parameter or env var.
+Built: a Node adapter (`tests/fake-dawn/node-adapter.ts`: http + `ws`) over the same core,
+mounted by a Vite plugin under `npm run dev:fake` (port 5274, beside `npm run dev`, which is
+unchanged); the scenario comes from `FAKE_DAWN_SCENARIO`. The core now models DAWN's login flow
+(CSRF token, login, logout with `force_logout` and a 4002 close, with DAWN's own refusals), so a
+signed-out scenario can be signed into, and the smoke test covers that round trip through the
+Playwright adapter. A standalone server (no Vite) waits until something needs it: the adapter is
+written to be mounted on any Node HTTP server.
 
 ### Phase 2b: parity fixtures
 

@@ -2,9 +2,9 @@
    makes outside the app's own files, and every socket it opens, goes to the fake (a socket route
    that never connects to a server); nothing reaches the network. */
 
-import type { Page } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
 import { FakeDawn } from "../fake-dawn/fake-dawn.ts";
-import type { Scenario } from "../fake-dawn/scenarios.ts";
+import { forceLogout, type Scenario } from "../fake-dawn/scenarios.ts";
 
 /* Where the app is served (vite.config.ts `base`). */
 export const BASE = "/aurora/";
@@ -38,7 +38,7 @@ export async function attachFakeDawn(
          return;
       }
       if (own && url.pathname.startsWith("/api/")) {
-         const reply = fake.http(req.method(), url);
+         const reply = fake.http(req.method(), url, req.postData() ?? undefined);
          await route.fulfill({
             status: reply.status,
             contentType: "application/json",
@@ -52,6 +52,17 @@ export async function attachFakeDawn(
 
    /* DAWN's socket is same-origin with the page (http -> ws, https -> wss). */
    const wsOrigin = origin.replace(/^http/, "ws");
+   /* A logout ends the login: DAWN tells each of its sockets, then closes it with 4002
+      (webui_login_sweep.c). */
+   const open = new Set<WebSocketRoute>();
+   fake.onSessionEnd = () => {
+      for (const ws of open) {
+         ws.send(JSON.stringify(forceLogout()));
+         void ws.close({ code: 4002, reason: "logged out" });
+      }
+      open.clear();
+   };
+
    await page.routeWebSocket(
       () => true,
       (ws) => {
@@ -59,6 +70,14 @@ export async function attachFakeDawn(
             void ws.close({ code: 1008, reason: "fake DAWN: unexpected socket" });
             return;
          }
+         open.add(ws);
+         /* Setting onClose turns off Playwright's own close handling, so finish the close here:
+            without it a close the page starts (a reconnect after a dead link) never completes,
+            and the client's onclose never runs. */
+         ws.onClose((code, reason) => {
+            open.delete(ws);
+            void ws.close({ code, reason });
+         });
          ws.onMessage((data) => {
             if (typeof data !== "string") {
                fake.violate("a binary frame on the main socket (no audio is expected)");

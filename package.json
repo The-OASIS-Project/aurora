@@ -10,6 +10,7 @@
    },
    "scripts": {
       "dev": "vite",
+      "dev:fake": "vite --mode fake",
       "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tests/tsconfig.json",
       "lint": "eslint .",
       "format": "prettier --write .",
@@ -28,6 +29,7 @@
       "@playwright/test": "1.64.1",
       "@types/node": "22.20.5",
       "@types/three": "^0.185.1",
+      "@types/ws": "8.18.2",
       "@vitejs/plugin-basic-ssl": "2.3.0",
       "@vitest/coverage-v8": "5.0.5",
       "eslint": "10.13.0",
@@ -40,7 +42,8 @@
       "typescript": "6.0.3",
       "typescript-eslint": "8.71.2",
       "vite": "8.3.4",
-      "vitest": "5.0.5"
+      "vitest": "5.0.5",
+      "ws": "8.22.0"
    },
    "dependencies": {
       "@fontsource/ibm-plex-mono": "^5.3.0",

@@ -140,6 +140,7 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 ```
 npm install
 npm run dev      # https://localhost:5273 (Vite dev server, HTTPS + DAWN proxy)
+npm run dev:fake # https://localhost:5274, against the fake DAWN in tests/fake-dawn/ (no daemon)
 npm run build    # tsc typecheck + static bundle in dist/
 ```
 

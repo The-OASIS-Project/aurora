@@ -165,3 +165,25 @@ test("a context that stays lost: the notice says so, and goes when it's back", a
    await expect(notice).toHaveCount(0);
    expect(await reactorIsLive(page)).toBe(true);
 });
+
+test("signs in from the login card, and logs out back to it", async ({ page, dawn }) => {
+   test.setTimeout(120_000); // two reloads (sign-in and logout); slow where WebGL runs in software
+   const fake = await dawn.boot(SCENARIOS.signedOut);
+   await expect(page.locator("#login-card .login-status")).toHaveText("Awaiting link");
+   await page.locator('#login-card input[name="username"]').fill("tester");
+   await page.locator('#login-card input[name="password"]').fill("a password");
+   await page.locator("#login-card .login-connect").click();
+   /* A first sign-in in this browser reloads onto a clean page, then resumes on the new login. */
+   await expect(page.locator("#link-chip .link-text")).toHaveText("Linked", { timeout: 30_000 });
+   expect(fake.requests).toContain("init");
+
+   await page.locator("#link-chip").click();
+   await page.getByRole("button", { name: "Log out", exact: true }).click();
+   /* DAWN ends the login (force_logout, then a 4002 close); Aurora clears the user's state and
+      reloads to the login card. */
+   await expect(page.locator("#login-card")).toBeVisible({ timeout: 30_000 });
+   await expect(page.locator("#login-card .login-status")).toHaveText("Awaiting link");
+   expect(fake.log.some((e) => e.text === "POST /api/auth/logout?app=aurora")).toBe(true);
+   /* The wipe really happened: the user this browser last signed in as is forgotten. */
+   expect(await page.evaluate(() => localStorage.getItem("dawn.hero.lastUser"))).toBeNull();
+});
