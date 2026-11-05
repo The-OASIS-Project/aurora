@@ -106,12 +106,21 @@ export function attachFakeDawn(
       wss.handleUpgrade(req, socket, head, (ws) => {
          sockets.add(ws);
          ws.on("close", () => sockets.delete(ws));
+         /* An oversized or malformed frame: ws reports it here and closes the connection. Without
+            a listener Node would treat it as uncaught and stop the dev server. */
+         ws.on("error", (e) => fake.violate(`socket error: ${e.message}`));
          ws.on("message", (data, isBinary) => {
             if (isBinary) {
                fake.violate("a binary frame on the main socket (no audio is expected)");
                return;
             }
-            for (const frame of fake.message(frameText(data))) ws.send(JSON.stringify(frame));
+            /* Nothing a client sends may take the dev server down: a fault in the fake is a
+               violation to read, and that frame gets no answer. */
+            try {
+               for (const frame of fake.message(frameText(data))) ws.send(JSON.stringify(frame));
+            } catch (e) {
+               fake.violate(`the fake failed on a frame: ${(e as Error).message}`);
+            }
          });
       });
    };
@@ -125,7 +134,13 @@ export function attachFakeDawn(
       }
       const method = req.method ?? "GET";
       const answer = (body: string | undefined): void => {
-         const reply = fake.http(method, url, body);
+         let reply: { status: number; body: unknown };
+         try {
+            reply = fake.http(method, url, body);
+         } catch (e) {
+            fake.violate(`the fake failed on ${method} ${url.pathname}: ${(e as Error).message}`);
+            reply = { status: 500, body: { success: false, error: "Server error" } };
+         }
          res.statusCode = reply.status;
          res.setHeader("Content-Type", "application/json");
          res.setHeader("Cache-Control", "no-store");

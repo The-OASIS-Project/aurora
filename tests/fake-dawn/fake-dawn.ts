@@ -56,6 +56,11 @@ export interface HttpReply {
    body: unknown;
 }
 
+/* A JSON object (not null, not an array, not a scalar). */
+function isObject(v: unknown): v is Record<string, unknown> {
+   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 export class FakeDawn {
    readonly violations: string[] = [];
    readonly log: LogEntry[] = [];
@@ -170,13 +175,28 @@ export class FakeDawn {
          status,
          body: { success: false, error }
       });
-      let req: { csrf_token?: unknown; username?: unknown; password?: unknown; app?: unknown };
+      let parsed: unknown;
       try {
-         req = JSON.parse(body ?? "") as typeof req;
+         parsed = JSON.parse(body ?? "");
       } catch {
+         parsed = null;
+      }
+      /* json-c gives DAWN no object for unparseable text or a bare `null` ("Invalid JSON"); any
+         other value that isn't an object has no fields, so its token is missing. */
+      if (parsed === null) {
          this.violate("a login whose body isn't JSON");
          return refuse(400, "Invalid JSON");
       }
+      if (!isObject(parsed)) {
+         this.violate("a login whose body isn't a JSON object");
+         return refuse(400, "Missing CSRF token");
+      }
+      const req = parsed as {
+         csrf_token?: unknown;
+         username?: unknown;
+         password?: unknown;
+         app?: unknown;
+      };
       if (!("csrf_token" in req)) {
          this.violate("a login without a CSRF token");
          return refuse(400, "Missing CSRF token");
@@ -239,13 +259,19 @@ export class FakeDawn {
    /* One text frame from the client; returns the frames to send back, in order. */
    message(text: string): object[] {
       this.note("in", text);
-      let msg: { type?: unknown; payload?: unknown };
+      let parsed: unknown;
       try {
-         msg = JSON.parse(text) as typeof msg;
+         parsed = JSON.parse(text);
       } catch {
          this.violate(`a frame that isn't JSON: ${text.slice(0, 80)}`);
          return [];
       }
+      /* Valid JSON isn't always a message: `null`, `1` and `[]` are dropped as DAWN drops them. */
+      if (!isObject(parsed)) {
+         this.violate(`a frame that isn't a JSON object: ${text.slice(0, 80)}`);
+         return [];
+      }
+      const msg = parsed as { type?: unknown; payload?: unknown };
       const type = typeof msg.type === "string" ? msg.type : "";
       this.keep(this.requests, type);
       const payload = (msg.payload ?? {}) as Record<string, unknown>;

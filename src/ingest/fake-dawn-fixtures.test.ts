@@ -487,3 +487,24 @@ describe("the fake's login flow", () => {
       expect(fake.log).toHaveLength(3);
    });
 });
+
+describe("the fake on JSON that isn't an object", () => {
+   const at = (path: string): URL => new URL(path, "https://localhost:5274");
+
+   it("drops a frame like null or 1 as a violation, without throwing", () => {
+      const fake = new FakeDawn(SCENARIOS.signedIn);
+      expect(fake.message("null")).toEqual([]);
+      expect(fake.message("1")).toEqual([]);
+      expect(fake.violations).toEqual([
+         "a frame that isn't a JSON object: null",
+         "a frame that isn't a JSON object: 1"
+      ]);
+   });
+
+   it("refuses a login body like null or 1 as DAWN does", () => {
+      const fake = new FakeDawn(SCENARIOS.signedOut);
+      const login = (body: string) => fake.http("POST", at("/api/auth/login?app=aurora"), body);
+      expect(login("null").body).toEqual({ success: false, error: "Invalid JSON" });
+      expect(login("1").body).toEqual({ success: false, error: "Missing CSRF token" });
+   });
+});
