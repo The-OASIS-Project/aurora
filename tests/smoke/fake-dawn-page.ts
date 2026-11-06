@@ -10,10 +10,12 @@ import { forceLogout, superseded, type Scenario } from "../fake-dawn/scenarios.t
 export const BASE = "/aurora/";
 
 /* One fake DAWN for a test, and the tabs it serves: `attach` puts it in place of DAWN for one more
-   page of the same browser (they share its sessions, as two tabs share one DAWN). */
+   page of the same browser (they share its sessions, as two tabs share one DAWN). It runs until
+   `close`, at the end of the test: a tab closing doesn't stop a reply another tab may resume. */
 export interface PageDawn {
    fake: FakeDawn;
    attach(page: Page): Promise<void>;
+   close(): void;
 }
 
 export function pageDawn(scenario: Scenario, origin: string): PageDawn {
@@ -24,7 +26,6 @@ export function pageDawn(scenario: Scenario, origin: string): PageDawn {
       own goes to one connection or to all but one (deliveryTargets). */
    const sockets = new Map<string, WebSocketRoute>();
    let nextConn = 0;
-   let pages = 0;
    /* A socket the fake closes itself gets no onClose from Playwright, so it's dropped here. */
    const shut = (conn: string, frame: object, code: number, reason: string): void => {
       const ws = sockets.get(conn);
@@ -47,7 +48,6 @@ export function pageDawn(scenario: Scenario, origin: string): PageDawn {
 
    const attach = async (page: Page): Promise<void> => {
       if (page.isClosed()) throw new Error("fake DAWN: attach to a closed page");
-      pages++;
       /* Playwright reports no close for the sockets of a page that closes, so they're let go
          here (in DAWN their sessions lose their owner the same way). */
       const mine = new Set<string>();
@@ -56,14 +56,14 @@ export function pageDawn(scenario: Scenario, origin: string): PageDawn {
             sockets.delete(conn);
             fake.closed(conn);
          }
-         if (--pages === 0) fake.dispose();
       });
 
       /* The browser this scenario stands for (a returning user's localStorage), set before any
-         app code runs, once per tab: a reload keeps what the app wrote. */
+         app code runs, once per browser (its tabs share localStorage): a reload, or another tab,
+         keeps what the app wrote since. */
       await page.addInitScript((storage: Record<string, string>) => {
-         if (sessionStorage.getItem("fake-dawn-seeded") !== null) return;
-         sessionStorage.setItem("fake-dawn-seeded", "1");
+         if (localStorage.getItem("fake-dawn-seeded") !== null) return;
+         localStorage.setItem("fake-dawn-seeded", "1");
          for (const [k, v] of Object.entries(storage)) localStorage.setItem(k, v);
       }, scenario.storage);
 
@@ -127,16 +127,5 @@ export function pageDawn(scenario: Scenario, origin: string): PageDawn {
       );
    };
 
-   return { fake, attach };
-}
-
-/* A fake DAWN in place of DAWN for one page. */
-export async function attachFakeDawn(
-   page: Page,
-   scenario: Scenario,
-   origin: string
-): Promise<FakeDawn> {
-   const dawn = pageDawn(scenario, origin);
-   await dawn.attach(page);
-   return dawn.fake;
+   return { fake, attach, close: () => fake.dispose() };
 }

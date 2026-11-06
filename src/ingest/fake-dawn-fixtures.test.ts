@@ -1111,6 +1111,17 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
       ).toEqual([first, second].sort());
    });
 
+   it("the store limit holds for conversations made in the same second", () => {
+      const store = new FakeDawn(SCENARIOS.signedIn, {
+         storeLimit: { conversations: 2, messages: 10 }
+      }).store;
+      const made = Array.from(
+         { length: 5 },
+         () => store.create("", { mode: "adaptive", effort: "medium" }).id
+      );
+      expect(store.list().map((c) => c.id)).toEqual([made[4], made[3]]);
+   });
+
    it("a busy session with no socket is never freed for a new one", () => {
       vi.useFakeTimers();
       const { f, send, session } = fake();

@@ -78,9 +78,12 @@ export class ConversationStore {
       return this.conversations.get(id);
    }
 
-   /* Most recently updated first, as DAWN lists them. */
+   /* Most recently updated first, as DAWN lists them (a tie, within the same second, goes to the
+      newer conversation). */
    list(): FakeConversation[] {
-      return [...this.conversations.values()].sort((a, b) => b.updated_at - a.updated_at);
+      return [...this.conversations.values()].sort(
+         (a, b) => b.updated_at - a.updated_at || b.id - a.id
+      );
    }
 
    /* A new, empty conversation (DAWN creates it on `new_conversation`, with the title given or
@@ -97,11 +100,10 @@ export class ConversationStore {
          pick: { ...pick }
       };
       this.conversations.set(id, conversation);
-      while (this.conversations.size > this.limit.conversations) {
-         const oldest = this.list().at(-1);
-         if (!oldest || oldest === conversation) break;
-         this.conversations.delete(oldest.id);
-      }
+      /* Over the limit, the least recently updated go, never the one just made. */
+      const rest = this.list().filter((c) => c !== conversation);
+      while (this.conversations.size > this.limit.conversations && rest.length > 0)
+         this.conversations.delete(rest.pop()!.id);
       return conversation;
    }
 

@@ -72,7 +72,7 @@ export const test = base.extend<{ dawn: Dawn }>({
             return tab;
          }
       });
-      if (!fake) return;
+      if (!fake || !dawn) return;
       /* Let anything startup throws just after the last assertion land before reading the problems:
          two animation frames (a state wait, not a sleep). */
       if (!page.isClosed())
@@ -82,6 +82,7 @@ export const test = base.extend<{ dawn: Dawn }>({
                   requestAnimationFrame(() => requestAnimationFrame(() => done()))
                )
          );
+      dawn.close();
       await testInfo.attach("frames.log", { body: fake.transcript(), contentType: "text/plain" });
       expect.soft(fake.violations, "requests the fake DAWN didn't expect").toEqual([]);
       expect.soft(problems, "errors in the page").toEqual([]);
