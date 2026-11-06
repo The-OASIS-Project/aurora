@@ -1,6 +1,7 @@
 # A fake DAWN for tests and offline development
 
-Status: plan (2026-11-02), revised after a plan review. Phases 1 and 2a built; 2b and 3 follow.
+Status: plan (2026-11-02), revised after a plan review. Phases 1, 2a and 2b-1
+built; 2b-2 and 3 follow.
 
 ## Why
 
@@ -149,10 +150,37 @@ signed-out scenario can be signed into, and the smoke test covers that round tri
 Playwright adapter. A standalone server (no Vite) waits until something needs it: the adapter is
 written to be mounted on any Node HTTP server.
 
-### Phase 2b: parity fixtures
+### Phase 2b: interactions, then parity fixtures
 
-Fixtures for what the stub showed (notices, jobs, music state, the panels' data), so nothing is lost
-when the stub goes.
+**2b-1 (built): interactions.** The core answers what a person does. A typed turn gets a canned
+reply streamed in DAWN's order for a plain text reply (`tests/fake-dawn/turns.ts`, read from
+webui_text_processing.c, session_manager_llm.c, webui_server.c, webui_broadcasts.c: thinking,
+the user row saved and echoed, speaking, the stream, `stream_end` with `will_persist`, the reply
+row's `message_appended`, the context frame, idle). No reasoning stream, tools, speech or injected
+context. The turn is saved in a per-fake conversation store (`conversations.ts`) so the picker and
+a reload agree. Sessions work as DAWN's do: `init` makes one with a new 32-hex token, a
+`reconnect` carrying a token of this login takes that session back (`reconnected:true`) and evicts
+the connection that held it (`session_superseded`, then close 4001), an unknown token gets a new
+session, and a session outlives its socket until the login ends. As in DAWN, a connection's first
+frame needs a free slot (7: DAWN's eighth is its own), a full table answers `SESSION_LIMIT` and is
+retried on the next frame, and an evicted connection is still answered until it closes (the fake
+flags a change sent from one). With no idle clock, the fake frees the least recently used session
+with no socket and no turn running when full. A session holds the reasoning picks and a
+turn queue of 16 (turns run one at a time, each in the conversation it was sent in; a closed tab's
+turns still finish and are saved), and its frames go to whichever connection owns it, so a reload
+mid-reply gets the rest. Each connection has its own active conversation; a turn naming one the
+user has runs there. The user's other connections get only `message_appended` and
+`conversation_list_changed` (without the sender's `client_ref`). `new_conversation`,
+`clear_session` and `set_session_llm` work: the one model's reasoning, picks stored per session and
+conversation, the effective values fitted to the model's capabilities and `reasoning_adjusted` set
+when a field the request set was fitted. Frames sent later go through an `onPush` hook with a
+recipient (one connection, or all but one), which both adapters route by connection; the Playwright
+adapter serves several tabs from one fake. Smoke tests send a message (the streamed reply, one
+bubble per row) and open a second tab, which takes the session over until the first takes it back.
+
+**2b-2: parity fixtures.** A richer scenario for `npm run dev:fake` with what the stub showed
+(notices, a running job, music state, watches, library items, the calendar, Home Assistant),
+so nothing is lost when the stub goes; the smoke scenarios stay lean.
 
 ### Phase 3: retire StubIngest
 

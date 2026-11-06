@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DawnIngest } from "./dawn-ws.ts";
 import { setAppLogins } from "../util/dawn-app.ts";
-import { ANSWERED, FakeDawn } from "../../tests/fake-dawn/fake-dawn.ts";
+import { ANSWERED, FakeDawn, INTERACTIVE, type Delivery } from "../../tests/fake-dawn/fake-dawn.ts";
 import {
    CONVERSATION_ID,
    SCENARIOS,
@@ -10,6 +10,7 @@ import {
    USERNAME,
    answerFrame,
    connectFrames,
+   superseded,
    unknownType
 } from "../../tests/fake-dawn/scenarios.ts";
 
@@ -30,6 +31,8 @@ const clients: Array<Record<string, any>> = [];
 /* The verbs whose answers this file round-trips: each `answer()` call adds its verb. A meta-test
    checks it covers every verb the fake answers, so a new answer can't go untested. */
 const tested = new Set<string>(["init", "reconnect"]); // the connect frames, tested below
+/* The interactive requests the tests below send (the same check for INTERACTIVE). */
+const interacted = new Set<string>();
 function answer(verb: string, payload: Record<string, unknown> = {}): object[] {
    tested.add(verb);
    return answerFrame(verb, payload);
@@ -100,8 +103,9 @@ afterEach(() => {
 describe("the connect frames", () => {
    it("session: stores the token and takes the user's zone", () => {
       const c = client();
-      c.frame(connectFrames(SCENARIOS.signedIn)[0]);
-      expect(localStorage.getItem("dawn.hero.sessionToken")).toBe("fake-session-token");
+      const token = "a1".repeat(16);
+      c.frame(connectFrames(SCENARIOS.signedIn, { token, reconnected: false, sessionId: 3 })[0]);
+      expect(localStorage.getItem("dawn.hero.sessionToken")).toBe(token);
       expect(c.called("telemetry", "setTimezone")).toEqual([["UTC"]]);
    });
 
@@ -294,6 +298,27 @@ describe("the answers", () => {
       expect(c.called("conversationList", "setActive")).toEqual([[CONVERSATION_ID]]);
       expect(localStorage.getItem("dawn.hero.convId")).toBe(String(CONVERSATION_ID));
       expect(c.ing.reanchoring).toBe(false);
+   });
+
+   it("set_active_conversation without an id: DAWN's own refusal", () => {
+      expect(answer("set_active_conversation", {})[0]).toEqual({
+         type: "set_active_conversation_response",
+         payload: { success: false, error: "Missing conversation id" }
+      });
+   });
+
+   it("set_active_conversation of a conversation that's gone: a fresh chat", () => {
+      const c = client();
+      c.ing.convId = 999;
+      c.ing.reanchoring = true;
+      const reply = answer("set_active_conversation", { conversation_id: 999 });
+      expect(reply[0]).toEqual({
+         type: "set_active_conversation_response",
+         payload: { success: false, conversation_id: 999, error: "Conversation unavailable" }
+      });
+      for (const f of reply) c.frame(f);
+      expect(c.ing.convId).toBe(0);
+      expect(c.called("conversationList", "setActive")).toEqual([[0]]);
    });
 
    it("UNKNOWN_TYPE for an optional subsystem: quiet, and not asked again", () => {
@@ -551,4 +576,623 @@ describe("the fake's CSRF records are bounded and expire, like DAWN's", () => {
       }
       expect(fake.csrfUsed.size).toBe(1024);
    });
+});
+
+describe("the fake's interactive requests", () => {
+   type Frame = { type: string; payload: Record<string, any> };
+   const fast = { firstTokenMs: 10, chunkMs: 1 };
+   /* A fake with fast pacing whose pushed frames are collected (with who each went to), and a
+      sender for one connection's frames (each request type sent counts as covered). */
+   function interactive(scenario = SCENARIOS.signedIn, timing = fast) {
+      const fake = new FakeDawn(scenario, { timing });
+      const pushed: Array<Frame & { to: Delivery }> = [];
+      fake.onPush = (f, to) => pushed.push({ ...(f as Frame), to });
+      /* Each connection sends init first, as the client does. */
+      const connected = new Set<string>();
+      const send = (type: string, payload: object = {}, conn = "default"): Frame[] => {
+         if (!connected.has(conn)) {
+            connected.add(conn);
+            fake.message(JSON.stringify({ type: "init", payload: {} }), conn);
+         }
+         if (INTERACTIVE.has(type)) interacted.add(type);
+         return fake.message(JSON.stringify({ type, payload }), conn) as Frame[];
+      };
+      const to = (who: Delivery) =>
+         pushed.filter((f) => JSON.stringify(f.to) === JSON.stringify(who));
+      return { fake, pushed, send, to };
+   }
+   const mine = { conn: "default" };
+   const others = { except: "default" };
+   afterEach(() => vi.useRealTimers());
+
+   it("a turn in a conversation: echoed at once, the reply streams, both rows saved", () => {
+      vi.useFakeTimers();
+      const { fake, pushed, send, to } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      const now = send("text", { text: "hello there", client_ref: "7" });
+      expect(now.map((f) => f.type)).toEqual([
+         "state",
+         "conversation_list_changed",
+         "transcript",
+         "message_appended"
+      ]);
+      expect(now[2].payload).toMatchObject({
+         role: "user",
+         text: "hello there",
+         conversation_id: CONVERSATION_ID,
+         server_saved: true,
+         client_ref: "7"
+      });
+      expect(now[3].payload).toMatchObject({ role: "user", stream_id: 0, client_ref: "7" });
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 1); // the user row
+      vi.runAllTimers();
+      const types = to(mine).map((f) => f.type);
+      expect(types.slice(0, 4)).toEqual([
+         "metrics_update",
+         "state",
+         "metrics_update",
+         "stream_start"
+      ]);
+      expect(types.slice(-7)).toEqual([
+         "metrics_update",
+         "stream_end",
+         "conversation_list_changed",
+         "message_appended",
+         "context",
+         "state",
+         "metrics_update"
+      ]);
+      const end = pushed.find((f) => f.type === "stream_end")!;
+      expect(end.payload).toMatchObject({ reason: "complete", will_persist: true });
+      const reply = pushed
+         .filter((f) => f.type === "stream_delta")
+         .map((f) => f.payload.delta)
+         .join("");
+      expect(reply).toContain("You said:");
+      expect(reply).toContain("> hello there");
+      const saved = fake.store.get(CONVERSATION_ID)!.messages;
+      expect(saved.length).toBe(before + 2);
+      expect(saved.at(-1)).toMatchObject({ role: "assistant", content: reply });
+      const appended = to(mine).find((f) => f.type === "message_appended")!;
+      expect(appended.payload).toMatchObject({
+         role: "assistant",
+         message_id: saved.at(-1)!.id,
+         stream_id: end.payload.stream_id
+      });
+      expect(fake.violations).toEqual([]);
+   });
+
+   it("the user's other tabs get only the saved rows and the list changes, no client_ref", () => {
+      vi.useFakeTimers();
+      const { send, to } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      send("text", { text: "hi", client_ref: "4" });
+      vi.runAllTimers();
+      const theirs = to(others);
+      expect(theirs.map((f) => [f.type, f.payload.role ?? f.payload.reason])).toEqual([
+         ["conversation_list_changed", "bumped"],
+         ["message_appended", "user"],
+         ["conversation_list_changed", "bumped"],
+         ["message_appended", "assistant"]
+      ]);
+      for (const f of theirs) expect(f.payload.client_ref).toBeUndefined();
+   });
+
+   it("its frames are ones the real client handles: the echo, a reply bubble, the saved reply", () => {
+      vi.useFakeTimers();
+      const { pushed, send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const now = send("text", { text: "hi", client_ref: "1" });
+      vi.runAllTimers();
+      for (const f of [
+         now[2],
+         pushed.find((p) => p.type === "message_appended" && p.payload.role === "assistant")!
+      ])
+         carries(f, ["conversation_id", "message_id"]);
+      carries(
+         pushed.find((f) => f.type === "stream_end")!,
+         ["stream_id", "will_persist"]
+      );
+      const c = client();
+      c.ing.convId = CONVERSATION_ID;
+      for (const f of [...now, ...pushed.filter((p) => "conn" in p.to)]) c.frame(f);
+      expect(c.called("conversation", "startReply")).toHaveLength(1);
+      expect(c.called("conversation", "appendDelta").length).toBe(
+         pushed.filter((f) => f.type === "stream_delta").length
+      );
+      expect(c.called("conversation", "endReply")).toHaveLength(1);
+   });
+
+   it("turns run one at a time: a second waits for the first, and a full queue is refused", () => {
+      vi.useFakeTimers();
+      const { send, to } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      send("text", { text: "first" });
+      expect(send("text", { text: "second", client_ref: "2" })).toEqual([]);
+      vi.runAllTimers();
+      const mineNow = to(mine);
+      const ends = mineNow.flatMap((f, i) => (f.type === "stream_end" ? [i] : []));
+      const echo = mineNow.findIndex((f) => f.type === "transcript");
+      expect(ends).toHaveLength(2);
+      expect(echo).toBeGreaterThan(ends[0]); // the second turn starts after the first ends
+      expect(mineNow[echo].payload).toMatchObject({ text: "second", client_ref: "2" });
+
+      send("text", { text: "running" });
+      for (let i = 0; i < 16; i++) expect(send("text", { text: `q${i}` })).toEqual([]);
+      expect(send("text", { text: "one too many", client_ref: "9" })[0].payload).toMatchObject({
+         code: "TURN_QUEUE_FULL",
+         /* DAWN's text has an em dash; built here so this source stays free of one. */
+         message: `You have too many messages queued ${String.fromCharCode(0x2014)} wait for the current reply.`,
+         client_ref: "9"
+      });
+   });
+
+   it("a queued turn runs in the conversation it was sent in, even after the tab moves on", () => {
+      vi.useFakeTimers();
+      const { fake, send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      send("text", { text: "first" });
+      send("text", { text: "queued" });
+      const fresh = send("new_conversation")[1].payload.conversation_id as number;
+      vi.runAllTimers();
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 4);
+      expect(fake.store.get(fresh)!.messages).toEqual([]);
+   });
+
+   it("a closed tab's queued turns still run and are saved; only the other tabs hear of them", () => {
+      vi.useFakeTimers();
+      const { fake, pushed, send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      send("text", { text: "first" });
+      send("text", { text: "queued" });
+      fake.closed("default");
+      const closedAt = pushed.length;
+      vi.runAllTimers();
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 4);
+      const after = pushed.slice(closedAt);
+      /* With the tab gone the session has no connection: the saved rows go to every connection
+         (all but none), and nothing is addressed to a connection. */
+      expect(after.every((f) => JSON.stringify(f.to) === JSON.stringify({ except: "" }))).toBe(
+         true
+      );
+      expect(after.filter((f) => f.type === "message_appended")).toHaveLength(3);
+   });
+
+   it("a turn naming a conversation runs there, as DAWN re-anchors to it", () => {
+      vi.useFakeTimers();
+      const { fake, send } = interactive();
+      const other = send("new_conversation")[1].payload.conversation_id as number;
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const now = send("text", { text: "here", conversation_id: other });
+      expect(now[0].payload.conversation_id).toBe(other);
+      vi.runAllTimers();
+      expect(fake.store.get(other)!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+      /* A conversation the user doesn't have is ignored: the session's own is used. */
+      expect(send("text", { text: "x", conversation_id: 999 })[0].payload.conversation_id).toBe(
+         other
+      );
+   });
+
+   it("each connection is its own session: a new chat in one tab leaves the other's", () => {
+      vi.useFakeTimers();
+      const { send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID }, "a");
+      send("load_conversation", { conversation_id: CONVERSATION_ID }, "b");
+      const created = send("new_conversation", {}, "a")[1].payload.conversation_id as number;
+      expect(send("text", { text: "in a" }, "a")[0].payload.conversation_id).toBe(created);
+      expect(send("text", { text: "in b" }, "b")[0].payload.conversation_id).toBe(CONVERSATION_ID);
+   });
+
+   it("new_conversation creates one the next turn runs in; clear_session leaves it (nothing saved)", () => {
+      vi.useFakeTimers();
+      const { fake, pushed, send, to } = interactive();
+      const created = send("new_conversation", { save_current: true, title: "Fresh chat" });
+      expect(created.map((f) => f.type)).toEqual([
+         "conversation_list_changed",
+         "new_conversation_response"
+      ]);
+      expect(to(others).map((f) => f.type)).toEqual(["conversation_list_changed"]);
+      const id = created[1].payload.conversation_id as number;
+      expect(created[1].payload).toEqual({ success: true, conversation_id: id, is_private: false });
+      expect(fake.store.get(id)).toMatchObject({ title: "Fresh chat", messages: [] });
+      expect(fake.store.get(send("new_conversation")[1].payload.conversation_id)!.title).toBe(
+         "New Conversation"
+      );
+      send("load_conversation", { conversation_id: id });
+      expect(send("text", { text: "first" })[2].payload.conversation_id).toBe(id);
+      vi.runAllTimers();
+      expect(fake.store.get(id)!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+
+      expect(send("clear_session")).toEqual([
+         { type: "clear_session_response", payload: { success: true } }
+      ]);
+      pushed.length = 0;
+      const unsaved = send("text", { text: "no conversation" });
+      expect(unsaved.map((f) => f.type)).toEqual(["state", "transcript"]);
+      expect(unsaved[0].payload.conversation_id).toBeUndefined();
+      expect(unsaved[1].payload.server_saved).toBeUndefined();
+      vi.runAllTimers();
+      expect(pushed.find((f) => f.type === "stream_end")!.payload).toMatchObject({
+         conversation_id: 0
+      });
+      expect(pushed.find((f) => f.type === "stream_end")!.payload.will_persist).toBeUndefined();
+      expect(to(others)).toEqual([]);
+      expect(fake.store.get(id)!.messages).toHaveLength(2); // unchanged
+   });
+
+   it("set_session_llm: picks are kept, the effective values fitted to the model and marked", () => {
+      const { fake, send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const low = send("set_session_llm", { reasoning_effort: "low" });
+      expect(low[0].payload).toMatchObject({
+         success: true,
+         provider: "claude",
+         thinking_mode: "adaptive",
+         reasoning_effort: "low",
+         reasoning_adjusted: false
+      });
+      expect(low[1].type).toBe("context");
+      expect(send("set_session_llm", { reasoning_effort: "max" })[0].payload).toMatchObject({
+         reasoning_effort: "high",
+         reasoning_effort_pick: "max",
+         reasoning_adjusted: true
+      });
+      /* "enabled" (older clients' "reasoning on") and "auto" are never a fit (llm_capabilities.c). */
+      for (const mode of ["enabled", "auto"])
+         expect(send("set_session_llm", { thinking_mode: mode })[0].payload).toMatchObject({
+            thinking_mode: "adaptive",
+            thinking_mode_pick: mode,
+            reasoning_adjusted: false
+         });
+      /* Off keeps the effort pick, and isn't a fit; an unknown name is ignored. */
+      expect(send("set_session_llm", { thinking_mode: "disabled" })[0].payload).toMatchObject({
+         thinking_mode: "disabled",
+         reasoning_adjusted: false
+      });
+      expect(send("set_session_llm", { reasoning_effort: "ludicrous" })[0].payload).toMatchObject({
+         reasoning_effort_pick: "max",
+         reasoning_adjusted: false
+      });
+      expect(fake.store.get(CONVERSATION_ID)!.pick).toEqual({ mode: "disabled", effort: "max" });
+      /* A refusal still echoes the config; a provider name DAWN doesn't know is ignored. */
+      expect(send("set_session_llm", { provider: "openai" })[0].payload).toMatchObject({
+         success: false,
+         error: "API key not configured for requested provider",
+         thinking_mode: "disabled",
+         model: expect.any(String),
+         reasoning_adjusted: false
+      });
+      for (const provider of ["Claude", "foo"])
+         expect(send("set_session_llm", { provider })[0].payload.success).toBe(true);
+      /* get_config reports the session's reasoning. */
+      expect(
+         (send("get_config")[0].payload.llm_runtime as Record<string, unknown>).thinking_mode
+      ).toBe("disabled");
+      /* A load restores the conversation's picks; a new chat starts with the session's. */
+      send("clear_session"); // so the reset doesn't stamp the conversation too
+      send("set_session_llm", { type: "reset" });
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const id = send("new_conversation")[1].payload.conversation_id as number;
+      expect(fake.store.get(id)!.pick).toEqual({ mode: "disabled", effort: "max" });
+      /* The echo means to the client what it says: the shown reasoning follows it. */
+      const c = client();
+      c.frame(low[0]);
+      expect([c.ing.llm.reasoning, c.ing.llm.effort]).toEqual(["adaptive", "low"]);
+   });
+
+   it("only space, tab, CR and LF make a turn empty, as in DAWN", () => {
+      vi.useFakeTimers(); // the non-empty one runs a turn
+      const { send } = interactive();
+      expect(send("text", { text: " \t\r\n", client_ref: "3" })[0].payload).toMatchObject({
+         code: "EMPTY_MESSAGE",
+         client_ref: "3"
+      });
+      expect(send("text", { text: String.fromCharCode(0xa0) })[0].type).toBe("state"); // a no-break space
+   });
+
+   it("an empty turn naming a conversation still moves the session there, as DAWN re-anchors first", () => {
+      vi.useFakeTimers();
+      const { send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const other = send("new_conversation")[1].payload.conversation_id as number;
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      expect(send("text", { text: "", conversation_id: other })[0].payload.code).toBe(
+         "EMPTY_MESSAGE"
+      );
+      expect(send("text", { text: "next" })[0].payload.conversation_id).toBe(other);
+   });
+
+   it("a bad client_ref is refused (naming no turn) and recorded; a non-string text is read as JSON", () => {
+      vi.useFakeTimers();
+      const { fake, send } = interactive();
+      for (const ref of [7, "", "x".repeat(65), "tab\there", null]) {
+         const [err] = send("text", { text: "hi", client_ref: ref });
+         expect(err.payload).toEqual({
+            code: "INVALID_CLIENT_REF",
+            message: "client_ref must be 1 to 64 printable ASCII characters",
+            severity: "error",
+            recoverable: true
+         });
+      }
+      expect(fake.violations).toHaveLength(5);
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      expect(send("text", { text: 42 })[2].payload.text).toBe("42");
+   });
+
+   it("with no pacing the whole turn is answered at once and the reply still saved", () => {
+      const { fake, pushed, send } = interactive(SCENARIOS.signedIn, {
+         firstTokenMs: 0,
+         chunkMs: 0
+      });
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      const now = send("text", { text: "quick" });
+      expect(now.at(-1)!.type).toBe("metrics_update");
+      expect(now.some((f) => f.type === "stream_end")).toBe(true);
+      expect(pushed.every((f) => "except" in f.to)).toBe(true);
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 2);
+   });
+
+   it("a logout ends the sessions: nothing scheduled is sent, and a new login starts fresh", () => {
+      vi.useFakeTimers();
+      const { fake, pushed, send } = interactive();
+      const at = (path: string): URL => new URL(path, "https://localhost:5274");
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      send("set_session_llm", { reasoning_effort: "low" });
+      send("text", { text: "cut off" });
+      fake.http("POST", at("/api/auth/logout?app=aurora"));
+      pushed.length = 0;
+      vi.runAllTimers();
+      expect(pushed).toEqual([]);
+      const { csrf_token } = fake.http("GET", at("/api/auth/csrf?app=aurora")).body as {
+         csrf_token: string;
+      };
+      const body = { csrf_token, username: "u", password: "p", app: "aurora" };
+      expect(fake.http("POST", at("/api/auth/login?app=aurora"), JSON.stringify(body)).status).toBe(
+         200
+      );
+      /* The old socket is gone with the login (anything it still sends is dropped); the new
+         login's socket gets a new session. */
+      expect(send("text", { text: "late" })).toEqual([]);
+      expect(send("text", { text: "after" }, "next")[0].payload.conversation_id).toBeUndefined();
+      expect(send("set_session_llm", {}, "next")[0].payload.reasoning_effort).toBe("medium");
+   });
+
+   it("a fault while sending a scheduled frame is a violation, not a throw", () => {
+      vi.useFakeTimers();
+      const { fake, send } = interactive();
+      fake.onPush = () => {
+         throw new Error("socket gone");
+      };
+      send("text", { text: "hi" });
+      expect(() => vi.runAllTimers()).not.toThrow();
+      expect(fake.violations.join("\n")).toContain("socket gone");
+      /* The session isn't left busy: the next turn runs at once. */
+      expect(send("text", { text: "again" })[0].type).toBe("state");
+   });
+});
+
+describe("the fake's sessions, keyed by token as in DAWN", () => {
+   type Frame = { type: string; payload: Record<string, any> };
+   function fake() {
+      const f = new FakeDawn(SCENARIOS.signedIn, { timing: { firstTokenMs: 10, chunkMs: 1 } });
+      const evicted: string[] = [];
+      const pushed: Array<Frame & { to: Delivery }> = [];
+      f.onEvict = (conn) => evicted.push(conn);
+      f.onPush = (fr, to) => pushed.push({ ...(fr as Frame), to });
+      const send = (conn: string, type: string, payload: object = {}): Frame[] =>
+         f.message(JSON.stringify({ type, payload }), conn) as Frame[];
+      const session = (conn: string, type = "init", payload: object = {}) =>
+         send(conn, type, payload)[0].payload;
+      return { f, evicted, pushed, send, session };
+   }
+   afterEach(() => vi.useRealTimers());
+
+   it("init makes a new session with a new 32-hex token; reconnect takes it back", () => {
+      const { f, evicted, send, session } = fake();
+      const a = session("a");
+      expect(a.token).toMatch(/^[0-9a-f]{32}$/);
+      expect(a.reconnected).toBe(false);
+      const b = session("b");
+      expect(b.token).not.toBe(a.token);
+      expect(b.session_id).not.toBe(a.session_id);
+      send("a", "set_session_llm", { reasoning_effort: "low" });
+      const back = session("a2", "reconnect", { token: a.token });
+      expect(back).toMatchObject({ token: a.token, reconnected: true, session_id: a.session_id });
+      /* The session's reasoning came with it; the connection's conversation didn't. */
+      expect(send("a2", "set_session_llm", {})[0].payload.reasoning_effort).toBe("low");
+      expect(send("a2", "text", { text: "hi" })[0].payload.conversation_id).toBeUndefined();
+      expect(evicted).toEqual(["a"]);
+      expect(f.violations).toEqual([]);
+      /* DAWN still answers the evicted connection until its socket closes, and a change it sends
+         acts on the session; the client backs off instead, so one is a fault. */
+      expect(send("a", "ping")[0].type).toBe("pong");
+      send("a", "clear_session");
+      expect(f.violations).toEqual([
+         "clear_session from a connection whose session was taken over"
+      ]);
+   });
+
+   it("a token DAWN doesn't know gets a new session, not an error", () => {
+      const { evicted, session } = fake();
+      const s = session("a", "reconnect", { token: "f".repeat(32) });
+      expect(s.reconnected).toBe(false);
+      expect(s.token).not.toBe("f".repeat(32));
+      expect(evicted).toEqual([]);
+   });
+
+   it("a reload mid-reply: the rest of the reply goes to the connection that took over", () => {
+      vi.useFakeTimers();
+      const { pushed, send, session } = fake();
+      const { token } = session("a");
+      send("a", "text", { text: "a long one" });
+      vi.advanceTimersByTime(15);
+      session("a2", "reconnect", { token });
+      const from = pushed.length;
+      vi.runAllTimers();
+      const rest = pushed.slice(from).filter((p) => "conn" in p.to);
+      expect(rest.length).toBeGreaterThan(0);
+      expect(rest.every((p) => (p.to as { conn: string }).conn === "a2")).toBe(true);
+      expect(rest.some((p) => p.type === "stream_end")).toBe(true);
+   });
+
+   it("at most 7 sessions (DAWN's first slot is its own); a full table refuses, then retries", () => {
+      const { f, session, send } = fake();
+      const tokens = Array.from({ length: 7 }, (_, i) => session(`c${i}`).token as string);
+      expect(send("c7", "init")[0].payload).toMatchObject({
+         code: "SESSION_LIMIT",
+         message: "Maximum sessions reached"
+      });
+      /* Even a reconnect with a good token needs a slot first, as in DAWN. */
+      f.closed("c0");
+      expect(send("c8", "reconnect", { token: tokens[0] })[0].payload.code).toBe("SESSION_LIMIT");
+      expect(f.violations).toHaveLength(2);
+      /* Another idle session is freed for the next try (the fake's stand-in for DAWN's idle
+         expiry), and the session the reconnect names is kept for it. */
+      f.closed("c1");
+      expect(session("c8", "reconnect", { token: tokens[0] })).toMatchObject({
+         token: tokens[0],
+         reconnected: true
+      });
+      /* The session c8's first frame made was dropped when it took c0's back: room again. */
+      expect(session("c7", "init").reconnected).toBe(false);
+   });
+
+   it("a second init only syncs; a reconnect to another session drops the connection's own", () => {
+      const { evicted, send, session } = fake();
+      const first = session("a");
+      expect(send("a", "init")).toEqual([]);
+      const other = session("b");
+      const moved = session("a", "reconnect", { token: other.token });
+      expect(moved).toMatchObject({ token: other.token, reconnected: true });
+      expect(evicted).toEqual(["b"]);
+      /* The session it left is gone: its token now gets a new one. */
+      expect(session("c", "reconnect", { token: first.token }).reconnected).toBe(false);
+   });
+
+   it("a request before init or reconnect is a violation (DAWN would make a session for it)", () => {
+      const { f, send } = fake();
+      const out = send("a", "ping");
+      expect(out.map((o) => o.type)).toEqual([
+         "session",
+         "config",
+         "server_features",
+         "state",
+         "pong"
+      ]);
+      expect(f.violations).toEqual(["ping before init or reconnect"]);
+   });
+
+   it("a store limit keeps the newest conversations and messages", () => {
+      const f = new FakeDawn(SCENARIOS.signedIn, {
+         timing: { firstTokenMs: 0, chunkMs: 0 },
+         storeLimit: { conversations: 2, messages: 3 }
+      });
+      const send = (type: string, payload: object = {}) =>
+         f.message(JSON.stringify({ type, payload }), "a") as Frame[];
+      send("init");
+      const first = send("new_conversation")[1].payload.conversation_id as number;
+      for (let i = 0; i < 3; i++) send("text", { text: `turn ${i}` });
+      expect(f.store.get(first)!.messages.map((m) => m.content.slice(0, 6))).toEqual([
+         "This i",
+         "turn 2",
+         "This i"
+      ]);
+      const second = send("new_conversation")[1].payload.conversation_id as number;
+      /* The seeded one (the least recently updated) went. */
+      expect(
+         f.store
+            .list()
+            .map((c) => c.id)
+            .sort()
+      ).toEqual([first, second].sort());
+   });
+
+   it("each user has their own conversations, kept across their logouts", () => {
+      const f = new FakeDawn(SCENARIOS.signedIn, { timing: { firstTokenMs: 0, chunkMs: 0 } });
+      const at = (path: string): URL => new URL(path, "https://localhost:5274");
+      const signIn = (username: string): void => {
+         f.http("POST", at("/api/auth/logout?app=aurora"));
+         const { csrf_token } = f.http("GET", at("/api/auth/csrf?app=aurora")).body as {
+            csrf_token: string;
+         };
+         const body = { csrf_token, username, password: "p", app: "aurora" };
+         expect(f.http("POST", at("/api/auth/login?app=aurora"), JSON.stringify(body)).status).toBe(
+            200
+         );
+      };
+      let n = 0;
+      const send = (type: string, payload: object = {}): Frame[] => {
+         const conn = `c${++n}`;
+         f.message(JSON.stringify({ type: "init" }), conn);
+         return f.message(JSON.stringify({ type, payload }), conn) as Frame[];
+      };
+      signIn("first");
+      const mine = send("new_conversation", { title: "First's chat" })[1].payload
+         .conversation_id as number;
+      const titles = (): string[] =>
+         (send("list_conversations")[0].payload.conversations as Array<{ title: string }>).map(
+            (c) => c.title
+         );
+      expect(titles()).toContain("First's chat");
+      signIn("second");
+      expect(titles()).not.toContain("First's chat");
+      expect(send("load_conversation", { conversation_id: mine })[0].payload.success).not.toBe(
+         true
+      );
+      signIn("first");
+      expect(titles()).toContain("First's chat");
+   });
+
+   it("the store limit holds for conversations made in the same second", () => {
+      const store = new FakeDawn(SCENARIOS.signedIn, {
+         storeLimit: { conversations: 2, messages: 10 }
+      }).store;
+      const made = Array.from(
+         { length: 5 },
+         () => store.create("", { mode: "adaptive", effort: "medium" }).id
+      );
+      expect(store.list().map((c) => c.id)).toEqual([made[4], made[3]]);
+   });
+
+   it("a busy session with no socket is never freed for a new one", () => {
+      vi.useFakeTimers();
+      const { f, send, session } = fake();
+      for (let i = 0; i < 7; i++) session(`c${i}`);
+      send("c0", "text", { text: "still going" });
+      f.closed("c0"); // its tab closes mid-reply
+      expect(send("new", "init")[0].payload.code).toBe("SESSION_LIMIT");
+      vi.runAllTimers(); // the turn ends; now it can go
+      expect(session("new").reconnected).toBe(false);
+   });
+
+   it("the client: a session taken back re-anchors lightly, a new one restores in full", () => {
+      for (const reconnected of [true, false]) {
+         const c = client();
+         c.ing.convId = CONVERSATION_ID;
+         c.frame(
+            connectFrames(SCENARIOS.signedIn, {
+               token: "b2".repeat(16),
+               reconnected,
+               sessionId: 2
+            })[0]
+         );
+         const types = c.sent.map((m) => m.type);
+         expect(types).toContain(reconnected ? "set_active_conversation" : "load_conversation");
+         expect(types).not.toContain(reconnected ? "load_conversation" : "set_active_conversation");
+      }
+   });
+
+   it("the client: session_superseded backs off and offers the takeover", () => {
+      const c = client();
+      c.frame(superseded());
+      expect(c.ing.superseded).toBe(true);
+   });
+});
+
+it("every interactive request is exercised above", () => {
+   expect([...INTERACTIVE].filter((v) => !interacted.has(v))).toEqual([]);
 });

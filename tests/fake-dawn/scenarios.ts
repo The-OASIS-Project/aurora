@@ -6,6 +6,13 @@
    note together. Times are relative to now,
    so "today" views stay populated whenever the test runs. */
 
+import {
+   ConversationStore,
+   DEFAULT_PICK,
+   conversationRow,
+   type ReasoningPick
+} from "./conversations.ts";
+
 /* The DAWN commit these fixtures were last checked against (`npm run check:fixtures` reports what
    has changed in DAWN's WebUI and protocol doc since). */
 export const CHECKED_AGAINST = "d93ba620";
@@ -110,21 +117,30 @@ export function authStatus(s: Scenario, tagged: boolean): Record<string, unknown
       : { authenticated: false, ...contract(s) };
 }
 
-const now = (): number => Math.floor(Date.now() / 1000);
+/* The session a connect lands on: its token, whether it's the client's own session taken back
+   (reconnected) or a new one, and its id. */
+export interface SessionInfo {
+   token: string;
+   reconnected: boolean;
+   sessionId: number;
+}
 
 /* The four frames DAWN queues on connect, in order (webui_send.c queue_init_messages; protocol doc,
-   Session & State). The fake never holds a session, so a reconnect lands on a fresh one. */
-export function connectFrames(s: Scenario): object[] {
+   Session & State), for the session the connection landed on. */
+export function connectFrames(
+   s: Scenario,
+   session: SessionInfo = { token: "0".repeat(32), reconnected: false, sessionId: 1 }
+): object[] {
    return [
       {
          type: "session",
          payload: {
-            token: "fake-session-token",
+            token: session.token,
             authenticated: true,
             username: s.username,
             is_admin: false,
-            reconnected: false,
-            session_id: 1,
+            reconnected: session.reconnected,
+            session_id: session.sessionId,
             timezone: "UTC"
          }
       },
@@ -141,6 +157,12 @@ export function connectFrames(s: Scenario): object[] {
       { type: "server_features", payload: { home_assistant: false } },
       { type: "state", payload: { state: "idle" } }
    ];
+}
+
+/* What DAWN sends a connection whose session another just took over, before closing it with 4001
+   (webui_server.c webui_evict_session_owner). */
+export function superseded(): object {
+   return { type: "session_superseded", payload: { reason: "superseded" } };
 }
 
 /* What DAWN sends each socket of a login that just ended, before closing it with 4002
@@ -172,10 +194,10 @@ export function unknownType(requestType: string, req?: string): object {
    };
 }
 
-const MODEL = "claude-sonnet-5-5";
+export const MODEL = "claude-sonnet-5-5";
 
 /* A model whose reasoning can be off or adaptive (protocol doc §9.13 caps object). */
-const CAPS = {
+export const CAPS = {
    source: "builtin",
    modes: [
       { mode: "disabled", efforts: [], budget: false },
@@ -203,24 +225,61 @@ export const TRANSCRIPT = {
    ].join("\n")
 };
 
-function conversationRow(): Record<string, unknown> {
-   const t = now();
-   return {
+/* A store holding the conversation the user had open (TRANSCRIPT). */
+export function defaultStore(): ConversationStore {
+   return ConversationStore.seeded({
       id: CONVERSATION_ID,
       title: TRANSCRIPT.title,
-      created_at: t - 3600,
-      updated_at: t - 60,
-      message_count: 2,
-      is_archived: false,
-      is_private: false,
-      is_pinned: false,
-      origin: "webui"
+      user: TRANSCRIPT.user,
+      assistant: TRANSCRIPT.assistant
+   });
+}
+
+/* DAWN's reasoning resolution for this fake's one model (webui_reasoning.c, llm_capabilities.c):
+   the pick is what was asked for; the effective value is the pick when the model offers it, else
+   the nearest it does (a mode it lacks becomes its adaptive; an effort snaps to the nearest
+   offered). While reasoning is off the effort keeps the pick. */
+const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const VALID_MODES = ["disabled", "adaptive", "enabled", "auto"];
+export const VALID_EFFORTS = EFFORT_ORDER;
+export function resolveReasoning(pick: ReasoningPick): ReasoningPick {
+   const offered = CAPS.modes.map((m) => m.mode);
+   const mode = offered.includes(pick.mode) ? pick.mode : "adaptive";
+   if (mode === "disabled") return { mode, effort: pick.effort };
+   const efforts = CAPS.modes.find((m) => m.mode === mode)?.efforts ?? [];
+   const at = EFFORT_ORDER.indexOf(pick.effort);
+   const effort = efforts.reduce((best, e) =>
+      Math.abs(EFFORT_ORDER.indexOf(e) - at) < Math.abs(EFFORT_ORDER.indexOf(best) - at) ? e : best
+   );
+   return { mode, effort };
+}
+
+/* The model fields a set_session_llm reply and a conversation's llm_settings carry: effective
+   values, the picks, and this model's capabilities (signal map §9.13). */
+export function reasoningFields(pick: ReasoningPick): Record<string, unknown> {
+   const effective = resolveReasoning(pick);
+   return {
+      thinking_mode: effective.mode,
+      reasoning_effort: effective.effort,
+      thinking_mode_pick: pick.mode,
+      reasoning_effort_pick: pick.effort,
+      reasoning_capabilities: CAPS
    };
 }
 
-/* Replies to the requests the fake answers. */
-export function answerFrame(type: string, payload: Record<string, unknown>): object[] {
-   const t = now();
+/* The conversation settings load_conversation reports (build_conv_llm_settings_json). */
+export function conversationLlm(pick: ReasoningPick): Record<string, unknown> {
+   return { llm_type: "cloud", cloud_provider: "claude", model: MODEL, ...reasoningFields(pick) };
+}
+
+/* Replies to the requests the fake answers. Saved conversations come from `store` (a FakeDawn
+   passes its own; a fresh seeded one otherwise), and the session's reasoning from `pick`. */
+export function answerFrame(
+   type: string,
+   payload: Record<string, unknown>,
+   store: ConversationStore = defaultStore(),
+   pick: ReasoningPick = DEFAULT_PICK
+): object[] {
    switch (type) {
       /* webui_config.c (get_config); protocol doc, get_config + §9.1a/§9.13 of the signal map. */
       case "get_config":
@@ -237,8 +296,8 @@ export function answerFrame(type: string, payload: Record<string, unknown>): obj
                      type: "cloud",
                      provider: "Claude",
                      model: MODEL,
-                     thinking_mode: "adaptive",
-                     reasoning_effort: "medium",
+                     thinking_mode: resolveReasoning(pick).mode,
+                     reasoning_effort: resolveReasoning(pick).effort,
                      openai_available: false,
                      claude_available: true,
                      gemini_available: false,
@@ -266,18 +325,24 @@ export function answerFrame(type: string, payload: Record<string, unknown>): obj
             }
          ];
       /* webui_history.c (conversation row serializer, list_conversations). */
-      case "list_conversations":
+      case "list_conversations": {
+         const rows = store.list();
          return [
             {
                type: "list_conversations_response",
-               payload: { success: true, conversations: [conversationRow()], total: 1 }
+               payload: {
+                  success: true,
+                  conversations: rows.map(conversationRow),
+                  total: rows.length
+               }
             }
          ];
+      }
       /* webui_history.c (load_conversation, load_msg_callback, build_conv_llm_settings_json; a
          failure carries only success + error). */
       case "load_conversation": {
-         const id = Number(payload.conversation_id);
-         if (id !== CONVERSATION_ID)
+         const c = store.get(Number(payload.conversation_id));
+         if (!c)
             return [
                {
                   type: "load_conversation_response",
@@ -292,26 +357,17 @@ export function answerFrame(type: string, payload: Record<string, unknown>): obj
                type: "load_conversation_response",
                payload: {
                   success: true,
-                  conversation_id: CONVERSATION_ID,
-                  title: TRANSCRIPT.title,
-                  message_count: 2,
-                  total: 2,
+                  conversation_id: c.id,
+                  title: c.title,
+                  message_count: c.messages.length,
+                  total: c.messages.length,
                   is_archived: false,
                   is_private: false,
-                  llm_locked: true,
+                  llm_locked: c.messages.length > 0,
                   context_tokens: 0,
                   context_max: 200000,
-                  llm_settings: {
-                     llm_type: "cloud",
-                     cloud_provider: "claude",
-                     model: MODEL,
-                     thinking_mode: "adaptive",
-                     reasoning_effort: "medium"
-                  },
-                  messages: [
-                     { id: 1, role: "user", content: TRANSCRIPT.user, created_at: t - 120 },
-                     { id: 2, role: "assistant", content: TRANSCRIPT.assistant, created_at: t - 60 }
-                  ]
+                  llm_settings: conversationLlm(c.pick),
+                  messages: c.messages.map((m) => ({ ...m }))
                }
             }
          ];
@@ -335,18 +391,21 @@ export function answerFrame(type: string, payload: Record<string, unknown>): obj
                payload: { success: true, count: 0, has_more: false, documents: [] }
             }
          ];
-      /* Protocol doc, set_active_conversation. */
-      case "set_active_conversation":
+      /* Protocol doc, set_active_conversation: owner-scoped, one generic refusal for a
+         conversation that isn't there (webui_history.c). */
+      case "set_active_conversation": {
+         const id = Number(payload.conversation_id);
          return [
             {
                type: "set_active_conversation_response",
-               payload: {
-                  success: true,
-                  conversation_id: Number(payload.conversation_id),
-                  is_private: false
-               }
+               payload: !(id > 0)
+                  ? { success: false, error: "Missing conversation id" }
+                  : store.get(id)
+                    ? { success: true, conversation_id: id, is_private: false }
+                    : { success: false, conversation_id: id, error: "Conversation unavailable" }
             }
          ];
+      }
       /* Protocol doc, jobs_snapshot: no active jobs. */
       case "jobs_request":
          return [{ type: "jobs_snapshot", payload: { jobs: [], truncated: false } }];
