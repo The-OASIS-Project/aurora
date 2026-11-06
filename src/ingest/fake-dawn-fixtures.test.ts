@@ -1111,6 +1111,42 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
       ).toEqual([first, second].sort());
    });
 
+   it("each user has their own conversations, kept across their logouts", () => {
+      const f = new FakeDawn(SCENARIOS.signedIn, { timing: { firstTokenMs: 0, chunkMs: 0 } });
+      const at = (path: string): URL => new URL(path, "https://localhost:5274");
+      const signIn = (username: string): void => {
+         f.http("POST", at("/api/auth/logout?app=aurora"));
+         const { csrf_token } = f.http("GET", at("/api/auth/csrf?app=aurora")).body as {
+            csrf_token: string;
+         };
+         const body = { csrf_token, username, password: "p", app: "aurora" };
+         expect(f.http("POST", at("/api/auth/login?app=aurora"), JSON.stringify(body)).status).toBe(
+            200
+         );
+      };
+      let n = 0;
+      const send = (type: string, payload: object = {}): Frame[] => {
+         const conn = `c${++n}`;
+         f.message(JSON.stringify({ type: "init" }), conn);
+         return f.message(JSON.stringify({ type, payload }), conn) as Frame[];
+      };
+      signIn("first");
+      const mine = send("new_conversation", { title: "First's chat" })[1].payload
+         .conversation_id as number;
+      const titles = (): string[] =>
+         (send("list_conversations")[0].payload.conversations as Array<{ title: string }>).map(
+            (c) => c.title
+         );
+      expect(titles()).toContain("First's chat");
+      signIn("second");
+      expect(titles()).not.toContain("First's chat");
+      expect(send("load_conversation", { conversation_id: mine })[0].payload.success).not.toBe(
+         true
+      );
+      signIn("first");
+      expect(titles()).toContain("First's chat");
+   });
+
    it("the store limit holds for conversations made in the same second", () => {
       const store = new FakeDawn(SCENARIOS.signedIn, {
          storeLimit: { conversations: 2, messages: 10 }

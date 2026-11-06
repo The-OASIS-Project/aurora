@@ -98,6 +98,9 @@ interface Connection {
    evicted: boolean;
 }
 
+/* How many users' saved conversations the fake remembers. */
+const MAX_USERS = 16;
+
 /* At most this many browser sessions at once: DAWN's table holds MAX_SESSIONS (8), and its first
    slot is the local session (session_manager.h, session_manager.c). */
 const WEBUI_SESSIONS = 7;
@@ -148,7 +151,7 @@ const CSRF_TTL_MS = 600_000;
 const CSRF_KEEP = 1024;
 
 /* Adds to an insertion-ordered set or map's key list, dropping the oldest past `max`. */
-function remember(keys: Set<string> | Map<string, number>, max: number): void {
+function remember(keys: Set<string> | Map<string, unknown>, max: number): void {
    while (keys.size > max) {
       const oldest = keys.keys().next().value;
       if (oldest === undefined) break;
@@ -195,7 +198,8 @@ export class FakeDawn {
    /* The user's saved conversations, the sessions by token, and each connection's state. The
       connections of a login that ended are remembered until they close, so a frame racing the
       logout is dropped rather than starting anything. */
-   readonly store: ConversationStore = defaultStore();
+   private readonly stores = new Map<string, ConversationStore>();
+   private readonly storeLimit: StoreLimit | undefined;
    private readonly sessions = new Map<string, Session>();
    private readonly conns = new Map<string, Connection>();
    private readonly ended = new Set<string>();
@@ -213,12 +217,29 @@ export class FakeDawn {
       scenario: Scenario,
       opts: { maxLog?: number; timing?: TurnTiming; storeLimit?: StoreLimit } = {}
    ) {
-      if (opts.storeLimit) this.store.limit = opts.storeLimit;
+      this.storeLimit = opts.storeLimit;
       this.scenario = scenario;
       this.maxLog = opts.maxLog ?? Infinity;
       this.timing = opts.timing ?? TURN_TIMING;
       this.appLogins = scenario.features?.includes("app_logins") === true;
       this.signedIn = { authenticated: scenario.authenticated, username: scenario.username };
+   }
+
+   /* The signed-in user's saved conversations. Each user has their own, as in DAWN, kept across
+      their logouts; a user's first sign-in starts from the scenario's seeded store. At most
+      MAX_USERS are remembered (the least recently signed in go), so a dev server on the LAN that
+      any name can sign in to can't be grown without limit. */
+   get store(): ConversationStore {
+      const user = this.signedIn.username;
+      let st = this.stores.get(user);
+      if (st) this.stores.delete(user);
+      else {
+         st = defaultStore();
+         if (this.storeLimit) st.limit = this.storeLimit;
+      }
+      this.stores.set(user, st);
+      remember(this.stores, MAX_USERS);
+      return st;
    }
 
    /* The scenario as it stands now (who is signed in may have changed since it started). */
@@ -708,10 +729,11 @@ export class FakeDawn {
       const clientRef = typeof payload.client_ref === "string" ? payload.client_ref : undefined;
       /* The conversation the turn was sent in (fixed when it arrived), if it's still there. */
       const want = Number(payload.conversation_id);
-      const conv = want > 0 && this.store.get(want) ? want : 0;
-      const user = conv ? this.store.reserve("user", text) : undefined;
-      if (user) this.store.add(conv, user);
-      const reply = conv ? this.store.reserve("assistant", cannedReply(text)) : undefined;
+      const store = this.store; // the reply is saved where the turn ran
+      const conv = want > 0 && store.get(want) ? want : 0;
+      const user = conv ? store.reserve("user", text) : undefined;
+      if (user) store.add(conv, user);
+      const reply = conv ? store.reserve("assistant", cannedReply(text)) : undefined;
       const frames = turnFrames(
          {
             text,
@@ -746,7 +768,7 @@ export class FakeDawn {
       for (const f of frames) byTime.set(f.at, [...(byTime.get(f.at) ?? []), f]);
       for (const [at, group] of byTime) {
          const send = (): void => {
-            if (at === last && reply) this.store.add(conv, reply);
+            if (at === last && reply) store.add(conv, reply);
             try {
                for (const f of group) deliver(f.frame, f.to, at);
             } finally {
