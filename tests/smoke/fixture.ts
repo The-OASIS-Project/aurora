@@ -8,7 +8,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 import type { FakeDawn } from "../fake-dawn/fake-dawn.ts";
 import { OPTIONAL } from "../fake-dawn/fake-dawn.ts";
 import { TRANSCRIPT, type Scenario } from "../fake-dawn/scenarios.ts";
-import { attachFakeDawn, BASE } from "./fake-dawn-page.ts";
+import { BASE, pageDawn, type PageDawn } from "./fake-dawn-page.ts";
 
 export { expect };
 
@@ -33,25 +33,43 @@ const UNHANDLED = "[dawn] unhandled frame:";
 interface Dawn {
    /* Opens the app against a fake DAWN playing this scenario. */
    boot(scenario: Scenario): Promise<FakeDawn>;
+   /* Opens the app in another tab of the same browser, on the same fake DAWN (after boot). */
+   openTab(): Promise<Page>;
 }
 
 export const test = base.extend<{ dawn: Dawn }>({
    dawn: async ({ page, baseURL }, use, testInfo) => {
       const problems: string[] = [];
-      page.on("pageerror", (e) => problems.push(`uncaught: ${e.message}`));
-      page.on("console", (m) => {
-         const text = m.text();
-         if (m.type() === "error") problems.push(`console.error: ${text}`);
-         else if (m.type() === "warning" && !ALLOWED_WARNINGS.some((a) => a.pattern.test(text)))
-            problems.push(`console.warn: ${text}`);
-         else if (text.startsWith(UNHANDLED)) problems.push(`unhandled frame: ${text}`);
-      });
+      /* Every tab's errors count; a second tab's are marked with its number. */
+      const watch = (p: Page, tab: string): void => {
+         p.on("pageerror", (e) => problems.push(`${tab}uncaught: ${e.message}`));
+         p.on("console", (m) => {
+            const text = m.text();
+            if (m.type() === "error") problems.push(`${tab}console.error: ${text}`);
+            else if (m.type() === "warning" && !ALLOWED_WARNINGS.some((a) => a.pattern.test(text)))
+               problems.push(`${tab}console.warn: ${text}`);
+            else if (text.startsWith(UNHANDLED)) problems.push(`${tab}unhandled frame: ${text}`);
+         });
+      };
+      watch(page, "");
+      let dawn: PageDawn | undefined;
       let fake: FakeDawn | undefined;
+      let tabs = 1;
       await use({
          boot: async (scenario) => {
-            fake = await attachFakeDawn(page, scenario, new URL(baseURL!).origin);
+            dawn = pageDawn(scenario, new URL(baseURL!).origin);
+            fake = dawn.fake;
+            await dawn.attach(page);
             await page.goto(BASE);
             return fake;
+         },
+         openTab: async () => {
+            if (!dawn) throw new Error("openTab before boot");
+            const tab = await page.context().newPage();
+            watch(tab, `tab ${++tabs}: `);
+            await dawn.attach(tab);
+            await tab.goto(BASE);
+            return tab;
          }
       });
       if (!fake) return;
