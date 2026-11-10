@@ -883,6 +883,15 @@ describe("the fake's interactive requests", () => {
       expect([c.ing.llm.reasoning, c.ing.llm.effort]).toEqual(["adaptive", "low"]);
    });
 
+   it("New Chat's replies are ones the real client handles", () => {
+      const { send } = interactive();
+      const c = client();
+      for (const f of [...send("clear_session"), ...send("set_session_llm", { type: "reset" })])
+         c.frame(f);
+      /* (afterEach fails the test on any frame the client doesn't handle.) */
+      expect([c.ing.llm.reasoning, c.ing.llm.effort]).toEqual(["adaptive", "medium"]);
+   });
+
    it("only space, tab, CR and LF make a turn empty, as in DAWN", () => {
       vi.useFakeTimers(); // the non-empty one runs a turn
       const { send } = interactive();

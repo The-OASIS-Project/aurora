@@ -2974,6 +2974,13 @@ export class DawnIngest implements Ingest {
             this.sinks.conversationList.setActive(0);
             break;
 
+         case "clear_session_response":
+            /* The ack to New Chat's clear_session (webui_history.c handle_clear_session). The
+               client reset itself when it sent it, so there is nothing to do; a failure ("No
+               active session") means there was no context to clear, and the next frame gets a
+               fresh session anyway. */
+            break;
+
          case "new_conversation_response": {
             /* The fresh conversation the daemon just created - persist to it now. A
                `server_initiated` push is DAWN lazily auto-creating+binding a conversation for a
