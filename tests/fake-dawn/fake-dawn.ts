@@ -600,10 +600,15 @@ export class FakeDawn {
       }
    }
 
-   /* Pushes a frame through the transport now. */
+   /* Pushes a frame through the transport now. A transport that fails is a violation, never a
+      throw: a turn's frames and its finishing must go on (or the session would stay busy). */
    private push(frame: object, to: Delivery): void {
       this.note("out", JSON.stringify(frame));
-      this.onPush?.(frame, to);
+      try {
+         this.onPush?.(frame, to);
+      } catch (e) {
+         this.violate(`the transport failed sending a frame: ${(e as Error).message}`);
+      }
    }
 
    /* Runs `fn` after `ms`; a fault in it is a violation, never a throw out of a timer (which

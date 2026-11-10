@@ -325,14 +325,19 @@ export function answerFrame(
             }
          ];
       /* webui_history.c (conversation row serializer, list_conversations). */
+      /* One page, as DAWN pages it (auth_db_conv.c conv_db_list): `limit` 1 to 100, else 50; a
+         negative `offset` is 0; `total` counts them all. */
       case "list_conversations": {
          const rows = store.list();
+         const asked = Math.trunc(Number(payload.limit));
+         const limit = asked > 0 && asked <= 100 ? asked : 50;
+         const offset = Math.max(0, Math.trunc(Number(payload.offset)) || 0);
          return [
             {
                type: "list_conversations_response",
                payload: {
                   success: true,
-                  conversations: rows.map(conversationRow),
+                  conversations: rows.slice(offset, offset + limit).map(conversationRow),
                   total: rows.length
                }
             }

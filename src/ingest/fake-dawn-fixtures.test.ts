@@ -970,6 +970,30 @@ describe("the fake's interactive requests", () => {
       expect(send("set_session_llm", {}, "next")[0].payload.reasoning_effort).toBe("medium");
    });
 
+   it("a transport failing on a saved turn's first frames leaves the session free", () => {
+      vi.useFakeTimers();
+      const { fake, send } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      fake.onPush = () => {
+         throw new Error("socket gone");
+      };
+      expect(() => send("text", { text: "hi" })).not.toThrow(); // its others' frames go at once
+      vi.runAllTimers();
+      expect(fake.violations.join("\n")).toContain("socket gone");
+      expect(send("text", { text: "again" })[0].type).toBe("state");
+   });
+
+   it("list_conversations pages as DAWN does", () => {
+      const { fake, send } = interactive();
+      for (let i = 0; i < 60; i++) send("new_conversation");
+      const page = (payload: object) => send("list_conversations", payload)[0].payload;
+      expect(page({}).conversations).toHaveLength(50);
+      expect(page({}).total).toBe(61);
+      expect(page({ limit: 10, offset: 55 }).conversations).toHaveLength(6);
+      expect(page({ limit: 500 }).conversations).toHaveLength(50);
+      expect(page({ limit: 0, offset: -3 }).conversations[0].id).toBe(fake.store.list()[0].id);
+   });
+
    it("a fault while sending a scheduled frame is a violation, not a throw", () => {
       vi.useFakeTimers();
       const { fake, send } = interactive();
