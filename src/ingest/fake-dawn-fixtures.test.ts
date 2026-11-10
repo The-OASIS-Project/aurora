@@ -1072,6 +1072,34 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
       expect(rest.some((p) => p.type === "stream_end")).toBe(true);
    });
 
+   it("a reload mid-reply: the client hands the whole saved reply over to redraw the bubble", () => {
+      vi.useFakeTimers();
+      const { f, pushed, send, session } = fake();
+      const { token } = session("a");
+      send("a", "load_conversation", { conversation_id: CONVERSATION_ID });
+      send("a", "text", { text: "a long one" });
+      vi.advanceTimersByTime(15); // part of the reply has streamed to the first tab
+      session("a2", "reconnect", { token });
+      send("a2", "set_active_conversation", { conversation_id: CONVERSATION_ID });
+      const from = pushed.length;
+      vi.runAllTimers();
+      const c = client();
+      c.ing.convId = CONVERSATION_ID;
+      for (const p of pushed.slice(from)) if ("conn" in p.to) c.frame(p);
+      const saved = f.store.get(CONVERSATION_ID)!.messages.at(-1)!;
+      const streamed = c
+         .called("conversation", "appendDelta")
+         .map((a) => a[0])
+         .join("");
+      expect(streamed.length).toBeLessThan(saved.content.length); // only its end streamed here
+      const adopt = c.called("conversation", "adoptId");
+      expect(adopt).toHaveLength(1);
+      /* The same stream the client linked its bubble under. */
+      const linked = c.called("conversation", "linkStream");
+      expect(linked).toHaveLength(1);
+      expect(adopt[0]).toEqual([CONVERSATION_ID, linked[0][1], saved.id, saved.content]);
+   });
+
    it("at most 7 sessions (DAWN's first slot is its own); a full table refuses, then retries", () => {
       const { f, session, send } = fake();
       const tokens = Array.from({ length: 7 }, (_, i) => session(`c${i}`).token as string);

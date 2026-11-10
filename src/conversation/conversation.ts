@@ -76,10 +76,11 @@ export interface ConversationController {
    /* Server-authoritative-persistence (Phase 0) correlation. `linkStream` registers the
       just-finalized streamed bubble under (conv, streamId) so the matching `message_appended`
       (which arrives AFTER endReply, carrying the DB id) can `adoptId` it - stamping the id
-      without rendering a duplicate. `renderAppended` renders a `message_appended` we did NOT
+      without rendering a duplicate, and redrawing it from `savedText` when the streamed bubble
+      is missing part of the saved reply. `renderAppended` renders a `message_appended` we did NOT
       stream (another viewer's turn) as a fresh bubble, deduped on message id. */
    linkStream(convId: number, streamId: number): void;
-   adoptId(convId: number, streamId: number, messageId: number): boolean;
+   adoptId(convId: number, streamId: number, messageId: number, savedText?: string): boolean;
    renderAppended(item: {
       role: "user" | "assistant";
       text: string;
@@ -305,6 +306,11 @@ export function mountConversation(
    const ADOPT_MAX = 24;
    let lastFinalized: Msg | null = null; // the bubble endReply just closed, for linkStream
    const adoptKey = (convId: number, streamId: number): string => `${convId}:${streamId}`;
+   /* A reply's words, visuals aside, with each run of white space as one space; and how many
+      visuals it carries. */
+   const proseOf = (t: string): string => stripVisualsForStreaming(t).replace(/\s+/g, " ").trim();
+   const visualCount = (t: string): number =>
+      splitVisualSegments(t).filter((seg) => seg.kind === "visual").length;
    /* Stamp a DB id onto a bubble (dedup set + DOM attribute). Ignores non-positive ids. */
    const stampId = (msg: Msg, id: number): void => {
       if (!(id > 0) || msg.id === id) return;
@@ -518,6 +524,18 @@ export function mountConversation(
       }
    };
 
+   /* An assistant bubble's body from its parsed text: the prose and visuals, then the images and
+      document chips below them. Returns the text the bubble now shows. */
+   const fillAssistantBody = (
+      body: HTMLElement,
+      parsed: ReturnType<typeof parseAttachments>
+   ): string => {
+      renderAssistantBody(body, parsed.text);
+      const attach = renderAttachments(parsed.images, parsed.docs);
+      if (attach) body.appendChild(attach);
+      return parsed.text;
+   };
+
    /* The email a user turn asked about, under its words: sender + subject (display strings, bound as
       text). A click opens it in the Mail panel (opts.onOpenEmail); a message since moved shows there
       as "moved or deleted". */
@@ -555,15 +573,17 @@ export function mountConversation(
       /* Split inline attachment markers ([IMAGE:...] / [ATTACHED DOCUMENT:...]) out of the
          text; render the remaining prose, then the thumbnails/chips below it. Markers only
          appear in complete/replayed text (history, showReply/showUser), never mid-stream. */
-      const { text, images, docs } = parseAttachments(rawText, role);
-
       const body = document.createElement("div");
       body.className = "convo-body";
-      if (role === "user") body.textContent = text;
-      else renderAssistantBody(body, text);
-      const attach = renderAttachments(images, docs);
-      if (attach) body.appendChild(attach);
-      if (email && role === "user") body.appendChild(emailChip(email));
+      let text: string;
+      if (role === "user") {
+         const parsed = parseAttachments(rawText, role);
+         text = parsed.text;
+         body.textContent = text;
+         const attach = renderAttachments(parsed.images, parsed.docs);
+         if (attach) body.appendChild(attach);
+         if (email) body.appendChild(emailChip(email));
+      } else text = fillAssistantBody(body, parseAttachments(rawText, role));
 
       el.append(roleEl, body);
       scroll.appendChild(el);
@@ -899,7 +919,12 @@ export function mountConversation(
    /* Origin adopt: a message_appended whose (conv, streamId) matches a bubble we streamed ->
       stamp its DB id onto that existing bubble and DO NOT render a duplicate. Returns true when
       it was ours (the caller then also treats it as the server-persisted confirmation). */
-   const adoptId = (convId: number, streamId: number, messageId: number): boolean => {
+   const adoptId = (
+      convId: number,
+      streamId: number,
+      messageId: number,
+      savedText?: string
+   ): boolean => {
       const key = adoptKey(convId, streamId);
       const msg = adoptMap.get(key);
       if (!msg) return false;
@@ -907,6 +932,27 @@ export function mountConversation(
       const i = adoptOrder.indexOf(key);
       if (i >= 0) adoptOrder.splice(i, 1);
       stampId(msg, messageId);
+      /* The saved reply is the truth, so the bubble is redrawn from it as a reload would draw it
+         when the streamed one is missing something: a tab that took the session over mid-reply (a
+         reload) streamed only its end, or missed a visual, or the saved row carries images the
+         stream never does. Only the words are compared, so a visual drawn mid-reply stays put
+         when they match; and a words-only difference counts only when what streamed is the end
+         of the saved words (a takeover), so a reply from another session that happens to share
+         this stream id can't overwrite the bubble. Only a turn's final bubble is linked, so an
+         earlier tool-loop bubble cut by a takeover stays as streamed until the next load. */
+      if (!savedText) return true;
+      const parsed = parseAttachments(savedText, "assistant");
+      const saved = proseOf(parsed.text);
+      const shown = proseOf(msg.text);
+      const missing =
+         parsed.images.length > 0 ||
+         parsed.docs.length > 0 ||
+         visualCount(parsed.text) > visualCount(msg.text);
+      if (saved !== shown ? saved.endsWith(shown) : missing) {
+         if (hasVisual(parsed.text)) pendingVisuals = []; // the saved reply carries them
+         msg.text = fillAssistantBody(msg.body, parsed);
+         scrollToEnd(true);
+      }
       return true;
    };
 

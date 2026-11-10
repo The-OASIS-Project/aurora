@@ -4096,7 +4096,16 @@ export class DawnIngest implements Ingest {
             const messageId = Number((p as { message_id?: number }).message_id ?? 0);
             const streamId = Number((p as { stream_id?: number }).stream_id ?? 0);
             const role = (p as { role?: string }).role === "user" ? "user" : "assistant";
-            if (streamId && this.sinks.conversation.adoptId(cid, streamId, messageId)) break; // our streamed reply's echo
+            /* An assistant row's text as the transcript shows it (as a reload would). */
+            const info =
+               role === "assistant"
+                  ? interpretMessage(String((p as { text?: string }).text ?? ""))
+                  : null;
+            if (
+               streamId &&
+               this.sinks.conversation.adoptId(cid, streamId, messageId, info?.text ?? undefined)
+            )
+               break; // our streamed reply's echo (redrawn if it streamed only in part)
             /* User fan-out (stream_id 0): route through the same order-independent handler as the
                transcript echo, so the origin's optimistic bubble is recognized (dedup) and a
                non-origin viewer renders it as a user bubble. */
@@ -4117,7 +4126,6 @@ export class DawnIngest implements Ingest {
                );
                break;
             }
-            const info = interpretMessage(String((p as { text?: string }).text ?? ""));
             const text = info?.text ?? "";
             if (text) this.sinks.conversation.renderAppended({ role, text, messageId });
             if (info?.tools) for (const c of info.tools) this.sinks.conversation.toolCall(c);
