@@ -104,11 +104,16 @@ same one.
 - **Scenarios:** `FAKE_DAWN_SCENARIO=signedOut npm run dev:fake` picks one from
   `tests/fake-dawn/scenarios.ts` (the default is `signedIn`). Signed out, any non-empty username
   and password sign in; logging out works as with DAWN.
-- **What it models today:** DAWN's connect frames, the core boot requests (settings, models, one
-  saved conversation with a transcript, jobs, music state, metrics, the heartbeat), empty watches
-  and library, and Home Assistant and the calendar as subsystems this DAWN lacks. Requests it
-  doesn't model get DAWN's "don't know that" answer, and the terminal names each one.
-- **Not yet:** sending a message, live replies, notices and fuller panel data (phase 2b in
+- **What it models today:** DAWN's connect frames, the core boot requests (settings, models, saved
+  conversations with transcripts, jobs, music state, metrics, the heartbeat), empty watches and
+  library, and Home Assistant and the calendar as subsystems this DAWN lacks. Sending a message
+  gets a canned reply, streamed the way DAWN streams a plain text reply and saved to the
+  conversation; a new chat,
+  clearing the session and changing the reasoning setting work too. A second tab takes the
+  session over and the first offers "Use DAWN here", as with DAWN. The conversations live in
+  memory until the server stops. Requests it doesn't model get DAWN's "don't know that" answer, and the
+  terminal names each one.
+- **Not yet:** notices and fuller panel data (phase 2b-2 in
   [docs/FAKE_DAWN_PLAN.md](docs/FAKE_DAWN_PLAN.md)). For those, use a DAWN instance (below).
 
 `StubIngest` (`src/ingest/stub.ts`), the older second client that emitted canned data, no longer
