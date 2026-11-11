@@ -131,4 +131,60 @@ describe("adopting a streamed reply's saved row", () => {
       expect(view.adoptId(1, 6, 99, "Someone else's.")).toBe(false);
       expect(reply().textContent).toContain("Mine.");
    });
+
+   describe("with DAWN naming the session (stream ids count per session)", () => {
+      /* Streams `text` as one reply on session `session`, as stream 5 of conversation 1. */
+      const onSession = (
+         view: ReturnType<typeof mountConversation>,
+         text: string,
+         session: number
+      ) => {
+         view.startReply();
+         view.appendDelta(text);
+         view.endReply();
+         view.linkStream(1, 5, session);
+      };
+
+      it("another session's row with the same stream id isn't ours, and changes nothing", () => {
+         const view = mount();
+         onSession(view, "Done.", 7);
+         /* Copilot's case: the other reply ends with this one's words. */
+         expect(view.adoptId(1, 5, 99, "Another response. Done.", 8)).toBe(false);
+         expect(reply().textContent).toContain("Done.");
+         expect(reply().textContent).not.toContain("Another response");
+         /* Our own row still finds the bubble afterwards. */
+         expect(view.adoptId(1, 5, 100, "Done.", 7)).toBe(true);
+      });
+
+      it("a row proven ours is redrawn on any difference in the words", () => {
+         const view = mount();
+         onSession(view, "Streamed with a leak < cited>x</cited> in it.", 7);
+         expect(view.adoptId(1, 5, 99, "Streamed with no leak in it.", 7)).toBe(true);
+         expect(reply().textContent).toContain("Streamed with no leak in it.");
+      });
+
+      it("a row naming a session matches a bubble whose session wasn't named", () => {
+         const view = mount();
+         stream(view, "Done."); // linked with no session
+         expect(view.adoptId(1, 5, 99, "Done.", 7)).toBe(true);
+      });
+
+      it("a row naming no session takes the most recent bubble for its stream", () => {
+         const view = mount();
+         onSession(view, "First.", 7);
+         onSession(view, "Second.", 8);
+         expect(view.adoptId(1, 5, 99, "Second.")).toBe(true);
+         const ids = [...document.querySelectorAll(".convo-msg.assistant")].map((el) =>
+            el.getAttribute("data-message-id")
+         );
+         expect(ids).toEqual([null, "99"]);
+      });
+
+      it("a row from an older DAWN (no session) still matches, under the suffix rule", () => {
+         const view = mount();
+         onSession(view, "Done.", 7);
+         expect(view.adoptId(1, 5, 99, "Another response, not this one.")).toBe(true);
+         expect(reply().textContent).toContain("Done."); // not the end of it: left as drawn
+      });
+   });
 });

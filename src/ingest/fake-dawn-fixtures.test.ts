@@ -1079,12 +1079,13 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
       send("a", "load_conversation", { conversation_id: CONVERSATION_ID });
       send("a", "text", { text: "a long one" });
       vi.advanceTimersByTime(15); // part of the reply has streamed to the first tab
-      session("a2", "reconnect", { token });
+      const taken = session("a2", "reconnect", { token });
       send("a2", "set_active_conversation", { conversation_id: CONVERSATION_ID });
       const from = pushed.length;
       vi.runAllTimers();
       const c = client();
       c.ing.convId = CONVERSATION_ID;
+      c.frame({ type: "session", payload: taken }); // the reloaded tab's session frame
       for (const p of pushed.slice(from)) if ("conn" in p.to) c.frame(p);
       const saved = f.store.get(CONVERSATION_ID)!.messages.at(-1)!;
       const streamed = c
@@ -1094,10 +1095,17 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
       expect(streamed.length).toBeLessThan(saved.content.length); // only its end streamed here
       const adopt = c.called("conversation", "adoptId");
       expect(adopt).toHaveLength(1);
-      /* The same stream the client linked its bubble under. */
+      /* The same stream, and the same session, the client linked its bubble under: the session
+         the reload took back, which the saved row names. */
       const linked = c.called("conversation", "linkStream");
-      expect(linked).toHaveLength(1);
-      expect(adopt[0]).toEqual([CONVERSATION_ID, linked[0][1], saved.id, saved.content]);
+      expect(linked).toEqual([[CONVERSATION_ID, expect.any(Number), taken.session_id]]);
+      expect(adopt[0]).toEqual([
+         CONVERSATION_ID,
+         linked[0][1],
+         saved.id,
+         saved.content,
+         taken.session_id
+      ]);
    });
 
    it("at most 7 sessions (DAWN's first slot is its own); a full table refuses, then retries", () => {
@@ -1245,6 +1253,28 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
          expect(types).toContain(reconnected ? "set_active_conversation" : "load_conversation");
          expect(types).not.toContain(reconnected ? "load_conversation" : "set_active_conversation");
       }
+   });
+
+   it("the client: a session frame without a usable session_id leaves the session unnamed", () => {
+      for (const session_id of [undefined, 0]) {
+         const c = client();
+         const frame = connectFrames(SCENARIOS.signedIn, {
+            token: "c3".repeat(16),
+            reconnected: true,
+            sessionId: 4
+         })[0] as { type: string; payload: Record<string, unknown> };
+         c.frame({ ...frame, payload: { ...frame.payload, session_id } });
+         expect(c.ing.sessionId).toBeUndefined();
+      }
+      const c = client();
+      c.frame(
+         connectFrames(SCENARIOS.signedIn, {
+            token: "d4".repeat(16),
+            reconnected: true,
+            sessionId: 4
+         })[0]
+      );
+      expect(c.ing.sessionId).toBe(4);
    });
 
    it("the client: session_superseded backs off and offers the takeover", () => {

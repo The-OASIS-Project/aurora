@@ -997,6 +997,8 @@ export class DawnIngest implements Ingest {
    private wsStableTimer = 0; // resets wsFails once the current connection has stayed up
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
+   /* The DAWN session this connection is on (the session frame's session_id), when it says. */
+   private sessionId: number | undefined;
    private superseded = false; // another tab took over (WS close 4001); we backed off, awaiting a reclaim() gesture
    private reclaiming = false; // this reconnect is a reclaim() takeover -> full reload so the display catches up
    private reanchoring = false; // a reconnect re-anchor in flight (restore server active-conv, do NOT re-render the transcript)
@@ -2144,6 +2146,10 @@ export class DawnIngest implements Ingest {
             /* The user's zone (their own, else the server's), the one DAWN reads and speaks times
                in. Authenticated frame only; an older DAWN leaves it out (get_my_settings covers it). */
             if (p.authenticated === true) {
+               /* The session this connection is on (stream ids count per session, so a saved
+                  reply's message_appended names its session for us to tell ours apart). */
+               const sid = (p as { session_id?: unknown }).session_id;
+               this.sessionId = typeof sid === "number" && sid > 0 ? sid : undefined;
                const zone = (p as { timezone?: unknown }).timezone;
                this.zoneFromSession = typeof zone === "string" && zone !== "";
                if (typeof zone === "string") this.applyTimezone(zone);
@@ -3949,7 +3955,7 @@ export class DawnIngest implements Ingest {
                         conv
                      );
                   }
-                  this.sinks.conversation.linkStream(conv, streamId);
+                  this.sinks.conversation.linkStream(conv, streamId, this.sessionId);
                }
                /* Settle the UI to idle when no voice is (or will be) playing. A reinvoke
                   re-engagement drives no state:idle and carries no TTS, so without this the reactor
@@ -4103,7 +4109,15 @@ export class DawnIngest implements Ingest {
                   : null;
             if (
                streamId &&
-               this.sinks.conversation.adoptId(cid, streamId, messageId, info?.text ?? undefined)
+               this.sinks.conversation.adoptId(
+                  cid,
+                  streamId,
+                  messageId,
+                  info?.text ?? undefined,
+                  typeof (p as { session_id?: unknown }).session_id === "number"
+                     ? (p as { session_id: number }).session_id
+                     : undefined
+               )
             )
                break; // our streamed reply's echo (redrawn if it streamed only in part)
             /* User fan-out (stream_id 0): route through the same order-independent handler as the

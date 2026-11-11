@@ -30,6 +30,8 @@ export interface TurnInput {
    userMessageId?: number;
    replyMessageId?: number;
    streamId: number;
+   /* The session whose turn this is: its saved rows name it (message_appended session_id). */
+   sessionId: number;
 }
 
 /* The canned reply: says plainly what it is, quotes the message, and exercises markdown. */
@@ -91,7 +93,7 @@ function bumped(conversationId: number): object {
 }
 
 export function turnFrames(input: TurnInput, timing: TurnTiming): TimedFrame[] {
-   const { text, clientRef, conversationId: conv, streamId: sid } = input;
+   const { text, clientRef, conversationId: conv, streamId: sid, sessionId } = input;
    const saved = conv > 0 && input.userMessageId !== undefined;
    const ref = clientRef ? { client_ref: clientRef } : {};
    const reply = cannedReply(text);
@@ -124,7 +126,8 @@ export function turnFrames(input: TurnInput, timing: TurnTiming): TimedFrame[] {
          message_id: input.userMessageId,
          role: "user",
          text,
-         stream_id: 0
+         stream_id: 0,
+         session_id: sessionId
       };
       at(0, { type: "message_appended", payload: { ...appended, ...ref } });
       others(0, { type: "message_appended", payload: appended });
@@ -168,7 +171,8 @@ export function turnFrames(input: TurnInput, timing: TurnTiming): TimedFrame[] {
             message_id: input.replyMessageId,
             role: "assistant",
             text: reply,
-            stream_id: sid
+            stream_id: sid,
+            session_id: sessionId
          }
       });
    }

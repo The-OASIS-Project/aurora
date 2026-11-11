@@ -746,7 +746,8 @@ export class FakeDawn {
             conversationId: conv,
             userMessageId: user?.id,
             replyMessageId: reply?.id,
-            streamId: ++s.streamId
+            streamId: ++s.streamId,
+            sessionId: s.id
          },
          this.timing
       );
