@@ -123,10 +123,19 @@ export interface ConversationSink {
    loadHistory(items: ConversationItem[]): void;
    /* Server-authoritative-persistence (Phase 0) cross-viewer correlation. `linkStream`
       registers the just-finalized streamed bubble under (conv, streamId); `adoptId` stamps the
-      DB id onto it when the matching `message_appended` arrives (returns true if it was ours);
+      DB id onto it when the matching `message_appended` arrives (returns true if it was ours),
+      and redraws it from `savedText` when the saved reply's words differ from what streamed (a
+      tab that joined mid-reply streamed only its end). `sessionId` / `rowSessionId` are DAWN's
+      session ids (the session frame's, and the row's): a row naming another session isn't ours.
       `renderAppended` renders a `message_appended` we did NOT stream, deduped on message id. */
-   linkStream(convId: number, streamId: number): void;
-   adoptId(convId: number, streamId: number, messageId: number): boolean;
+   linkStream(convId: number, streamId: number, sessionId?: number): void;
+   adoptId(
+      convId: number,
+      streamId: number,
+      messageId: number,
+      savedText?: string,
+      rowSessionId?: number
+   ): boolean;
    renderAppended(item: {
       role: "user" | "assistant";
       text: string;

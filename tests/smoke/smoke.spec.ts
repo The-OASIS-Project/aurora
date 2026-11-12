@@ -1,7 +1,7 @@
 /* The smoke test: does the bundle that ships start and stand up against DAWN? The fixture and
    what fails a run: fixture.ts. */
 
-import { SCENARIOS } from "../fake-dawn/scenarios.ts";
+import { CONVERSATION_ID, SCENARIOS } from "../fake-dawn/scenarios.ts";
 import { expect, expectSignedInShell, reactorIsLive, test } from "./fixture.ts";
 import type { Page } from "@playwright/test";
 
@@ -186,4 +186,65 @@ test("signs in from the login card, and logs out back to it", async ({ page, daw
    expect(fake.log.some((e) => e.text === "POST /api/auth/logout?app=aurora")).toBe(true);
    /* The wipe really happened: the user this browser last signed in as is forgotten. */
    expect(await page.evaluate(() => localStorage.getItem("dawn.hero.lastUser"))).toBeNull();
+});
+
+test("sends a message and shows the streamed reply", async ({ page, dawn }) => {
+   test.setTimeout(90_000);
+   const fake = await dawn.boot(SCENARIOS.signedIn);
+   await expectSignedInShell(page);
+   const bubbles = page.locator(".convo-msg");
+   await expect(bubbles).toHaveCount(fake.store.get(CONVERSATION_ID)!.messages.length);
+   const before = await bubbles.count();
+   const composer = page.locator("#composer-input");
+   await composer.fill("How is the smoke test going?");
+   await composer.press("Enter");
+   await expect(page.locator(".convo-msg.user .convo-body").last()).toHaveText(
+      "How is the smoke test going?"
+   );
+   const reply = page.locator(".convo-msg.assistant .convo-body").last();
+   await expect(reply).toContainText("This is the fake DAWN", { timeout: 30_000 });
+   await expect(reply.locator("blockquote")).toHaveText("How is the smoke test going?");
+   await expect(reply.locator("code")).toHaveText("inline code");
+   /* DAWN saved both rows: the conversation now holds the exchange. */
+   await expect
+      .poll(() =>
+         fake.store
+            .get(CONVERSATION_ID)
+            ?.messages.map((m) => m.role)
+            .slice(-2)
+      )
+      .toEqual(["user", "assistant"]);
+   /* One bubble each: the saved rows' message_appended is matched to the echo and the streamed
+      bubble, never drawn again. */
+   await expect(bubbles).toHaveCount(before + 2);
+   await expect(page.locator(".convo-msg.assistant .convo-body")).toHaveText([
+      /./,
+      /This is the fake DAWN/
+   ]);
+   expect(fake.requests).toContain("text");
+});
+
+test("a second tab takes the session over; the first can take it back", async ({ page, dawn }) => {
+   test.setTimeout(120_000);
+   const fake = await dawn.boot(SCENARIOS.signedIn);
+   await expectSignedInShell(page);
+   const takeover = (p: Page) => p.locator("#takeover-card");
+   await expect(takeover(page)).toBeHidden();
+
+   /* The second tab reconnects with the token the first stored, so DAWN gives it that session
+      and evicts the first (session_superseded, then 4001): the first backs off and offers the
+      takeover instead of fighting for it. */
+   const second = await dawn.openTab();
+   await expectSignedInShell(second);
+   await expect(takeover(page)).toBeVisible();
+   await expect(takeover(second)).toBeHidden();
+   /* It landed on the first tab's own session: DAWN's session frame said so. */
+   expect(fake.transcript()).toMatch(/"type":"session","payload":\{[^}]*"reconnected":true/);
+
+   /* "Use DAWN here" takes it back: the first is live again with its transcript, and now the
+      second offers the takeover. */
+   await takeover(page).getByRole("button", { name: "Use DAWN here" }).click();
+   await expect(takeover(page)).toBeHidden();
+   await expect(takeover(second)).toBeVisible();
+   await expectSignedInShell(page);
 });

@@ -143,7 +143,7 @@ attach/replay contract; the pushed frames a passive UI cares about:
 | `jobs_snapshot` | `jobs[]`, `truncated` | The complete active set. Reply to `jobs_request`; also on connect. Replaces your whole active set. |
 | `conversation_event` | `conversation_id`, `seq`, `kind` ∈ status \| tool_call \| tool_result \| spawn \| complete, `payload` (opaque pre-redacted JSON string) | One step of a running job, live. Dedup against replay by `seq`. |
 | `conversation_events` | batch of the above, ASC by `seq` | Durable replay on attach. |
-| `message_appended` | `conversation_id`, `message_id`, `role`, `text` | A persisted assistant message, with body. The route by which a job's *answer* reaches you live. |
+| `message_appended` | `conversation_id`, `message_id`, `role`, `text`, `stream_id`, `session_id?` | A persisted message, with body. The route by which a job's *answer* reaches you live. A streamed reply's row is matched to the bubble that streamed it by (`conversation_id`, `stream_id`); `stream_id` counts per session, so `session_id` (DAWN PR #104; the `session` frame's value, present only when a session's own turn wrote the row) tells a client which rows are its own. Aurora adopts a row only when its `session_id` is the session the bubble streamed on (or either is unnamed), and redraws the bubble from the saved row when it streamed only part of the reply (a reload mid-reply). |
 | `conversation_messages_appended` | `conversation_id` | Signal-only "refetch"; less useful than `message_appended`. |
 | `conversation_renamed` | `conversation_id`, `title` | Title changed. |
 | `jobs_invalidate` | *(refetch signal)* | Ask for a fresh `jobs_snapshot`. |
