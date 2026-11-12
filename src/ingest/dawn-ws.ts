@@ -997,6 +997,8 @@ export class DawnIngest implements Ingest {
    private wsStableTimer = 0; // resets wsFails once the current connection has stayed up
    private loadedInitial = false; // guard: load the starting conversation only once
    private resumingStored = false; // the initial load is a resume of the persisted convId (fall back silently on failure)
+   /* The DAWN session this connection is on (the session frame's session_id), when it says. */
+   private sessionId: number | undefined;
    private superseded = false; // another tab took over (WS close 4001); we backed off, awaiting a reclaim() gesture
    private reclaiming = false; // this reconnect is a reclaim() takeover -> full reload so the display catches up
    private reanchoring = false; // a reconnect re-anchor in flight (restore server active-conv, do NOT re-render the transcript)
@@ -2144,6 +2146,10 @@ export class DawnIngest implements Ingest {
             /* The user's zone (their own, else the server's), the one DAWN reads and speaks times
                in. Authenticated frame only; an older DAWN leaves it out (get_my_settings covers it). */
             if (p.authenticated === true) {
+               /* The session this connection is on (stream ids count per session, so a saved
+                  reply's message_appended names its session for us to tell ours apart). */
+               const sid = (p as { session_id?: unknown }).session_id;
+               this.sessionId = typeof sid === "number" && sid > 0 ? sid : undefined;
                const zone = (p as { timezone?: unknown }).timezone;
                this.zoneFromSession = typeof zone === "string" && zone !== "";
                if (typeof zone === "string") this.applyTimezone(zone);
@@ -2972,6 +2978,13 @@ export class DawnIngest implements Ingest {
             this.setActiveTitle(""); // fresh chat -> HUD shows "New conversation"
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
+            break;
+
+         case "clear_session_response":
+            /* The ack to New Chat's clear_session (webui_history.c handle_clear_session). The
+               client reset itself when it sent it, so there is nothing to do; a failure ("No
+               active session") means there was no context to clear, and the next frame gets a
+               fresh session anyway. */
             break;
 
          case "new_conversation_response": {
@@ -3942,7 +3955,7 @@ export class DawnIngest implements Ingest {
                         conv
                      );
                   }
-                  this.sinks.conversation.linkStream(conv, streamId);
+                  this.sinks.conversation.linkStream(conv, streamId, this.sessionId);
                }
                /* Settle the UI to idle when no voice is (or will be) playing. A reinvoke
                   re-engagement drives no state:idle and carries no TTS, so without this the reactor
@@ -4089,7 +4102,24 @@ export class DawnIngest implements Ingest {
             const messageId = Number((p as { message_id?: number }).message_id ?? 0);
             const streamId = Number((p as { stream_id?: number }).stream_id ?? 0);
             const role = (p as { role?: string }).role === "user" ? "user" : "assistant";
-            if (streamId && this.sinks.conversation.adoptId(cid, streamId, messageId)) break; // our streamed reply's echo
+            /* An assistant row's text as the transcript shows it (as a reload would). */
+            const info =
+               role === "assistant"
+                  ? interpretMessage(String((p as { text?: string }).text ?? ""))
+                  : null;
+            if (
+               streamId &&
+               this.sinks.conversation.adoptId(
+                  cid,
+                  streamId,
+                  messageId,
+                  info?.text ?? undefined,
+                  typeof (p as { session_id?: unknown }).session_id === "number"
+                     ? (p as { session_id: number }).session_id
+                     : undefined
+               )
+            )
+               break; // our streamed reply's echo (redrawn if it streamed only in part)
             /* User fan-out (stream_id 0): route through the same order-independent handler as the
                transcript echo, so the origin's optimistic bubble is recognized (dedup) and a
                non-origin viewer renders it as a user bubble. */
@@ -4110,7 +4140,6 @@ export class DawnIngest implements Ingest {
                );
                break;
             }
-            const info = interpretMessage(String((p as { text?: string }).text ?? ""));
             const text = info?.text ?? "";
             if (text) this.sinks.conversation.renderAppended({ role, text, messageId });
             if (info?.tools) for (const c of info.tools) this.sinks.conversation.toolCall(c);

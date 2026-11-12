@@ -6,14 +6,16 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { FakeDawn } from "./fake-dawn.ts";
-import { forceLogout, type Scenario } from "./scenarios.ts";
+import { FakeDawn, deliveryTargets } from "./fake-dawn.ts";
+import { forceLogout, superseded, type Scenario } from "./scenarios.ts";
 
 /* The largest request body or socket message accepted (a login is a few hundred bytes, a frame a
    few kilobytes): the dev server listens on the LAN, so nothing from it is taken unbounded. */
 const MAX_BODY = 64 * 1024;
 /* How much of the fake's log a long dev session keeps. */
 const MAX_LOG = 2000;
+/* The saved conversations a long session keeps (the oldest go first): generous, but bounded. */
+const STORE_LIMIT = { conversations: 200, messages: 1000 };
 
 export interface NodeFakeDawn {
    fake: FakeDawn;
@@ -80,15 +82,30 @@ export function attachFakeDawn(
    scenario: Scenario,
    opts: { secure: boolean; log: (line: string) => void }
 ): NodeFakeDawn {
-   const fake = new FakeDawn(scenario, { maxLog: MAX_LOG });
+   const fake = new FakeDawn(scenario, { maxLog: MAX_LOG, storeLimit: STORE_LIMIT });
    fake.onViolation = (what) => opts.log(printable(`[fake DAWN] ${what}`));
 
    const sockets = new Set<WebSocket>();
+   /* The main sockets by connection id: a frame the fake sends on its own goes to one connection
+      or to all but one (deliveryTargets). */
+   const mains = new Map<string, WebSocket>();
+   let nextConn = 0;
+   fake.onPush = (frame, to) => {
+      for (const ws of deliveryTargets(mains, to)) ws.send(JSON.stringify(frame));
+   };
+   /* A connection another took its session from: told, then closed with 4001, as DAWN does. */
+   fake.onEvict = (conn) => {
+      const ws = mains.get(conn);
+      mains.delete(conn);
+      ws?.send(JSON.stringify(superseded()));
+      ws?.close(4001, "superseded");
+   };
    fake.onSessionEnd = () => {
       for (const ws of sockets) {
          ws.send(JSON.stringify(forceLogout()));
          ws.close(4002, "logged out");
       }
+      mains.clear(); // nothing more goes to a closing socket
    };
 
    /* dawn-1.0 is chosen when the client asks for it; without it the upgrade still completes (as
@@ -119,7 +136,14 @@ export function attachFakeDawn(
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
          sockets.add(ws);
-         ws.on("close", () => sockets.delete(ws));
+         const conn = `ws${++nextConn}`;
+         const main = url.pathname === "/ws";
+         if (main) mains.set(conn, ws);
+         ws.on("close", () => {
+            sockets.delete(ws);
+            mains.delete(conn);
+            fake.closed(conn); // a no-op unless the connection made a session
+         });
          /* An oversized or malformed frame: ws reports it here and closes the connection. Without
             a listener Node would treat it as uncaught and stop the dev server. */
          ws.on("error", (e) => fake.violate(`socket error: ${e.message}`));
@@ -131,7 +155,8 @@ export function attachFakeDawn(
             /* Nothing a client sends may take the dev server down: a fault in the fake is a
                violation to read, and that frame gets no answer. */
             try {
-               for (const frame of fake.message(frameText(data))) ws.send(JSON.stringify(frame));
+               for (const frame of fake.message(frameText(data), conn))
+                  ws.send(JSON.stringify(frame));
             } catch (e) {
                fake.violate(`the fake failed on a frame: ${(e as Error).message}`);
             }
@@ -187,6 +212,7 @@ export function attachFakeDawn(
       fake,
       middleware,
       close: () => {
+         fake.dispose();
          server.off("upgrade", onUpgrade);
          for (const ws of sockets) ws.terminate();
          wss.close();
