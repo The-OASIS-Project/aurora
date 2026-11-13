@@ -56,7 +56,10 @@ describe("the local model list arriving", () => {
       const c = client("local", "old-model");
       c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
       expect(c.llmWrites()).toEqual([
-         { type: "set_session_llm", payload: { model: "loaded.gguf", from_restore: true } }
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
       ]);
       expect(c.ing.llm.model).toBe("loaded.gguf");
    });
@@ -219,7 +222,10 @@ describe("switching to local mode", () => {
       );
       listFirst.frame("get_config_response", runtime);
       expect(listFirst.llmWrites()).toEqual([
-         { type: "set_session_llm", payload: { model: "loaded.gguf", from_restore: true } }
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
       ]);
 
       const configFirst = client("cloud", "");
@@ -230,7 +236,10 @@ describe("switching to local mode", () => {
          list("llama.cpp", ["loaded.gguf"], "loaded.gguf")
       );
       expect(configFirst.llmWrites()).toEqual([
-         { type: "set_session_llm", payload: { model: "loaded.gguf", from_restore: true } }
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
       ]);
    });
 
@@ -395,5 +404,17 @@ describe("switching to local mode", () => {
          expect(c.ing.llm.model).toBe("claude-opus-5-5");
          expect(c.ing.llm.reasoning).not.toBe("disabled");
       }
+   });
+
+   it("a loaded conversation with no stored model reads the model that actually runs", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.applyConvLlmSettings({ llm_type: "local", model: "" });
+      expect(c.sent.filter((m) => m.type === "get_config")).toHaveLength(1);
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "local", provider: "", model: "configured-local" }
+      });
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["local", "configured-local"]);
+      expect(c.llmWrites()).toEqual([]);
    });
 });

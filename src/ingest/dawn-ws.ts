@@ -5507,7 +5507,10 @@ export class DawnIngest implements Ingest {
             segment (never grey the active provider). */
          this.llm.providers = { ...this.llm.providers, [prov]: true };
       }
+      /* An empty model (DAWN PR #113) means that type's or provider's own default, which DAWN
+         restored the session to: read the model that actually runs (a read, not a write). */
       if (s.model) this.llm.model = s.model;
+      else if (s.model === "") this.askConfig();
       this.applyReasoningFields(settings);
    }
 
@@ -5657,7 +5660,12 @@ export class DawnIngest implements Ingest {
       if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
          this.llm.model = loaded;
          this.fitReasoningToModel();
-         this.send({ type: "set_session_llm", payload: { model: loaded, from_restore: true } });
+         /* type with the model: without it, a local name that starts like a cloud one (Ollama's
+            gpt-oss:20b) is taken for a cloud model, and DAWN moves the session to cloud. */
+         this.send({
+            type: "set_session_llm",
+            payload: { type: "local", model: loaded, from_restore: true }
+         });
       }
       this.notifyLlm();
    }
