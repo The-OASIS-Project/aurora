@@ -73,9 +73,12 @@ The safety net is four things, and you are expected to use all of them:
    (`tests/fake-dawn/`): canned replies in DAWN's own wire format, served to the real
    client. It checks that Aurora starts and stands up signed out, signed in (resuming the
    open conversation), against an older DAWN without feature flags, against a newer
-   protocol, in a browser without WebGL, and through a lost and restored WebGL context, and
-   fails on any uncaught exception, console error, or request the fake
-   doesn't expect. A new request the client sends needs a rule in
+   protocol, in a browser without WebGL, and through a lost and restored WebGL context, plus
+   sending a message, New Chat, a second tab's takeover, and the top band's layout. It fails on
+   any uncaught exception, console error, or request the fake doesn't expect. Only the
+   reactor's own tests (`reactor.spec.ts`) keep WebGL; the rest run with it off, since headless
+   Chromium draws the reactor on the CPU and that made the suite slow and its waits flaky on a
+   busy machine. A new request the client sends needs a rule in
    `tests/fake-dawn/fake-dawn.ts`; a changed DAWN reply needs its fixture updated in
    `tests/fake-dawn/scenarios.ts`. Two things keep those fixtures honest:
    `src/ingest/fake-dawn-fixtures.test.ts` (part of `npm test`) runs each one through the
