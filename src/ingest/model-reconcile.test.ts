@@ -257,4 +257,85 @@ describe("switching to local mode", () => {
          payload: { type: "local", model: "llama3" }
       });
    });
+
+   it("a lists-only config reply never changes the selection, even after DAWN's tool switched it", () => {
+      const c = client("local", "old-model");
+      c.ing.requestConfigRefresh(); // the MODEL panel opened: a lists-only ask, in flight
+      c.ing.applyLlmState(
+         JSON.stringify({
+            type: "llm_state_update",
+            payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
+         })
+      ); // a tool switched the model, and asks for the full config
+      const snapshot = (type: string, model: string) =>
+         c.frame("get_config_response", {
+            success: true,
+            llm_runtime: { type, provider: "Claude", model }
+         });
+      snapshot("local", "old-model"); // the lists-only reply, from before the switch
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      snapshot("cloud", "claude-opus-5-5"); // the full re-read
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("an older reply's reasoning doesn't overwrite the newer model's", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.reasoning = "adaptive";
+      c.ing.llm.effort = "medium";
+      const control = c.ing.getModelControl();
+      control.setModel("claude-a");
+      control.setModel("claude-b");
+      c.frame("set_session_llm_response", {
+         success: true,
+         model: "claude-a",
+         thinking_mode: "disabled",
+         reasoning_effort: "low"
+      });
+      expect([c.ing.llm.model, c.ing.llm.reasoning]).toEqual(["claude-b", "adaptive"]);
+      c.frame("set_session_llm_response", {
+         success: true,
+         model: "claude-b",
+         thinking_mode: "adaptive",
+         reasoning_effort: "high"
+      });
+      expect(c.ing.llm.effort).toBe("high");
+   });
+
+   it("a new connection forgets the old local list: a switch waits for the new one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.localModels = ["gone-model"]; // from before DAWN restarted
+      const sockets: Array<{ onopen: (() => void) | null }> = [];
+      vi.stubGlobal(
+         "WebSocket",
+         Object.assign(
+            class {
+               static OPEN = 1;
+               readyState = 1;
+               binaryType = "";
+               onopen: (() => void) | null = null;
+               onmessage = null;
+               onclose = null;
+               onerror = null;
+               constructor() {
+                  sockets.push(this);
+               }
+               send(t: string): void {
+                  c.sent.push(JSON.parse(t));
+               }
+               close(): void {}
+            },
+            { OPEN: 1 }
+         )
+      );
+      vi.stubGlobal("__APP_VERSION__", "test"); // the build defines it; the handshake sends it
+      c.ing.openSocket();
+      sockets[0].onopen?.();
+      const before = c.llmWrites().length;
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites().slice(before)).toEqual([
+         { type: "set_session_llm", payload: { type: "local" } }
+      ]);
+      vi.unstubAllGlobals();
+   });
 });

@@ -1241,12 +1241,14 @@ export class DawnIngest implements Ingest {
       selection (mode/provider/model/reasoning) - that would revert a loaded conversation's
       provider back to the session default, since DAWN does not switch the session LLM on a
       conversation load (applyConvLlmSettings owns that, client-side). */
-   private modelsRefreshOnly = false;
-   /* Each set_session_llm sent bumps llmWriteSeq; each get_config asked records it (replies come in
-      order). A reply asked before a later model write is an older snapshot: it updates the lists,
-      not the selection the user has since changed. */
-   private llmWriteSeq = 0;
-   private configAsks: number[] = [];
+   /* The model selection's revision: bumped by everything that changes it (a set_session_llm
+      sent, DAWN's tool switching the model, a conversation's settings, New Chat). Each get_config
+      asked records the revision and its purpose (replies come in order). A reply asked at an
+      older revision is an older snapshot, and a lists-only one (a config edit, the MODEL panel
+      opening) never touches the selection: either way it updates only the lists and
+      availability. */
+   private llmRev = 0;
+   private configAsks: Array<{ rev: number; listsOnly: boolean }> = [];
    /* set_session_llm replies still owed. Only the reply to the latest write may change the
       selection or a pending switch: an older one (local -> cloud -> local in quick succession)
       would undo a newer choice. */
@@ -1628,9 +1630,12 @@ export class DawnIngest implements Ingest {
             before we know, and pick the lightweight re-anchor even on a fresh session. */
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
-         this.configAsks = [this.llmWriteSeq]; // a new socket: no older ask will be answered
+         this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmRepliesOwed = 0; // nor an older model write
-         this.localLoadedModel = ""; // learned again from this connection's list
+         /* Learned again from this connection's list (the local provider's models may have
+            changed meanwhile): until it comes, a switch to local waits for it. */
+         this.localModels = [];
+         this.localLoadedModel = "";
          ws.send(JSON.stringify({ type: "get_config" }));
          /* The user's timezone, so the clock shows their local time (the box running
             Chrome may be UTC). */
@@ -2402,9 +2407,8 @@ export class DawnIngest implements Ingest {
             /* A models-only refresh (MODEL panel open) must not touch the current
                selection - that could revert a loaded conversation's provider/model back to
                the session default. Update only the lists (above) + availability (below). */
-            const askedAt = this.configAsks.shift() ?? this.llmWriteSeq;
-            const olderThanAChoice = this.llmWriteSeq > askedAt;
-            const appliesSelection = !this.modelsRefreshOnly && !olderThanAChoice;
+            const ask = this.configAsks.shift() ?? { rev: this.llmRev, listsOnly: false };
+            const appliesSelection = !ask.listsOnly && ask.rev === this.llmRev;
             if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
@@ -2431,7 +2435,6 @@ export class DawnIngest implements Ingest {
                   openrouter: rt.openrouter_available === true || this.llm.provider === "openrouter"
                };
             }
-            this.modelsRefreshOnly = false;
             /* The local model list may have come first on this connection: now that the mode is
                known, follow llama.cpp's loaded model (a no-op otherwise). */
             if (appliesSelection) this.syncLoadedLocalModel();
@@ -2506,11 +2509,14 @@ export class DawnIngest implements Ingest {
                         p.openrouter_available === true || this.llm.provider === "openrouter"
                   };
                }
-               this.applyReasoningFields(p);
-               if (p.reasoning_adjusted === true) {
-                  this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
-                     hold: 6
-                  });
+               /* An older reply's reasoning belongs to the model it was for, not the newer one. */
+               if (latestReply) {
+                  this.applyReasoningFields(p);
+                  if (p.reasoning_adjusted === true) {
+                     this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
+                        hold: 6
+                     });
+                  }
                }
                this.notifyLlm();
             } else {
@@ -4291,6 +4297,7 @@ export class DawnIngest implements Ingest {
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
    newChat(): void {
       this.localPickPending = false; // a new chat starts from DAWN's defaults, not an old switch
+      this.llmRev++;
       this.send({ type: "clear_session" });
       /* A new chat starts on DAWN's configured default model (dawn.toml), not whatever the last
          conversation ran on: DAWN's "reset" restores the session LLM config to its defaults, and
@@ -5418,16 +5425,15 @@ export class DawnIngest implements Ingest {
    }
 
    /* Re-request get_config to refresh the cloud model lists + provider availability after a
-      backend config edit. Sets modelsRefreshOnly so the response updates the lists only,
-      never the current selection (which would clobber a loaded conversation's provider).
+      backend config edit. Asked lists-only (configAsks), so the response updates the lists
+      only, never the current selection (which would clobber a loaded conversation's provider).
       Shared by the config_changed push and the MODEL-panel-open refetch. */
    private requestConfigRefresh(): void {
-      this.modelsRefreshOnly = true;
-      this.askConfig();
+      this.askConfig(true);
    }
 
-   private askConfig(): void {
-      this.configAsks.push(this.llmWriteSeq);
+   private askConfig(listsOnly = false): void {
+      this.configAsks.push({ rev: this.llmRev, listsOnly });
       this.send({ type: "get_config" });
    }
 
@@ -5443,6 +5449,7 @@ export class DawnIngest implements Ingest {
       if (!pl || typeof pl !== "object") return;
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
       this.localPickPending = false; // a tool switched the model: nothing of the user's to complete
+      this.llmRev++; // older config snapshots no longer describe the selection
       if (typeof pl.provider === "string") {
          const prov = pl.provider.toLowerCase();
          if (isLlmProvider(prov)) this.llm.provider = prov;
@@ -5457,7 +5464,6 @@ export class DawnIngest implements Ingest {
       /* A switch_llm tool call changed the session model, and reasoning now depends on the model
          (P1.1b), but this frame carries no reasoning fields or caps. Re-read the session's
          runtime (a full get_config, not a lists-only refresh) for the effective values. */
-      this.modelsRefreshOnly = false;
       this.askConfig();
       this.notifyLlm();
    }
@@ -5480,6 +5486,7 @@ export class DawnIngest implements Ingest {
       when it is absent from the active provider's list (as an OpenRouter model is). */
    private applyConvLlmSettings(settings: unknown): void {
       this.localPickPending = false; // a loaded conversation ends any earlier switch's wait
+      this.llmRev++; // its settings are newer than any config snapshot in flight
       if (!settings || typeof settings !== "object") return;
       const s = settings as {
          llm_type?: string;
@@ -5722,7 +5729,7 @@ export class DawnIngest implements Ingest {
             /* Re-request get_config so a backend model-list edit is picked up live when the
                MODEL panel opens. The get_config_response handler refreshes this.cloudModels
                + availability and rebuilds the open panel, skipping the session selection (see
-               modelsRefreshOnly). Complements the config_changed push (which also fires this
+               a lists-only ask). Complements the config_changed push (which also fires this
                when the panel is closed); keeping both is belt-and-suspenders. */
             this.requestConfigRefresh();
          }
@@ -6163,7 +6170,7 @@ export class DawnIngest implements Ingest {
       Never `text`: a chat message is always attempted, and a refusal says so. */
       const type = (msg as { type?: unknown }).type;
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
-      if (type === "set_session_llm") this.llmWriteSeq++; // see configAsks
+      if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState === WebSocket.OPEN) {
          if (type === "set_session_llm") this.llmRepliesOwed++; // see llmRepliesOwed
          this.ws.send(JSON.stringify(msg));
