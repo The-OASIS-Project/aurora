@@ -338,4 +338,28 @@ describe("switching to local mode", () => {
       ]);
       vi.unstubAllGlobals();
    });
+
+   it("a refusal shows the session's reasoning as well as its model", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.reasoning = "adaptive";
+      c.ing.llm.effort = "medium";
+      const control = c.ing.getModelControl();
+      control.setModel("claude-a"); // accepted, but its reply is no longer the latest
+      control.setProvider("openai"); // refused: no API key
+      c.frame("set_session_llm_response", { success: true, model: "claude-a" });
+      c.frame("set_session_llm_response", {
+         success: false,
+         error: "API key not configured for requested provider",
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-a",
+         thinking_mode: "adaptive",
+         reasoning_effort: "high"
+      });
+      expect([c.ing.llm.provider, c.ing.llm.model, c.ing.llm.effort]).toEqual([
+         "claude",
+         "claude-a",
+         "high"
+      ]);
+   });
 });

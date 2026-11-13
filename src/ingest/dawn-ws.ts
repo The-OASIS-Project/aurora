@@ -2536,6 +2536,7 @@ export class DawnIngest implements Ingest {
                      if (isLlmProvider(prov)) this.llm.provider = prov;
                   }
                   if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+                  this.applyReasoningFields(p); // its reasoning too, as DAWN resolved it
                }
                this.notifyLlm();
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
