@@ -1247,6 +1247,10 @@ export class DawnIngest implements Ingest {
       not the selection the user has since changed. */
    private llmWriteSeq = 0;
    private configAsks: number[] = [];
+   /* set_session_llm replies still owed. Only the reply to the latest write may change the
+      selection or a pending switch: an older one (local -> cloud -> local in quick succession)
+      would undo a newer choice. */
+   private llmRepliesOwed = 0;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
@@ -1625,6 +1629,8 @@ export class DawnIngest implements Ingest {
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [this.llmWriteSeq]; // a new socket: no older ask will be answered
+         this.llmRepliesOwed = 0; // nor an older model write
+         this.localLoadedModel = ""; // learned again from this connection's list
          ws.send(JSON.stringify({ type: "get_config" }));
          /* The user's timezone, so the clock shows their local time (the box running
             Chrome may be UTC). */
@@ -2398,7 +2404,8 @@ export class DawnIngest implements Ingest {
                the session default. Update only the lists (above) + availability (below). */
             const askedAt = this.configAsks.shift() ?? this.llmWriteSeq;
             const olderThanAChoice = this.llmWriteSeq > askedAt;
-            if (!this.modelsRefreshOnly && !olderThanAChoice) {
+            const appliesSelection = !this.modelsRefreshOnly && !olderThanAChoice;
+            if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
                const prov = (rt.provider ?? "").toLowerCase();
@@ -2425,7 +2432,10 @@ export class DawnIngest implements Ingest {
                };
             }
             this.modelsRefreshOnly = false;
-            this.notifyLlm();
+            /* The local model list may have come first on this connection: now that the mode is
+               known, follow llama.cpp's loaded model (a no-op otherwise). */
+            if (appliesSelection) this.syncLoadedLocalModel();
+            else this.notifyLlm();
             break;
          }
 
@@ -2458,7 +2468,7 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "set_session_llm_response":
+         case "set_session_llm_response": {
             /* Authoritative echo of a set_session_llm change (§9.1d). Reflect the
                value the SERVER resolved, not the one the user picked, across every
                field the response carries (provider / model / *_available /
@@ -2467,20 +2477,24 @@ export class DawnIngest implements Ingest {
                new model + availability set the optimistic local state does not know.
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
+            this.llmRepliesOwed = Math.max(0, this.llmRepliesOwed - 1);
+            const latestReply = this.llmRepliesOwed === 0; // older ones can't undo a newer choice
             if (p.success !== false) {
-               /* type (local|cloud): a "reset" from New can move the session across it. */
-               if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
-               /* Moved off local meanwhile (a "reset" from New): no local pick left to complete. */
-               if (this.llm.mode !== "local") this.localPickPending = false;
-               if (typeof p.provider === "string") {
-                  const prov = p.provider.toLowerCase();
-                  if (isLlmProvider(prov)) this.llm.provider = prov;
+               if (latestReply) {
+                  /* type (local|cloud): a "reset" from New can move the session across it. */
+                  if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+                  /* Moved off local meanwhile (a "reset" from New): no local pick left to complete. */
+                  if (this.llm.mode !== "local") this.localPickPending = false;
+                  if (typeof p.provider === "string") {
+                     const prov = p.provider.toLowerCase();
+                     if (isLlmProvider(prov)) this.llm.provider = prov;
+                  }
+                  /* A local session with no named model ("server decides", e.g. after New's reset
+                     to a local default) echoes model "". Show "local", as get_config's llm_runtime
+                     names it, rather than keeping the previous (cloud) model's name. */
+                  if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+                  else if (this.llm.mode === "local" && p.model === "") this.llm.model = "local";
                }
-               /* A local session with no named model ("server decides", e.g. after New's reset to a
-                  local default) echoes model "". Show "local", as get_config's llm_runtime names it,
-                  rather than keeping the previous (cloud) model's name. */
-               if (typeof p.model === "string" && p.model) this.llm.model = p.model;
-               else if (this.llm.mode === "local" && p.model === "") this.llm.model = "local";
                /* Availability only when the echo actually carries it (both builders
                   do as of Phase 1); absent -> leave the current record untouched. */
                if (p.openai_available !== undefined) {
@@ -2506,14 +2520,17 @@ export class DawnIngest implements Ingest {
                const err = (p as { error?: string }).error;
                console.warn("[dawn] set_session_llm rejected:", err);
                /* Nothing of a refused switch is left to complete, and the panel shows what the
-                  session still runs: DAWN's refusal echoes its config. */
-               this.localPickPending = false;
-               if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
-               if (typeof p.provider === "string") {
-                  const prov = p.provider.toLowerCase();
-                  if (isLlmProvider(prov)) this.llm.provider = prov;
+                  session still runs: DAWN's refusal echoes its config (unless a newer write is
+                  still owed a reply, which this refusal doesn't speak for). */
+               if (latestReply) {
+                  this.localPickPending = false;
+                  if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+                  if (typeof p.provider === "string") {
+                     const prov = p.provider.toLowerCase();
+                     if (isLlmProvider(prov)) this.llm.provider = prov;
+                  }
+                  if (typeof p.model === "string" && p.model) this.llm.model = p.model;
                }
-               if (typeof p.model === "string" && p.model) this.llm.model = p.model;
                this.notifyLlm();
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
                   tone: "attention",
@@ -2521,6 +2538,7 @@ export class DawnIngest implements Ingest {
                });
             }
             break;
+         }
 
          case "get_my_settings_response": {
             /* An unset user zone ("") means the server's zone (DAWN user-timezone): DAWN sends its
@@ -6146,7 +6164,10 @@ export class DawnIngest implements Ingest {
       const type = (msg as { type?: unknown }).type;
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
       if (type === "set_session_llm") this.llmWriteSeq++; // see configAsks
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+      if (this.ws?.readyState === WebSocket.OPEN) {
+         if (type === "set_session_llm") this.llmRepliesOwed++; // see llmRepliesOwed
+         this.ws.send(JSON.stringify(msg));
+      }
    }
 
    /* UNKNOWN_TYPE (DAWN bcb0bdc1+; older daemons send nothing): see the error case. Only an

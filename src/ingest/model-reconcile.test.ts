@@ -205,4 +205,56 @@ describe("switching to local mode", () => {
          payload: { type: "local", model: "llama3" }
       });
    });
+
+   it("follows llama.cpp's loaded model whichever of the list and the config comes first", () => {
+      const runtime = {
+         success: true,
+         llm_runtime: { type: "local", provider: "", model: "old-model" }
+      };
+      const listFirst = client("cloud", ""); // nothing known yet on this connection
+      listFirst.ing.askConfig();
+      listFirst.frame(
+         "list_llm_models_response",
+         list("llama.cpp", ["loaded.gguf"], "loaded.gguf")
+      );
+      listFirst.frame("get_config_response", runtime);
+      expect(listFirst.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { model: "loaded.gguf", from_restore: true } }
+      ]);
+
+      const configFirst = client("cloud", "");
+      configFirst.ing.askConfig();
+      configFirst.frame("get_config_response", runtime);
+      configFirst.frame(
+         "list_llm_models_response",
+         list("llama.cpp", ["loaded.gguf"], "loaded.gguf")
+      );
+      expect(configFirst.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { model: "loaded.gguf", from_restore: true } }
+      ]);
+   });
+
+   it("an older echo can't cancel a newer switch (local, cloud, local in quick succession)", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      const control = c.ing.getModelControl();
+      control.setMode("local");
+      control.setMode("cloud");
+      control.setMode("local"); // the latest choice, still waiting for the list
+      const echo = (type: string) =>
+         c.frame("set_session_llm_response", {
+            success: true,
+            type,
+            provider: "claude",
+            model: "claude-sonnet-5-5"
+         });
+      echo("local");
+      echo("cloud"); // older: mustn't undo the final switch
+      expect(c.ing.llm.mode).toBe("local");
+      echo("local");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
 });
