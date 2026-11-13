@@ -4422,6 +4422,11 @@ export class DawnIngest implements Ingest {
       }
       this.convId = id;
       this.sinks.conversationList.setActive(id);
+      /* Opening another conversation ends a switch to local still waiting for the model list:
+         completed after this request, DAWN would save it onto the conversation being opened. Its
+         own settings are coming, so older config snapshots no longer describe the selection. */
+      this.localPickPending = false;
+      this.llmRev++;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
    }
 

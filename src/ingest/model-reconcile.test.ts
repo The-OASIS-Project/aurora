@@ -443,4 +443,12 @@ describe("switching to local mode", () => {
          );
       }
    });
+
+   it("opening another conversation ends a switch's wait at once, before its settings arrive", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local");
+      c.ing.loadConversation(7); // its load_conversation_response is still on the way
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
+   });
 });
