@@ -50,8 +50,10 @@ tried in a browser: for audio, the reactor or layout, a visual check is the only
   `innerHTML`.
 - **Parity with DAWN's WebUI, in Aurora's own form.** Aurora is headed for everything DAWN's WebUI
   does, admin functions included, designed as a calm ambient interface rather than ported. A
-  request to DAWN starts from a deliberate user gesture (never from received content), an admin
-  action is offered only to an admin, and what can't be taken back needs a named confirmation.
+  request that changes something on DAWN starts from a deliberate user gesture (reads are
+  automatic, and completing or restoring a choice the user already made is fine; received content
+  never starts an action), an admin action is offered only to an admin, and what can't be taken
+  back needs a named confirmation.
   [CLAUDE.md](CLAUDE.md) has the rules and lists the requests Aurora makes.
 - 3-space indent and 100-column lines (Prettier enforces both), and no em dashes in prose.
 
