@@ -8,9 +8,9 @@
  * watches FIRE arrive as attention_alert / silent_observation cards; this shows what is
  * being watched and the live values behind them.
  *
- * Read + a benign per-watch enable/disable (watch_set_enabled), a deliberate user action in
- * the sanctioned class (like set_pinned) - NOT ambient control. The global attention flag is
- * DISPLAY ONLY (toggling it is a set_config, out of the read-mostly charter). There is no
+ * Read + a benign per-watch enable/disable (watch_set_enabled), a deliberate user action like
+ * set_pinned. The global attention flag is display-only for now (toggling it is a set_config,
+ * an admin-only parity gap with DAWN's WebUI). There is no
  * push: the ingest polls watch_list (a cheap read) and re-lists after a toggle to reconcile;
  * the live readings refresh on that poll, so the row spikes only on DISCRETE transitions
  * (enable flip, reading appearing/disappearing), never on the continuously-varying number.

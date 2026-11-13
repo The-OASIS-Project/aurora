@@ -283,7 +283,8 @@ const haPanel = mountHAPanel(stage, {
 /* The Watches board: DAWN's SAGE proactive-alert rules (what it's watching + live readings),
    the config side of the attention notices. The ingest polls watch_list (no push); the enable
    toggle is a benign per-watch flip (watch_set_enabled), gated on liveness like the HA board.
-   The global attention flag is display-only (toggling it is out of the read-mostly charter). */
+   The global attention flag is display-only for now (toggling it is a set_config: an admin-only
+   parity gap with DAWN's WebUI). */
 const watchesPanel = mountWatchesPanel(stage, {
    onRefresh: () => ingest.requestWatches(),
    onToggle: (id, enabled) => ingest.setWatchEnabled(id, enabled),
@@ -300,8 +301,8 @@ const watchesPanel = mountWatchesPanel(stage, {
 
 /* The Stocks panel: a read-only view of the user's OWN Schwab portfolio, pushed over the WS.
    The subscription is gated on effective visibility (shown AND not standby/hidden), so DAWN
-   only fetches from Schwab while someone is actually looking. In-charter (own data, no write
-   beyond the sanctioned subscribe/get); Aurora never owns the Schwab OAuth re-auth. */
+   only fetches from Schwab while someone is actually looking. Reads only (subscribe/get); the
+   Schwab OAuth re-auth stays with DAWN's CLI. */
 const stocksPanel = mountStocksPanel(stage, {
    onPortfolioSubscribe: (enabled, extHours) => ingest.stocksPortfolioSubscribe(enabled, extHours),
    onRefresh: (extHours) => ingest.refreshStocks(extHours),
@@ -311,8 +312,8 @@ const stocksPanel = mountStocksPanel(stage, {
 
 /* The Watchlist panel: the user's tracked (NOT held) Schwab symbols, its OWN standalone panel and
    its OWN subscription, independent of and gated separately from the portfolio (Portfolio = held,
-   Watchlist = tracked). In-charter: quote reads + a user-scoped watchlist write (add/remove, the
-   same class as the Watches panel verbs); no operator/OAuth surface. */
+   Watchlist = tracked). Quote reads + the user's watchlist writes (add/remove, like the Watches
+   panel verbs); no OAuth surface. */
 const watchlistPanel = mountWatchlistPanel(stage, {
    onWatchSubscribe: (enabled, extHours) => ingest.stocksWatchSubscribe(enabled, extHours),
    onRefresh: (extHours) => ingest.refreshWatchlist(extHours),

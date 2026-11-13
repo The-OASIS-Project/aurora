@@ -6,8 +6,8 @@
  * (toggles for on/off things, a slider for brightness/position, a dropdown for climate
  * modes). The header is the drag handle; the body is interactive.
  *
- * Control is a deliberate, user-initiated Tier-C write (like music transport), not
- * ambient control - it fits the read-mostly charter's carve-out for explicit actions.
+ * Control is a deliberate, user-initiated Tier-C write (like music transport), never
+ * ambient: only a widget gesture sends it.
  * The write path (ha_call_service, signal-map §9.4 #8) is live: a widget flips
  * optimistically for snap, and the server re-polls HA and broadcasts a fresh entity set
  * that reconciles the board (a failed call re-polls to revert and surfaces the error).

@@ -13,11 +13,13 @@
  * logged once (see UNHANDLED) so the real traffic tells us what to wire next.
  * Panels (attention/scheduler/jobs/music/HA) are later slices.
  *
- * READ-MOSTLY: this client sends nothing that mutates DAWN. On open it sends
- * `init` with tts_enabled:false (no TTS audio streamed to a display). The only
- * outbound that does real work is `text`, and only when the user types a message
- * into the console. Focus/blur (setEngaged) tells DAWN nothing - our reactor
- * reflects DAWN's actual state, never our input focus.
+ * WRITES: everything this client sends that changes DAWN starts from a deliberate user
+ * gesture (a typed message, a panel action, a confirm). A received frame may complete or
+ * restore what the user already chose (a preference re-sent after a reconnect, a deferred
+ * setting, the re-anchor), never start a new action. DAWN's permissions decide what it may
+ * do (CLAUDE.md, "Parity with DAWN's WebUI").
+ * Focus/blur (setEngaged) tells DAWN nothing - our reactor reflects DAWN's actual
+ * state, never our input focus.
  *
  * Protocol reference: dawn/docs/WEBSOCKET_PROTOCOL.md
  * Consumer map:       docs/DAWN_UI_SIGNAL_MAP.md
@@ -4646,10 +4648,8 @@ export class DawnIngest implements Ingest {
       const bytes = new Uint8Array(buf);
       if (bytes.length === 0) return;
       const op = bytes[0];
-      /* TTS mute is enforced client-side: if the user muted mid-session, just drop the
-         incoming audio rather than telling DAWN to stop synthesizing (a Tier-C write the
-         read-mostly charter forbids). The connect-time tts_enabled handshake still lets
-         DAWN skip synthesis when we connect already muted. */
+      /* Muted: drop the audio. DAWN applies set_tts_enabled from the next turn, so a reply
+         already being spoken when the user mutes keeps sending audio until it ends. */
       if (op === BIN_AUDIO_OUT) {
          if (this.ttsEnabled) this.tts.queue(bytes.subarray(1));
       } else if (op === BIN_AUDIO_SEGMENT_END) {
@@ -5638,8 +5638,8 @@ export class DawnIngest implements Ingest {
    }
 
    /* TTS on/off. `set_tts_enabled` is a per-connection preference ("don't synthesize
-      voice for MY socket") - a sanctioned user-initiated write in the same benign class
-      as set_private, NOT a depower-DAWN control. Telling DAWN matters beyond the local
+      voice for MY socket") - a deliberate per-connection write like set_private.
+      Telling DAWN matters beyond the local
       audio drop: with tts_enabled true, DAWN synthesizes each sentence SYNCHRONOUSLY on
       the worker thread that reads LLM tokens (webui_text_processing.c), so the whole reply
       - text included - gets paced to synthesis speed. Muting only client-side leaves that

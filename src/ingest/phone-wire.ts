@@ -11,8 +11,8 @@
  *   ended   -> the card goes. Hang Up waits for DAWN's "ended" (it never vanishes on the click),
  *              with a 30 s fallback in case that frame is lost.
  *
- * Answering, rejecting, and hanging up the user's own phone are user-scoped writes (charter);
- * DAWN only lets the configured modem owner do them. After every (re)connect Aurora asks for the
+ * Answering, rejecting, and hanging up the user's own phone are deliberate writes; DAWN only
+ * lets the configured modem owner do them. After every (re)connect Aurora asks for the
  * live call state (phone_status: DAWN replies only while a call is live), and a link loss tears
  * the call UI down. Every caller string is DAWN data, bound via textContent by the notify layer.
  * Kept out of dawn-ws.ts: DawnIngest routes the frame here and supplies send + the sinks.

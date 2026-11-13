@@ -8,9 +8,8 @@ project-specific technical direction.
 
 Aurora is a calm, JARVIS-style ambient interface for D.A.W.N. (part of The OASIS
 Project). Vanilla TypeScript + Vite, no web framework. It reflects DAWN's WebSocket state
-and lets the user act on their own data and session; it is the **user's** interface, not
-DAWN's operator/admin console (that is DAWN's own WebUI). It runs on a PC or laptop, not
-the Jetson.
+and lets the user act on it. The direction is parity with DAWN's own WebUI, admin functions
+included, and then replacing it. It runs on a PC or laptop, not the Jetson.
 
 See @ARCHITECTURE.md for the four-layer design and the render seam, and
 @docs/DAWN_UI_SIGNAL_MAP.md for which DAWN signals the UI consumes.
@@ -39,17 +38,32 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   abstract coordinates through `RenderNode`; only `src/render/` knows pixels or CSS. If
   a state or choreography type grows a visual property, the seam is broken. This is the
   spine of the whole design.
-- **User surface, not operator console.** Aurora is the *user's* ambient interface to DAWN;
-  DAWN's own WebUI is the operator/admin console. Aurora writes freely on behalf of deliberate
-  user actions over the user's OWN data and session, but never crosses into operator/admin/global
-  control or anything that **depowers or reconfigures the daemon**. The test for any new write is
-  not "is it a write?" (that line is retired - Aurora long outgrew read-only eye-candy) but
-  "**is this the user acting on their own data, or an operator configuring the daemon?**"
-  - **Out of bounds - stays in DAWN's WebUI:** `set_config`, `set_secrets`, `restart`, user
-    management (`create_user` / `delete_user`, ...), and the SAGE **global attention flag**
-    (display-only in Aurora - toggling it is a `set_config`, admin/global). Anything that would
-    depower a live capability for the user or others is out.
-  - **The user-scoped writes Aurora makes** (all deliberate, user-initiated): chat submit;
+- **Parity with DAWN's WebUI, then replacing it.** Aurora began as the user's ambient view of
+  DAWN and has grown into a full client. The direction (2026-11-13) is everything DAWN's
+  WebUI does, its admin functions included (config, secrets, users, the global SAGE attention
+  flag, ...), so the WebUI can be retired.
+  - **Parity of capability, never of form.** Aurora stays a state-of-the-art, calm, ambient
+    interface, not a tool like the WebUI. Read the WebUI for what a feature must do and what it
+    guards (its data, its states, its confirms), then design Aurora's own way of doing it: things
+    that rest at a quiet summary and come forward when they matter, movable panels, the design
+    tokens, motion with purpose. Never port a WebUI screen, form or settings page as it is. An
+    admin function is no exception: it gets the same design care.
+
+  No kind of write is off-limits. What every write needs:
+  - **A deliberate user gesture.** A write starts from the user's own action. A received frame
+    may complete or restore what the user already chose (re-sending a preference after a
+    reconnect, applying a setting deferred until its conversation exists, the reconnect
+    re-anchor), but it **never starts a new action**, and nothing that can't be taken back runs
+    from anything but the gesture itself (a frame can ask for nothing on the user's behalf).
+  - **DAWN's own permissions decide who may do what.** Admin-only verbs answer only an admin
+    login; Aurora shows an admin action only to an admin (the session's `is_admin`), and treats a
+    refusal as a refusal, never retrying around it.
+  - **A named confirm for what can't be taken back,** at least wherever DAWN's WebUI has one:
+    anything that permanently removes or overwrites DAWN-side data, or changes the daemon for
+    every user (config, secrets, restart, users). When building a feature, check how DAWN's
+    WebUI does it, confirms included: matching what it can do and guards is the target, and a
+    difference in behaviour should be deliberate.
+  - **The writes Aurora makes today** (an inventory, not a limit): chat submit;
     `set_session_llm`; `set_private`; `set_tts_enabled` (a per-connection "mute my socket's voice"
     preference - it also stops DAWN pacing the reply to synthesis speed, so a client-side audio drop
     alone is not enough); `scheduler_action` dismiss / **snooze**; `new_conversation` + the UI's own
@@ -83,14 +97,11 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     `email_undo`, one-click with server-side undo, never a permanent delete, with DAWN's `email_changed`
     notice applied from any tab; "Discuss" sends a chat turn with `email_refs` (one email, words
     required, `email_refs` flag; DAWN's model reads the email through its tool, and a row's `email_ref`
-    redraws the chip, which opens the message in the Mail panel); account setup stays in DAWN's WebUI).
-  - **Destructive writes are gated.** Any write that permanently destroys DAWN-side data -
-    `delete_conversation` (cascade-deletes the conversation's images + child background jobs and
-    refuses on a running job), `watch_remove`, `delete_memory_*`, `forget_conversation_memories` -
-    is gated behind a named confirm and reachable ONLY from a deliberate user gesture, **never a
-    frame handler**. Rename/pin/enable flips are benign metadata, no gate.
-  - A new user-scoped write is fine; **flag it only if it might cross into operator/admin/global
-    territory or could depower the daemon.**
+    redraws the chip, which opens the message in the Mail panel; account setup is still
+    WebUI-only, a parity gap).
+  - **Confirm-gated today:** `delete_conversation` (cascade-deletes the conversation's images +
+    child background jobs and refuses on a running job), `watch_remove`, `delete_memory_*`,
+    `forget_conversation_memories`. Rename/pin/enable flips are benign metadata, no gate.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, HA board) and the notification cards (`src/notify/`) are
@@ -116,7 +127,7 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   build/tsc -> code review -> fix what's real -> hand over -> verify in browser -> commit only on
   confirmation. Launch the specialist review set in parallel via the Agent tool, scoped to the
   diff (`git diff <last-reviewed-ref>`): `render-seam-architect` (seam/architecture),
-  `correctness-reviewer` (logic), `web-frontend-security-reviewer` (XSS + read-mostly charter),
+  `correctness-reviewer` (logic), `web-frontend-security-reviewer` (XSS + write safety: gestures, confirms, admin gating),
   `browser-runtime-reviewer` (leaks/lifecycle). Scale the SET to the change (a small focused fix
   may need only the one or two relevant lenses), but running SOMETHING is the default - only
   genuinely trivial edits (a comment, a token rename, a copy tweak) skip it.

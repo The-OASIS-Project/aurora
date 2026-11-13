@@ -8,9 +8,8 @@ the exhaustive, bidirectional wire reference (every request, every admin verb,
 every satellite frame). This one answers a narrower, more useful question for
 building dashboards:
 
-> *As the user's interface to DAWN (not the operator's console), what signals does
-> DAWN hand me, which ones arrive on their own, which ones I have to ask for, and
-> what can I actually build with each?*
+> *As a client of DAWN, what signals does DAWN hand me, which ones arrive on their own,
+> which ones I have to ask for, and what can I actually build with each?*
 
 Everything below was read out of `dawn/src/webui/` (primarily
 `webui_broadcasts.c`, `webui_server.c`, and the per-domain handlers) as of
@@ -27,11 +26,11 @@ DAWN's WebSocket surface divides into three tiers from a UI's point of view:
 |------|-----------|------------|------------|
 | **A. Pushed signals** | Nothing (just connect) | On connect + whenever an event fires | The live, ambient heartbeat: reactor state, notices, jobs, alarms, music, phone |
 | **B. Poll (request/response)** | Send a request | Only when you ask | Filling a panel's *contents* (Home Assistant states, memory, metrics snapshots) |
-| **C. Control / mutation** | Send a command | Ack only | The user acting on their own data/session (chat, model, schedule, watches, memory deletes, ...). Wire the user-scoped ones; the operator/admin verbs stay out (see §6). |
+| **C. Control / mutation** | Send a command | Ack only | The user acting (chat, model, schedule, watches, memory, ...), and in time everything DAWN's WebUI does, admin functions included (see §6). |
 
 The dashboard is built almost entirely on **Tier A**, dips into **Tier B** to populate a
-few panels, and uses the **user-scoped** slice of **Tier C** for the user's own actions -
-while leaving the operator/admin slice to DAWN's own WebUI (§6).
+few panels, and uses **Tier C** for what the user does. Aurora is headed for parity with DAWN's
+own WebUI and then replacing it (§6), so Tier C grows toward everything the WebUI sends.
 
 The subtlety that drives the whole design: **an event and its content often
 arrive on different tiers.** A background job *finishing* is pushed (Tier A);
@@ -261,28 +260,28 @@ tell you, and defers the server work.
 
 ---
 
-## 6. Tier C - control / mutation (the user-vs-operator line)
+## 6. Tier C - control / mutation
 
-The charter (CLAUDE.md - "user surface, not operator console") draws its line
-**through** Tier C, not around it: Aurora wires the verbs where the **user acts on
-their own data or session**, and leaves the **operator/admin/global** verbs to DAWN's
-own WebUI.
+Aurora is headed for parity with DAWN's own WebUI, admin functions included, and then replacing
+it (CLAUDE.md, "Parity with DAWN's WebUI"; this replaced the earlier "user surface, not operator
+console" charter on 2026-11-13, so older notes below that call something "over the read-mostly
+line" now describe a parity gap, not a rule). No kind of write is off-limits. Every write starts
+from a deliberate user gesture (a received frame may complete or restore what the user already
+chose, such as a preference re-sent after a reconnect, never start a new action); DAWN's permissions decide who may make it
+(admin-only verbs answer only an admin login, and Aurora shows an admin action only to an admin);
+and what can't be taken back gets a named confirm, at least wherever the WebUI has one.
 
-- **Wired (user-scoped, all deliberate + user-initiated):** `text` submit, `music_control`,
-  `scheduler_action` (dismiss/snooze), the conversation picker verbs, the Watches verbs,
-  conversation attachments, the session-continuity re-anchors, and **memory deletes**
-  (`delete_memory_fact` / `_preference` / `_summary` / `_entity`, from the Context panel).
-  The destructive ones (`delete_conversation`, `watch_remove`, `delete_memory_*`) are
-  confirm-gated and fire only from a deliberate gesture, never a frame handler.
-- **Out (operator/admin/global - stays in DAWN's WebUI):** `set_config` / `get_config`(write)
-  / `set_secrets` / `restart`, user management (`create_user`, `delete_user`, ...), the SAGE
-  **global** attention flag, `job_action`, and anything that **depowers** a live capability.
-  `cancel` (interrupt a generation) is deliberately not wired either.
+- **Wired today:** `text` submit, `music_control`, `scheduler_action` (dismiss/snooze), the
+  conversation picker verbs, the Watches verbs, conversation attachments, the session-continuity
+  re-anchors, and **memory deletes** (`delete_memory_fact` / `_preference` / `_summary` /
+  `_entity`, from the Context panel). The destructive ones (`delete_conversation`,
+  `watch_remove`, `delete_memory_*`) are confirm-gated.
+- **Not wired yet (parity gaps):** `set_config` / `set_secrets` / `restart`, user management
+  (`create_user`, `delete_user`, ...), the SAGE **global** attention flag, `job_action`, and
+  `cancel` (interrupt a generation).
 
-**`set_tts_enabled` is a sanctioned exception, NOT a forbidden write** (in the
-`text` submit / `set_private` benign class). It is a per-connection preference -
-"don't synthesize voice for MY socket" - that touches no global state and depowers
-nothing. It matters beyond a local audio drop: while `tts_enabled` is true DAWN
+**`set_tts_enabled`** is a per-connection preference - "don't synthesize voice for MY
+socket" - that touches no global state. It matters beyond a local audio drop: while `tts_enabled` is true DAWN
 synthesizes each sentence **synchronously on the LLM-token worker thread**
 (`webui_text_processing.c:485`, `session_manager_llm.c`), so the whole reply - text
 included - is paced to synthesis speed. Muting only client-side leaves that pacing in
@@ -291,24 +290,22 @@ speed. DAWN captures the flag once at turn start, so a toggle takes effect from 
 turn. The UI sends it on toggle (`DawnIngest.setTtsEnabled`) and also rides `tts_enabled`
 on the init/reconnect handshake for the connect-already-muted case.
 
-The conversation picker (`src/conversation-picker/`) adds three more sanctioned,
-user-initiated exceptions in the same class as `text` submit / `set_private`:
+The conversation picker (`src/conversation-picker/`) adds three writes:
 `rename_conversation` and `set_pinned` (benign metadata flips), and
-**`delete_conversation`** - the one write in the whole UI that permanently destroys
-DAWN-side data. Per `webui_history.c`, delete cascade-deletes the conversation's images
+**`delete_conversation`**, which permanently destroys DAWN-side data. Per `webui_history.c`, delete cascade-deletes the conversation's images
 and child background jobs and refuses with `"Cancel the background job before deleting it."`
 while a job is running; if the deleted conversation was active, DAWN clears the session
 server-side. The UI therefore gates it behind a named, cascade-explicit confirm dialog,
 surfaces the running-job refusal as a notice, and only ever fires it from a deliberate row
 gesture, never a frame handler. Reads used by the picker (`list_conversations`,
 `search_conversations`, `load_conversation`) and `new_conversation` remain Tier A/B and the
-already-sanctioned open path.
+existing open path.
 
 The binary audio path is now wired. Outbound, the mic streams `AUDIO_IN` (`0x01`) +
 `AUDIO_IN_END` (`0x02`) for push-to-talk. Continuous listening toggles DAWN's server-side
 VAD/wake via `always_on_enable` / `always_on_disable` (`always_on_state` comes back, and
-enable failures arrive as ordinary `error` frames). Voice input is a deliberate, user-initiated write (the
-same sanctioned class as the `text` submit above), not ambient control. Inbound,
+enable failures arrive as ordinary `error` frames). Voice input is a deliberate, user-initiated write, like the
+`text` submit above. Inbound,
 `AUDIO_OUT` (`0x11`) TTS drives the reactor's FFT bars with DAWN's real voice, and the
 mic's own analyser drives them while the user speaks (no more state-scaled stand-in).
 
@@ -819,10 +816,10 @@ agent; verified live end to end.
   "stale connect-time snapshot" bug where the panel showed the connect default instead of the loaded
   conversation's real provider/model).
 
-**Charter note (why there is no editor here):** Aurora surfaces + selects OpenRouter models (a
-per-session `set_session_llm`, a sanctioned write). It does **not** build a model-list *editor*,
-because curating `openrouter_models` in `dawn.toml` is a config write, an admin function that is over
-Aurora's read-mostly line; that editor lives in the old WebUI (DAWN's admin panel).
+**Why there is no editor here (yet):** Aurora surfaces + selects OpenRouter models (a per-session
+`set_session_llm`). It doesn't build the model-list *editor*: curating `openrouter_models` in
+`dawn.toml` is a config write, which the old charter kept in DAWN's WebUI. Under the parity
+direction (2026-11-13) it is a parity gap: an admin-only editor, shown only to an admin.
 
 ---
 
@@ -884,9 +881,9 @@ against `dawn/src/webui/webui_attention.c` + `attention_catalog.c`.
   `stat.*`/`suit.*`/`component.*` → System/Suit/Components), NOT the watch `source` tag (that is
   provenance - seed/other).
 - **Display-only:** `attention_enabled` = DAWN's GLOBAL `g_config.attention.enabled`. The panel
-  surfaces a disarmed note ("enable in DAWN settings") but never toggles it - that is a
-  `set_config`, over the read-mostly line. (Matches the backend author's intent, per the
-  `webui_attention.c` comment.)
+  surfaces a disarmed note ("enable in DAWN settings") but doesn't toggle it - that is a
+  `set_config`, which the old charter kept in DAWN's WebUI. Under the parity direction
+  (2026-11-13) it is a parity gap: an admin-only toggle, shown only to an admin.
 - **Phase 2 (shipped):** `watch_add {metric}` (one-watch-per-metric upsert; DAWN templates the
   catalog defaults), `watch_update {id, direction?, threshold?, notify?}` (the edit modal sends
   the FULL field state to avoid clobbering catalog-default resets), and confirm-gated

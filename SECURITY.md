@@ -36,11 +36,14 @@ own DAWN session. In scope, among others:
 - **Script injection.** Any way for that outside text to run script or reach the
   page as markup instead of text: the markdown renderer, the email body pipeline,
   attachments, the generated-visuals sandbox, notification cards.
-- **Acting beyond the user's own data.** Aurora is the user's surface, not DAWN's
-  admin console: it never sends DAWN's operator or admin requests (settings,
-  secrets, restarts, user management). A way to make it do so, or to make it
-  perform a destructive action (deleting a conversation, a watch, a memory)
-  without the user's deliberate confirmation, is a vulnerability.
+- **Acting without the user's say-so.** Aurora reads DAWN's state on its own, but
+  changes something on DAWN only when the user asks (or to complete or restore a
+  choice they already made). A way to make it start an action from content it
+  received (a reply, an email, a document, a web page), to perform one that can't
+  be taken back (deleting a conversation, a watch, a memory; changing settings,
+  secrets or users) without the user's deliberate confirmation, or to get around
+  DAWN's own permissions (an admin action for someone who isn't an admin), is a
+  vulnerability.
 - **One user's data reaching another.** Aurora clears a user's data from the
   browser on logout, on a revoked session, and when a different user signs in. A
   way around that on a shared browser counts.

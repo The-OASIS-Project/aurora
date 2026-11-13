@@ -48,9 +48,13 @@ tried in a browser: for audio, the reactor or layout, a visual check is the only
 - **Text from outside is text.** Anything that came from DAWN, a user, a mail or a web page reaches
   the page through `textContent`, or through the sanitizing renderers for markdown and mail, never
   `innerHTML`.
-- **The user's surface, not the operator's console.** Aurora acts on the user's own data and session.
-  It never sends DAWN's operator or admin requests, and a destructive action needs a named
-  confirmation from a deliberate user gesture. [CLAUDE.md](CLAUDE.md) lists the requests Aurora makes.
+- **Parity with DAWN's WebUI, in Aurora's own form.** Aurora is headed for everything DAWN's WebUI
+  does, admin functions included, designed as a calm ambient interface rather than ported. A
+  request that changes something on DAWN starts from a deliberate user gesture (reads are
+  automatic, and completing or restoring a choice the user already made is fine; received content
+  never starts an action), an admin action is offered only to an admin, and what can't be taken
+  back needs a named confirmation.
+  [CLAUDE.md](CLAUDE.md) has the rules and lists the requests Aurora makes.
 - 3-space indent and 100-column lines (Prettier enforces both), and no em dashes in prose.
 
 Most of these are checked, not just asked for. ESLint (`eslint.config.js`) holds the layer rules:

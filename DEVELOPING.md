@@ -207,11 +207,14 @@ src/
   abstract coordinates through `RenderNode`; only `src/render/` knows pixels or CSS.
   A visual property on a state or choreography type breaks the spine of the design
   (and strict `tsc` will usually catch it).
-- **Read-mostly.** Aurora reflects DAWN; it does not add control paths that could
-  depower the daemon. Writes are limited to a specific sanctioned set (chat submit,
-  model selection, music transport, voice input, the conversation-picker and watch
-  verbs, ...). If a feature needs a new write to DAWN, that is a deliberate design
-  decision, not a casual addition; see the charter in CLAUDE.md / ARCHITECTURE.md.
+- **Writes to DAWN.** Aurora is headed for parity with DAWN's own WebUI, admin functions
+  included, and then replacing it, so no kind of write is off-limits. Every write starts from
+  a deliberate user gesture (a received frame may complete or restore what the user already
+  chose, never start a new action), DAWN's permissions decide who may make it
+  (show an admin action only to an admin), and what can't be taken back gets a named confirm, at
+  least wherever DAWN's WebUI has one. Check how the WebUI does a feature before building it,
+  for what it must do and guard, not for how it looks: Aurora stays ambient and designs every
+  feature its own way. See "Parity with DAWN's WebUI" in CLAUDE.md.
 
 ## Where to read next
 

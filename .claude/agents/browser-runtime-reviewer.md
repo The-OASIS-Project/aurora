@@ -11,7 +11,7 @@ Read `ARCHITECTURE.md` first - the single `requestAnimationFrame` loop in `main.
 
 You own **browser runtime cost and resource lifecycle**. When you notice another lane, name it in one line and defer:
 - Wrong results / logic bugs → correctness-reviewer.
-- XSS, secrets, the read-mostly charter → web-frontend-security-reviewer.
+- XSS, secrets, write safety → web-frontend-security-reviewer.
 - The render seam / layer boundaries → render-seam-architect.
 - C-side/daemon RAM and allocation → embedded-efficiency-reviewer.
 

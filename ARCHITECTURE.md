@@ -9,11 +9,13 @@ framework would want to own rendering itself.
 
 ## Design goals
 
-- **Ambient, and the user's surface - not the operator's.** An instrument you leave
-  running. It reflects DAWN's streams and lets the user act on their own data and session;
-  it never crosses into operator/admin/global control or anything that could depower or
-  reconfigure the daemon (that is DAWN's own WebUI). The writes it makes are deliberate user
-  actions on the user's own data (see below); destructive ones are confirm-gated.
+- **Ambient, and a full client.** An instrument you leave running that also does the work: it
+  reflects DAWN's streams and lets the user act on them. The direction is parity with DAWN's own
+  WebUI, admin functions included, and then replacing it: parity of capability, never of form.
+  Aurora stays a state-of-the-art ambient interface, not a tool like the WebUI; every feature,
+  admin ones included, is designed the Aurora way rather than ported. Every write comes from a deliberate
+  user gesture, DAWN's permissions decide who may make it, and what can't be taken back is
+  confirm-gated (see below).
 - **Purpose, not eye candy.** Every moving element encodes a real signal. The center
   reactor is a reinterpretation of DAWN's own ring visualizer: the bars are the voice
   spectrum, the gauges are throughput, the core is conversation state.
@@ -123,8 +125,8 @@ and calls `ingest.start(sinks)`. `DawnIngest` (`dawn-ws.ts`) owns the WebSocket:
 session reuse, and translating DAWN's `{type, payload}` frames into sink calls. Which
 DAWN signals map to what is documented in `docs/DAWN_UI_SIGNAL_MAP.md`.
 
-The writes Aurora makes are the user acting on their own data and session (see the charter
-in CLAUDE.md - "user surface, not operator console"): submitting a chat message,
+The writes Aurora makes (see "Parity with DAWN's WebUI" in CLAUDE.md for the rules every write
+follows) include: submitting a chat message,
 `set_session_llm` (the model panel), `set_private`, `set_tts_enabled` (a per-connection
 voice-mute preference; it also stops DAWN synthesizing each sentence on the LLM-token
 thread, so a client-side audio drop alone leaves the reply paced to synthesis speed),
@@ -137,13 +139,14 @@ binary frames for push-to-talk; continuous listening toggles `always_on_enable` 
 and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel; and
 `forget_conversation_memories`, everything one conversation taught, offered after marking it
 private or from the picker).
-All are benign and user-initiated - the user's own data, not operator control of the daemon.
-The **destructive** ones (`delete_conversation` - which cascade-deletes the conversation's
-images + child background jobs server-side; `watch_remove`; `delete_memory_*`;
-`forget_conversation_memories`) are gated
-behind a named confirm and reachable only from a deliberate user gesture, never a frame
-handler. What stays out is operator/admin/global (`set_config`, `set_secrets`, `restart`,
-user management, the global SAGE flag) - that lives in DAWN's own WebUI.
+Every one starts from a deliberate user gesture: a received frame may complete or restore what
+the user already chose (a preference re-sent after a reconnect, a deferred setting, the
+re-anchor), never start a new action. The ones that can't be
+taken back (`delete_conversation` - which cascade-deletes the conversation's images + child
+background jobs server-side; `watch_remove`; `delete_memory_*`; `forget_conversation_memories`)
+are gated behind a named confirm. DAWN's own WebUI still holds what Aurora doesn't do yet (its
+admin functions: config, secrets, restart, users, the global SAGE flag; account setup): those
+are parity gaps to close, with DAWN's permissions deciding who may use them.
 
 ## Directory structure
 

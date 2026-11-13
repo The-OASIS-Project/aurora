@@ -685,8 +685,9 @@ email verb without the flag (an older DAWN silently drops unknown verbs, which w
 
 ### 8.6 Charter
 
-Reads plus the user's own-mailbox writes (mark read, archive, trash, undo; P2 send). User-scoped,
-deliberate, user-initiated; no operator/admin/global reach; nothing depowers the daemon. Trash is
+Reads plus the user's own-mailbox writes (mark read, archive, trash, undo; P2 send), each from a
+deliberate user gesture. (Written under the earlier "user surface" charter; the parity direction
+of 2026-11-13 in CLAUDE.md now governs, and account setup is a parity gap.) Trash is
 confirm-free only because it is recoverable (section 5). **Send (P2) is the highest-stakes write in
 Aurora** (outward-facing, irreversible): explicit review, a server-held undo window, send only from
 an explicit button press (never a keyboard default, frame path, or auto-advance), and when

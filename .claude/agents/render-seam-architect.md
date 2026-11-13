@@ -11,7 +11,7 @@ Read `ARCHITECTURE.md` and `CLAUDE.md` first - they define the seam, the four la
 
 You own **structure: the render seam, the layer boundaries, and the single-boundary rules**. When you notice another lane, name it in one line and defer:
 - Wrong results / logic bugs → correctness-reviewer.
-- XSS, secrets, the read-mostly charter → web-frontend-security-reviewer.
+- XSS, secrets, write safety → web-frontend-security-reviewer.
 - Frame cost, leaks, resource lifecycle → browser-runtime-reviewer.
 - Naming, formatting, file size → coding-standards-auditor.
 
