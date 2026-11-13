@@ -362,4 +362,38 @@ describe("switching to local mode", () => {
          "high"
       ]);
    });
+
+   it("a delayed echo doesn't undo a conversation load or a tool switch made after its write", () => {
+      for (const after of [
+         (ing: Record<string, any>) =>
+            ing.applyConvLlmSettings({
+               llm_type: "cloud",
+               cloud_provider: "claude",
+               model: "claude-opus-5-5",
+               thinking_mode: "adaptive",
+               reasoning_effort: "high"
+            }),
+         (ing: Record<string, any>) =>
+            ing.applyLlmState(
+               JSON.stringify({
+                  type: "llm_state_update",
+                  payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
+               })
+            )
+      ]) {
+         const c = client("cloud", "claude-sonnet-5-5");
+         c.ing.getModelControl().setModel("claude-a"); // its echo is still on the way
+         after(c.ing);
+         c.frame("set_session_llm_response", {
+            success: true,
+            type: "cloud",
+            provider: "Claude",
+            model: "claude-a",
+            thinking_mode: "disabled",
+            reasoning_effort: "low"
+         });
+         expect(c.ing.llm.model).toBe("claude-opus-5-5");
+         expect(c.ing.llm.reasoning).not.toBe("disabled");
+      }
+   });
 });

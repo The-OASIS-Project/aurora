@@ -1249,10 +1249,11 @@ export class DawnIngest implements Ingest {
       availability. */
    private llmRev = 0;
    private configAsks: Array<{ rev: number; listsOnly: boolean }> = [];
-   /* set_session_llm replies still owed. Only the reply to the latest write may change the
-      selection or a pending switch: an older one (local -> cloud -> local in quick succession)
-      would undo a newer choice. */
-   private llmRepliesOwed = 0;
+   /* The revision each set_session_llm sent created, oldest first (replies come in order). A
+      reply may change the selection, its reasoning or a pending switch only while its write's
+      revision is still current: a later write, a conversation load, DAWN's tool switching the
+      model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
+   private llmWritesOwed: number[] = [];
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
@@ -1631,7 +1632,7 @@ export class DawnIngest implements Ingest {
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
-         this.llmRepliesOwed = 0; // nor an older model write
+         this.llmWritesOwed = []; // nor an older model write
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -2480,8 +2481,10 @@ export class DawnIngest implements Ingest {
                new model + availability set the optimistic local state does not know.
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
-            this.llmRepliesOwed = Math.max(0, this.llmRepliesOwed - 1);
-            const latestReply = this.llmRepliesOwed === 0; // older ones can't undo a newer choice
+            const writeRev = this.llmWritesOwed.shift();
+            /* A reply to a write whose revision has passed is older than newer state: it can't
+               undo it. One with no write of ours recorded (none owed) can't be older than ours. */
+            const latestReply = writeRev === undefined || writeRev === this.llmRev;
             if (p.success !== false) {
                if (latestReply) {
                   /* type (local|cloud): a "reset" from New can move the session across it. */
@@ -6173,7 +6176,7 @@ export class DawnIngest implements Ingest {
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
       if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState === WebSocket.OPEN) {
-         if (type === "set_session_llm") this.llmRepliesOwed++; // see llmRepliesOwed
+         if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
          this.ws.send(JSON.stringify(msg));
       }
    }
