@@ -2505,6 +2505,16 @@ export class DawnIngest implements Ingest {
                   not a chat line. The session kept its previous LLM. */
                const err = (p as { error?: string }).error;
                console.warn("[dawn] set_session_llm rejected:", err);
+               /* Nothing of a refused switch is left to complete, and the panel shows what the
+                  session still runs: DAWN's refusal echoes its config. */
+               this.localPickPending = false;
+               if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+               if (typeof p.provider === "string") {
+                  const prov = p.provider.toLowerCase();
+                  if (isLlmProvider(prov)) this.llm.provider = prov;
+               }
+               if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+               this.notifyLlm();
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
                   tone: "attention",
                   hold: 9
@@ -5588,6 +5598,7 @@ export class DawnIngest implements Ingest {
          this.llm.mode === "local" && this.localLoadedModel ? this.localLoadedModel : "";
       if (!models.includes(this.llm.model) && (models.length > 0 || preferred)) {
          const idx =
+            this.llm.mode === "cloud" && // the OpenRouter default indexes only its own list
             this.llm.provider === "openrouter" &&
             this.openrouterDefaultIdx >= 0 &&
             this.openrouterDefaultIdx < models.length

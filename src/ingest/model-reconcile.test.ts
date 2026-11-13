@@ -177,4 +177,32 @@ describe("switching to local mode", () => {
          expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
       }
    });
+
+   it("a refused switch isn't retried when the list arrives", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local");
+      c.frame("set_session_llm_response", {
+         success: false,
+         error: "Local LLM not available",
+         type: "cloud",
+         provider: "claude",
+         model: "claude-sonnet-5-5"
+      });
+      expect(c.ing.llm.mode).toBe("cloud"); // what the session still runs
+      const before = c.llmWrites().length;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites()).toHaveLength(before);
+   });
+
+   it("from OpenRouter, the local pick is the first local model, not OpenRouter's default index", () => {
+      const c = client("cloud", "openai/gpt-5.5");
+      c.ing.llm.provider = "openrouter";
+      c.ing.openrouterDefaultIdx = 1;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "openai/gpt-5.5"));
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
 });
