@@ -837,8 +837,8 @@ export interface Ingest {
       `action` is the NoticeAction id; `value` is the chosen dropdown option, if any (e.g. the
       snooze minutes). The source maps it to the right write (scheduler_action). */
    noticeAction(id: string, action: string, value?: string): void;
-   /* User deleted one of their own memories from the Context panel (a confirm-gated,
-      user-scoped destructive write - charter "user surface, not operator console"). `itemId`
+   /* User deleted one of their own memories from the Context panel (a confirm-gated
+      destructive write on the user's own memory). `itemId`
       is the context row's `item_id` ("fact:8502" / "entity:7" / "summary:2496"); the source
       maps the prefix to the matching delete_memory_* verb. Non-memory prefixes are ignored. */
    deleteMemory(itemId: string): void;
@@ -949,8 +949,8 @@ export interface Ingest {
    getDocumentText(
       id: number
    ): Promise<{ text: string; filename: string; filetype: string } | null>;
-   /* --- Library WRITE verbs (the reader's Edit button). User-scoped writes on the user's OWN
-      content (in-charter, same class as memory deletes); non-destructive - DAWN archives the
+   /* --- Library WRITE verbs (the reader's Edit button). Writes on the user's OWN
+      content, like memory deletes; non-destructive - DAWN archives the
       prior version server-side, so an edit is undoable. Each resolves null on success or a
       human-readable error string (surfaced inline in the reader); never rejects for an
       expected failure. --- */
