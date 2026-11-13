@@ -876,7 +876,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       growth in onSelfResize). Only the top moves: it isn't otherwise re-placed. A view at its CSS
       default has no inline position and is left alone. */
    const reclamp = (): void => {
-      if (dragging) return;
+      if (dragging || el.classList.contains("resizing")) return; // the gesture places it
       const l = parseFloat(el.style.left);
       const t = parseFloat(el.style.top);
       if (!Number.isFinite(l) || !Number.isFinite(t)) return;
@@ -886,7 +886,14 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       opts.onMoved?.();
    };
    const onSelfResize = (): void => {
-      if (!stored || dragging) return;
+      if (dragging) return;
+      /* A view placed by its caller, not the user (a notice's default spot: inline left/top, no
+         stored anchor), only needs the keep-out: a card widened by its actions mustn't grow
+         under the menubar. */
+      if (!stored) {
+         reclamp();
+         return;
+      }
       if (el.offsetWidth === 0 && el.offsetHeight === 0) {
          appliedRealSize = false; // hidden again: next real-size fire recomputes fully
          return;

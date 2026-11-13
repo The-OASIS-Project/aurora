@@ -206,7 +206,9 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
             a.top + a.h - opts.minHeight
          ]);
          height = cH(Math.min(a.top + a.h - top, a.top + a.h - floor));
-         el.style.top = `${Math.round(a.top + a.h - height)}px`;
+         /* The bottom stays put unless the minimum height won't fit below the floor: then the
+            top stays at the floor and the bottom moves. */
+         el.style.top = `${Math.round(Math.max(floor, a.top + a.h - height))}px`;
          el.style.bottom = "auto";
       } else if (a.top < floor) {
          /* A side grip widened the view into a keep-out's column: its top moves down below it

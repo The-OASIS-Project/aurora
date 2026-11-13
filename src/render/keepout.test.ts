@@ -7,13 +7,28 @@ import { makeResizable } from "./resizable.ts";
    element's box is given by hand. */
 
 beforeAll(() => {
-   class NoopObserver {
-      observe(): void {}
+   /* Records each observer's callback and targets, so a test can fire a size change. */
+   class FakeObserver {
+      targets: Element[] = [];
+      constructor(readonly cb: () => void) {
+         observers.add(this);
+      }
+      observe(t: Element): void {
+         this.targets.push(t);
+      }
       unobserve(): void {}
-      disconnect(): void {}
+      disconnect(): void {
+         observers.delete(this);
+      }
    }
-   Object.assign(globalThis, { ResizeObserver: NoopObserver });
+   Object.assign(globalThis, { ResizeObserver: FakeObserver });
 });
+
+const observers = new Set<{ targets: Element[]; cb: () => void }>();
+/* Fires the size-change callbacks watching `el`. */
+const resized = (el: Element): void => {
+   for (const o of observers) if (o.targets.includes(el)) o.cb();
+};
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -145,5 +160,57 @@ describe("registering a keep-out", () => {
       expect(view.style.left).toBe("512px");
       expect(view.style.top).toBe("56px");
       localStorage.removeItem("test.pos");
+   });
+});
+
+describe("more paths under a keep-out", () => {
+   it("a top-corner resize of a view at its minimum height keeps the top below; the bottom moves", () => {
+      menubar();
+      /* A 300 x 360 view at (100, 28), already at its minimum height, left of the menubar. */
+      const view = boxed(100, 28, 300, 360);
+      Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: 900, configurable: true });
+      vi.stubGlobal("requestAnimationFrame", (f: FrameRequestCallback) => {
+         f(0);
+         return 1;
+      });
+      const r = makeResizable(view, {
+         storageKey: "test.size3",
+         minWidth: 200,
+         minHeight: 360,
+         defaultWidth: 300,
+         defaultHeight: 360
+      });
+      cleanups.push(() => r.dispose());
+      r.setEnabled(true);
+      const grip = view.querySelector<HTMLElement>(".rs-ne")!;
+      const at = (type: string, x: number, y: number) =>
+         new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
+      grip.dispatchEvent(at("pointerdown", 400, 28));
+      window.dispatchEvent(at("pointermove", 600, 0)); // wider into 450..750, and up
+      expect(parseFloat(view.style.top)).toBe(56);
+      expect(parseFloat(view.style.height)).toBe(360);
+      window.dispatchEvent(at("pointerup", 600, 0));
+   });
+
+   it("a view its caller placed (no saved spot) that grows into the column is lifted", () => {
+      menubar();
+      Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: 900, configurable: true });
+      const card = document.createElement("div");
+      document.body.appendChild(card);
+      let width = 240;
+      Object.defineProperty(card, "offsetWidth", { get: () => width, configurable: true });
+      Object.defineProperty(card, "offsetHeight", { value: 120, configurable: true });
+      card.getBoundingClientRect = () =>
+         new DOMRect(parseFloat(card.style.left), parseFloat(card.style.top), width, 120);
+      cleanups.push(makeMovable(card, { storageKey: "test.card", lockable: false }));
+      /* Placed by its caller, as a notice's default spot is: clear of the menubar (190..430). */
+      card.style.left = "190px";
+      card.style.top = "28px";
+      width = 304; // its actions widen it to 190..494, into 450..750
+      resized(card);
+      expect(card.style.left).toBe("190px");
+      expect(card.style.top).toBe("56px");
    });
 });
