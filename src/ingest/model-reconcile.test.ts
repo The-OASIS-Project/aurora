@@ -147,4 +147,34 @@ describe("switching to local mode", () => {
       expect(opened.llmWrites()).toHaveLength(sentOpened);
       expect(opened.ing.llm.model).toBe("claude-legacy-4");
    });
+
+   it("a config reply asked before the switch doesn't undo it", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.askConfig(); // the connect-time get_config, still in flight
+      c.ing.getModelControl().setMode("local");
+      /* Its reply is a snapshot from before the switch. */
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
+      });
+      expect(c.ing.llm.mode).toBe("local");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
+
+   it("New Chat, or a load with no settings, ends a switch's wait", () => {
+      for (const end of [
+         (ing: Record<string, any>) => ing.newChat(),
+         (ing: Record<string, any>) => ing.applyConvLlmSettings(undefined)
+      ]) {
+         const c = client("cloud", "claude-sonnet-5-5");
+         c.ing.getModelControl().setMode("local");
+         end(c.ing);
+         c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+         expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
+      }
+   });
 });

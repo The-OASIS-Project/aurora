@@ -1242,6 +1242,11 @@ export class DawnIngest implements Ingest {
       provider back to the session default, since DAWN does not switch the session LLM on a
       conversation load (applyConvLlmSettings owns that, client-side). */
    private modelsRefreshOnly = false;
+   /* Each set_session_llm sent bumps llmWriteSeq; each get_config asked records it (replies come in
+      order). A reply asked before a later model write is an older snapshot: it updates the lists,
+      not the selection the user has since changed. */
+   private llmWriteSeq = 0;
+   private configAsks: number[] = [];
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
@@ -1619,6 +1624,7 @@ export class DawnIngest implements Ingest {
             before we know, and pick the lightweight re-anchor even on a fresh session. */
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
+         this.configAsks = [this.llmWriteSeq]; // a new socket: no older ask will be answered
          ws.send(JSON.stringify({ type: "get_config" }));
          /* The user's timezone, so the clock shows their local time (the box running
             Chrome may be UTC). */
@@ -2390,7 +2396,9 @@ export class DawnIngest implements Ingest {
             /* A models-only refresh (MODEL panel open) must not touch the current
                selection - that could revert a loaded conversation's provider/model back to
                the session default. Update only the lists (above) + availability (below). */
-            if (!this.modelsRefreshOnly) {
+            const askedAt = this.configAsks.shift() ?? this.llmWriteSeq;
+            const olderThanAChoice = this.llmWriteSeq > askedAt;
+            if (!this.modelsRefreshOnly && !olderThanAChoice) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
                const prov = (rt.provider ?? "").toLowerCase();
@@ -4254,6 +4262,7 @@ export class DawnIngest implements Ingest {
       daemon's context (clear_session), drop our conversation id so the next message
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
    newChat(): void {
+      this.localPickPending = false; // a new chat starts from DAWN's defaults, not an old switch
       this.send({ type: "clear_session" });
       /* A new chat starts on DAWN's configured default model (dawn.toml), not whatever the last
          conversation ran on: DAWN's "reset" restores the session LLM config to its defaults, and
@@ -5386,6 +5395,11 @@ export class DawnIngest implements Ingest {
       Shared by the config_changed push and the MODEL-panel-open refetch. */
    private requestConfigRefresh(): void {
       this.modelsRefreshOnly = true;
+      this.askConfig();
+   }
+
+   private askConfig(): void {
+      this.configAsks.push(this.llmWriteSeq);
       this.send({ type: "get_config" });
    }
 
@@ -5416,7 +5430,7 @@ export class DawnIngest implements Ingest {
          (P1.1b), but this frame carries no reasoning fields or caps. Re-read the session's
          runtime (a full get_config, not a lists-only refresh) for the effective values. */
       this.modelsRefreshOnly = false;
-      this.send({ type: "get_config" });
+      this.askConfig();
       this.notifyLlm();
    }
 
@@ -5437,6 +5451,7 @@ export class DawnIngest implements Ingest {
       reconcileModel is deliberately NOT called - the stamped model is the truth even
       when it is absent from the active provider's list (as an OpenRouter model is). */
    private applyConvLlmSettings(settings: unknown): void {
+      this.localPickPending = false; // a loaded conversation ends any earlier switch's wait
       if (!settings || typeof settings !== "object") return;
       const s = settings as {
          llm_type?: string;
@@ -5446,7 +5461,6 @@ export class DawnIngest implements Ingest {
          reasoning_effort?: string;
       };
       if (s.llm_type) this.llm.mode = s.llm_type === "local" ? "local" : "cloud";
-      this.localPickPending = false; // the loaded conversation's own settings stand
       const prov = (s.cloud_provider ?? "").toLowerCase();
       if (isLlmProvider(prov)) {
          this.llm.provider = prov;
@@ -6120,6 +6134,7 @@ export class DawnIngest implements Ingest {
       Never `text`: a chat message is always attempted, and a refusal says so. */
       const type = (msg as { type?: unknown }).type;
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
+      if (type === "set_session_llm") this.llmWriteSeq++; // see configAsks
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
    }
 
