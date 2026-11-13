@@ -11,7 +11,7 @@
  */
 
 import type { ResizeEdges } from "./movable.ts";
-import { beginResizeSnap, cssMovableEdge, type ResizeSnap } from "./movable.ts";
+import { beginResizeSnap, cssMovableEdge, keepOutFloor, type ResizeSnap } from "./movable.ts";
 
 export interface ResizableOptions {
    storageKey: string;
@@ -184,6 +184,13 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
          el.style.left = `${Math.round(a.left + a.w - width)}px`;
          el.style.right = "auto";
       }
+      /* The highest the top may go for the span as it is now (after a side grip): the viewport
+         gutter, or just below a keep-out (the menubar) over that span (movable.ts keepOutFloor). */
+      const liveLeft = parseFloat(el.style.left);
+      const floor = Math.max(
+         a.edge,
+         keepOutFloor(Number.isFinite(liveLeft) ? liveLeft : a.left, width)
+      );
       if (a.edges.bottom) {
          const bottom = a.snap.snap("bottom", a.top + a.h + dy, [
             a.top + opts.minHeight,
@@ -194,12 +201,18 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
          el.style.bottom = "auto";
       }
       if (a.edges.top) {
-         const top = a.snap.snap("top", a.top + dy, [
-            a.top + a.h - a.maxH,
+         const top = a.snap.snap("top", Math.max(floor, a.top + dy), [
+            Math.max(floor, a.top + a.h - a.maxH),
             a.top + a.h - opts.minHeight
          ]);
-         height = cH(Math.min(a.top + a.h - top, a.top + a.h - a.edge));
+         height = cH(Math.min(a.top + a.h - top, a.top + a.h - floor));
          el.style.top = `${Math.round(a.top + a.h - height)}px`;
+         el.style.bottom = "auto";
+      } else if (a.top < floor) {
+         /* A side grip widened the view into a keep-out's column: its top moves down below it
+            and its bottom stays put, now, rather than jumping at release. */
+         height = cH(a.top + (a.edges.bottom ? height : a.h) - floor);
+         el.style.top = `${Math.round(floor)}px`;
          el.style.bottom = "auto";
       }
       el.style.width = `${width}px`;

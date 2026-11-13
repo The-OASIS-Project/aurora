@@ -134,7 +134,8 @@ export function mountConversationPicker(
       handle: ".cpick-head",
       ignore: ".cpick-new",
       lockSlot: (btn) => head.insertBefore(btn, newBtn), // the corner holds the collapse caret
-      onSnap: () => positionPanel() // recompute open-up/down + clamp after the picker is moved
+      onSnap: () => positionPanel(), // recompute open-up/down + clamp after the picker is moved
+      onMoved: () => positionPanel() // lifted below the menubar: the same
    });
 
    /* --- state ------------------------------------------------------------- */
@@ -161,10 +162,24 @@ export function mountConversationPicker(
       if (!open) {
          el.classList.remove("cpick-up");
          panel.style.maxHeight = "";
+         panel.style.left = "";
          return;
       }
-      const r = el.getBoundingClientRect();
+      /* Where the picker is going, not where a snap's glide has it now (its inline left/top are
+         the destination); its size is the same either way. */
+      const box = el.getBoundingClientRect();
+      const toLeft = parseFloat(el.style.left);
+      const toTop = parseFloat(el.style.top);
+      const left = Number.isFinite(toLeft) ? toLeft : box.left;
+      const top = Number.isFinite(toTop) ? toTop : box.top;
+      const r = { left, top, bottom: top + box.height };
       const gap = 12;
+      /* Horizontally: the panel hangs from the picker's left edge, slid left just enough to stay
+         inside the viewport (a picker near the right edge, or a narrow window), never past the
+         left edge. */
+      const overRight = r.left + panel.offsetWidth - (window.innerWidth - gap);
+      const shift = Math.max(0, Math.min(overRight, r.left - gap));
+      panel.style.left = shift > 0 ? `${-shift}px` : "";
       const spaceBelow = window.innerHeight - r.bottom - gap;
       const spaceAbove = r.top - gap;
       const up = spaceBelow < spaceAbove && spaceBelow < 320; // flip up only when below is cramped

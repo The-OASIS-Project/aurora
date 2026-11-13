@@ -65,6 +65,43 @@ function deadZoneX(): [number, number] {
    return [cx - r, cx + r];
 }
 
+/* Fixed chrome a movable view must never sit under (the menubar: it is drawn above the views, so
+   a view beneath it could no longer be grabbed or clicked). Such chrome registers itself with
+   registerKeepOut. A view whose horizontal span overlaps one may sit no higher than KEEPOUT_GAP
+   below it: placing clamps to that floor (a drag, a drop, a restored or legacy position, a window
+   resize, the view's own growth), the snap offers it as the stop flush below the chrome, and a
+   resize's top grip stops at it. On a viewport too short for both, the floor wins over keeping
+   the view's header on screen: it stays grabbable. */
+const KEEPOUT_GAP = 6;
+const keepOuts = new Set<HTMLElement>();
+/* Each movable view's re-clamp: re-places it (through the floor) where it stands. */
+const reclamps = new Set<() => void>();
+export function keepOutFloor(left: number, width: number): number {
+   let floor = -Infinity;
+   for (const k of keepOuts) {
+      if (k.getClientRects().length === 0) continue; // not rendered: nothing to keep out of
+      const r = k.getBoundingClientRect();
+      if (left < r.right && left + width > r.left) floor = Math.max(floor, r.bottom + KEEPOUT_GAP);
+   }
+   return floor;
+}
+/* Registers fixed chrome as a keep-out. Every movable view is re-placed now (they restore their
+   saved positions as they mount, which may be before this chrome exists) and whenever the
+   chrome's size changes. Returns the unregister. */
+export function registerKeepOut(chrome: HTMLElement): () => void {
+   keepOuts.add(chrome);
+   const reclampAll = (): void => {
+      for (const reclamp of reclamps) reclamp();
+   };
+   const ro = new ResizeObserver(reclampAll);
+   ro.observe(chrome);
+   reclampAll();
+   return () => {
+      ro.disconnect();
+      keepOuts.delete(chrome);
+   };
+}
+
 export interface MovableOptions {
    /* localStorage key for the persisted top-left position. */
    storageKey: string;
@@ -83,6 +120,9 @@ export interface MovableOptions {
       sibling edge, either axis) vs. a free band. Lets a caller behave differently when
       snapped - e.g. a notification stays persistent when snapped, transient when not. */
    onSnap?: (snapped: boolean) => void;
+   /* The view was moved without a drag: lifted below a keep-out (the menubar) that it would
+      otherwise sit under. */
+   onMoved?: () => void;
    /* Join the click-to-front stacking band (default true). Notification cards opt out: they
       sit in their own layer above every panel. */
    raise?: boolean;
@@ -110,6 +150,8 @@ interface Snap {
       viewport-center dock, where xPrev/yPrev are null). Drives onSnap. */
    xSnapped: boolean;
    ySnapped: boolean;
+   /* The y stop is the floor below a keep-out: saved as a top dock (the floor re-applies). */
+   yFloor?: boolean;
 }
 
 /* Persisted position is per-axis INTENT, not a resolved pixel, so it survives a
@@ -417,7 +459,9 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const keepVisible = Math.min(r.height, MIN_ONSCREEN);
       const maxTop = Math.max(edge, window.innerHeight - keepVisible - edge);
       const x = Math.min(maxLeft, Math.max(edge, left));
-      const y = Math.min(maxTop, Math.max(edge, top));
+      /* The layout width, not just the drawn one: a receded (scaled-down) notice grows back to it. */
+      const floor = keepOutFloor(x, Math.max(r.width, el.offsetWidth));
+      const y = Math.max(Math.min(maxTop, Math.max(edge, top)), floor);
       el.style.left = `${Math.round(x)}px`;
       el.style.top = `${Math.round(y)}px`;
       el.style.right = "auto";
@@ -554,14 +598,25 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       );
 
       const sx = nearest(r.left, validXStops);
-      const sy = nearest(r.top, yStops);
+      /* Under fixed chrome at the chosen x (keepOutFloor), the stops above its floor are out of
+         reach; the floor itself is the stop flush below it. Measured at the layout width, as
+         place() does (a receded notice is drawn smaller). */
+      const floor = keepOutFloor(sx.pos, Math.max(w, el.offsetWidth));
+      const reachable = Number.isFinite(floor)
+         ? [
+              ...yStops.filter((s) => s.pos >= floor),
+              { pos: floor, preview: { type: "guide", coord: floor - KEEPOUT_GAP } } as Stop
+           ]
+         : yStops;
+      const sy = nearest(Math.max(r.top, Number.isFinite(floor) ? floor : r.top), reachable);
       return {
          left: sx.pos,
          top: sy.pos,
          xPrev: sx.preview,
          yPrev: sy.preview,
          xSnapped: sx.snapped,
-         ySnapped: sy.snapped
+         ySnapped: sy.snapped,
+         yFloor: sy.snapped && Number.isFinite(floor) && sy.pos === floor
       };
    };
 
@@ -783,14 +838,16 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       };
       stored = {
          x: anchorFor(snap.xPrev, snap.xSnapped, placedLeft, window.innerWidth, w, true),
-         y: anchorFor(
-            snap.yPrev,
-            snap.ySnapped,
-            parseFloat(el.style.top) || 0,
-            window.innerHeight,
-            h,
-            false
-         )
+         y: snap.yFloor
+            ? { a: "lo" }
+            : anchorFor(
+                 snap.yPrev,
+                 snap.ySnapped,
+                 parseFloat(el.style.top) || 0,
+                 window.innerHeight,
+                 h,
+                 false
+              )
       };
       localStorage.setItem(opts.storageKey, JSON.stringify(stored));
       opts.onSnap?.(snap.xSnapped || snap.ySnapped);
@@ -815,6 +872,19 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       being shown) does a full "all" recompute so a free axis is derived correctly; after
       that only size-sensitive hi/center anchors re-dock ("dockOnly"), leaving lo/free put.
       A transition back to 0x0 (the view hidden) re-arms the "all" recompute for next show. */
+   /* Lift a placed view to just below a keep-out it now sits under (registerKeepOut, its own
+      growth in onSelfResize). Only the top moves: it isn't otherwise re-placed. A view at its CSS
+      default has no inline position and is left alone. */
+   const reclamp = (): void => {
+      if (dragging) return;
+      const l = parseFloat(el.style.left);
+      const t = parseFloat(el.style.top);
+      if (!Number.isFinite(l) || !Number.isFinite(t)) return;
+      const floor = keepOutFloor(l, Math.max(el.getBoundingClientRect().width, el.offsetWidth));
+      if (t >= floor) return;
+      el.style.top = `${Math.round(floor)}px`;
+      opts.onMoved?.();
+   };
    const onSelfResize = (): void => {
       if (!stored || dragging) return;
       if (el.offsetWidth === 0 && el.offsetHeight === 0) {
@@ -827,8 +897,9 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       }
       if (el.matches(":hover, :active")) return;
       const sizeSensitive = (a: Anchor): boolean => a.a === "hi" || a.a === "center";
-      if (!sizeSensitive(stored.x) && !sizeSensitive(stored.y)) return;
-      applyStored("dockOnly");
+      /* A lo/free view holds its pixel, unless it grew into a keep-out's column. */
+      if (!sizeSensitive(stored.x) && !sizeSensitive(stored.y)) reclamp();
+      else applyStored("dockOnly");
    };
    const ro = new ResizeObserver(onSelfResize);
 
@@ -839,6 +910,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
    el.style.userSelect = "none";
    el.style.setProperty("-webkit-user-select", "none");
 
+   reclamps.add(reclamp);
    restore();
    movables.add(el); // visible to other movable views as a snap target
    const lock = opts.lockable === false ? null : mountPanelLock(el, opts.storageKey, opts.lockSlot);
@@ -932,6 +1004,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       dispose: (): void => {
          lock?.dispose();
          movables.delete(el);
+         reclamps.delete(reclamp);
          if (raises) {
             el.removeEventListener("pointerdown", onRaise, { capture: true });
             const i = raiseOrder.indexOf(el);

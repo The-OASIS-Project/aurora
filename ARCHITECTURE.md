@@ -221,7 +221,7 @@ has no use for change-notification plumbing, and polling has no ordering surpris
   with a persisted position, via `makeMovable` (`src/render/movable.ts`), each with a position
   padlock (`src/render/panel-lock.ts`, plus "Lock all panels" in the Panels menu) - all sharing one
   snap set (they snap to each other and the viewport, with a central dead zone around the
-  reactor). This is distinct from the store-backed ambient panels, which drag onto the side
+  reactor). Fixed chrome drawn above them (the menubar) registers as a keep-out (`registerKeepOut`), and no movable view is placed under it: one in its column stops just below it. This is distinct from the store-backed ambient panels, which drag onto the side
   rails through `PanelDrag` (a path only `StubIngest` exercises today). The clock and the
   telemetry readout are also movable + toggleable (grab-to-move + a Panels-menu show/hide,
   wired in `hud.ts`); the only fixed HUD chrome left is the frame corners and the reticle. The
