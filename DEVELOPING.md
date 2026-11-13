@@ -208,8 +208,9 @@ src/
   A visual property on a state or choreography type breaks the spine of the design
   (and strict `tsc` will usually catch it).
 - **Writes to DAWN.** Aurora is headed for parity with DAWN's own WebUI, admin functions
-  included, and then replacing it, so no kind of write is off-limits. Every write comes from a
-  deliberate user gesture (never a frame handler), DAWN's permissions decide who may make it
+  included, and then replacing it, so no kind of write is off-limits. Every write starts from
+  a deliberate user gesture (a received frame may complete or restore what the user already
+  chose, never start a new action), DAWN's permissions decide who may make it
   (show an admin action only to an admin), and what can't be taken back gets a named confirm, at
   least wherever DAWN's WebUI has one. Check how the WebUI does a feature before building it,
   for what it must do and guard, not for how it looks: Aurora stays ambient and designs every

@@ -265,8 +265,9 @@ tell you, and defers the server work.
 Aurora is headed for parity with DAWN's own WebUI, admin functions included, and then replacing
 it (CLAUDE.md, "Parity with DAWN's WebUI"; this replaced the earlier "user surface, not operator
 console" charter on 2026-11-13, so older notes below that call something "over the read-mostly
-line" now describe a parity gap, not a rule). No kind of write is off-limits. Every write comes
-from a deliberate user gesture, never a frame handler; DAWN's permissions decide who may make it
+line" now describe a parity gap, not a rule). No kind of write is off-limits. Every write starts
+from a deliberate user gesture (a received frame may complete or restore what the user already
+chose, such as a preference re-sent after a reconnect, never start a new action); DAWN's permissions decide who may make it
 (admin-only verbs answer only an admin login, and Aurora shows an admin action only to an admin);
 and what can't be taken back gets a named confirm, at least wherever the WebUI has one.
 

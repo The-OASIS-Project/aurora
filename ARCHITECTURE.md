@@ -139,7 +139,9 @@ binary frames for push-to-talk; continuous listening toggles `always_on_enable` 
 and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel; and
 `forget_conversation_memories`, everything one conversation taught, offered after marking it
 private or from the picker).
-Every one comes from a deliberate user gesture, never a frame handler. The ones that can't be
+Every one starts from a deliberate user gesture: a received frame may complete or restore what
+the user already chose (a preference re-sent after a reconnect, a deferred setting, the
+re-anchor), never start a new action. The ones that can't be
 taken back (`delete_conversation` - which cascade-deletes the conversation's images + child
 background jobs server-side; `watch_remove`; `delete_memory_*`; `forget_conversation_memories`)
 are gated behind a named confirm. DAWN's own WebUI still holds what Aurora doesn't do yet (its

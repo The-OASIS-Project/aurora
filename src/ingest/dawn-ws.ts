@@ -13,9 +13,11 @@
  * logged once (see UNHANDLED) so the real traffic tells us what to wire next.
  * Panels (attention/scheduler/jobs/music/HA) are later slices.
  *
- * WRITES: everything this client sends that changes DAWN comes from a deliberate user
- * gesture (a typed message, a panel action, a confirm), never from a frame it received;
- * DAWN's permissions decide what it may do (CLAUDE.md, "Parity with DAWN's WebUI").
+ * WRITES: everything this client sends that changes DAWN starts from a deliberate user
+ * gesture (a typed message, a panel action, a confirm). A received frame may complete or
+ * restore what the user already chose (a preference re-sent after a reconnect, a deferred
+ * setting, the re-anchor), never start a new action. DAWN's permissions decide what it may
+ * do (CLAUDE.md, "Parity with DAWN's WebUI").
  * Focus/blur (setEngaged) tells DAWN nothing - our reactor reflects DAWN's actual
  * state, never our input focus.
  *

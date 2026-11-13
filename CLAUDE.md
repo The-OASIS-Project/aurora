@@ -50,8 +50,11 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     admin function is no exception: it gets the same design care.
 
   No kind of write is off-limits. What every write needs:
-  - **A deliberate user gesture.** Writes come from the user's own action, **never a frame
-    handler** (a frame can ask for nothing on the user's behalf).
+  - **A deliberate user gesture.** A write starts from the user's own action. A received frame
+    may complete or restore what the user already chose (re-sending a preference after a
+    reconnect, applying a setting deferred until its conversation exists, the reconnect
+    re-anchor), but it **never starts a new action**, and nothing that can't be taken back runs
+    from anything but the gesture itself (a frame can ask for nothing on the user's behalf).
   - **DAWN's own permissions decide who may do what.** Admin-only verbs answer only an admin
     login; Aurora shows an admin action only to an admin (the session's `is_admin`), and treats a
     refusal as a refusal, never retrying around it.
