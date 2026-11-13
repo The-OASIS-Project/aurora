@@ -284,7 +284,7 @@ test("the top band's defaults don't overlap, and + New is clickable, at common w
       const hit = await page.evaluate(() => {
          const b = document.querySelector(".cpick-new")!.getBoundingClientRect();
          const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-         return at?.closest(".cpick-new") !== null;
+         return Boolean(at?.closest(".cpick-new")); // nothing there (off screen) fails too
       });
       expect(hit, `${width}x${height}: + New is on top`).toBe(true);
    }
@@ -318,7 +318,7 @@ test("nothing can be dragged under the menubar, and the picker's dropdown stays 
       page.evaluate(() => {
          const b = document.querySelector(".cpick-new")!.getBoundingClientRect();
          const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-         return at?.closest(".cpick-new") !== null;
+         return Boolean(at?.closest(".cpick-new")); // nothing there (off screen) fails too
       });
 
    /* A position saved under the menubar (a top dock in its column: what the old snap saved) is

@@ -213,4 +213,33 @@ describe("more paths under a keep-out", () => {
       expect(card.style.left).toBe("190px");
       expect(card.style.top).toBe("56px");
    });
+
+   it("a saved view that grows into the column is lifted even while hovered", () => {
+      menubar();
+      localStorage.setItem(
+         "test.saved",
+         JSON.stringify({ x: { a: "free", f: 0.15 }, y: { a: "lo" } })
+      );
+      Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: 900, configurable: true });
+      const card = document.createElement("div");
+      document.body.appendChild(card);
+      let width = 240;
+      Object.defineProperty(card, "offsetWidth", { get: () => width, configurable: true });
+      Object.defineProperty(card, "offsetHeight", { value: 120, configurable: true });
+      card.getBoundingClientRect = () =>
+         new DOMRect(parseFloat(card.style.left), parseFloat(card.style.top), width, 120);
+      cleanups.push(makeMovable(card, { storageKey: "test.saved", lockable: false }));
+      resized(card); // its first real size: placed from the saved spot
+      expect(card.style.left).toBe("192px"); // 0.15 of 1280, clear of 450..750
+      Object.defineProperty(card, "matches", {
+         value: (sel: string) => sel.includes(":hover"), // the pointer is on it
+         configurable: true
+      });
+      width = 304; // an update adds actions: 192..496 reaches into 450..750
+      resized(card);
+      expect(card.style.left).toBe("192px");
+      expect(card.style.top).toBe("56px");
+      localStorage.removeItem("test.saved");
+   });
 });

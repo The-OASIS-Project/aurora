@@ -902,11 +902,14 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          if (applyStored("all")) appliedRealSize = true;
          return;
       }
+      /* Growing into a keep-out's column lifts it below, even while hovered (a card whose update
+         adds actions under the pointer). */
+      reclamp();
+      /* Re-docking waits until the pointer leaves (a hover-expanding card mustn't slide away). A
+         lo/free view holds its pixel. */
       if (el.matches(":hover, :active")) return;
       const sizeSensitive = (a: Anchor): boolean => a.a === "hi" || a.a === "center";
-      /* A lo/free view holds its pixel, unless it grew into a keep-out's column. */
-      if (!sizeSensitive(stored.x) && !sizeSensitive(stored.y)) reclamp();
-      else applyStored("dockOnly");
+      if (sizeSensitive(stored.x) || sizeSensitive(stored.y)) applyStored("dockOnly");
    };
    const ro = new ResizeObserver(onSelfResize);
 
