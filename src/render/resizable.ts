@@ -189,7 +189,7 @@ export function makeResizable(el: HTMLElement, opts: ResizableOptions): Resizabl
       const liveLeft = parseFloat(el.style.left);
       const floor = Math.max(
          a.edge,
-         keepOutFloor(Number.isFinite(liveLeft) ? liveLeft : a.left, width)
+         keepOutFloor(Number.isFinite(liveLeft) ? liveLeft : a.left, width, el)
       );
       if (a.edges.bottom) {
          const bottom = a.snap.snap("bottom", a.top + a.h + dy, [

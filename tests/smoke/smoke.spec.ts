@@ -268,6 +268,7 @@ test("the top band's defaults don't overlap, and + New is clickable, at common w
       a.y + a.height <= b.y ||
       b.y + b.height <= a.y;
    for (const [width, height] of [
+      [900, 700], // narrow: the centered menubar reaches the telemetry readout's default spot
       [1024, 768],
       [1280, 720],
       [1366, 768],
@@ -276,6 +277,11 @@ test("the top band's defaults don't overlap, and + New is clickable, at common w
    ]) {
       await page.setViewportSize({ width, height });
       const picker = await box(".cpick-head");
+      /* The telemetry readout, undragged, is kept below the menubar too (a keep-out). */
+      expect(
+         apart(await box("#hud-status"), await box("#menubar")),
+         `${width}x${height}: telemetry vs menubar`
+      ).toBe(true);
       for (const other of ["#menubar", "#hud-clock", "#hud-status"])
          expect(apart(picker, await box(other)), `${width}x${height}: picker vs ${other}`).toBe(
             true

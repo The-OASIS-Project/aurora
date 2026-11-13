@@ -73,32 +73,43 @@ function deadZoneX(): [number, number] {
    resize's top grip stops at it. On a viewport too short for both, the floor wins over keeping
    the view's header on screen: it stays grabbable. */
 const KEEPOUT_GAP = 6;
-const keepOuts = new Set<HTMLElement>();
+/* Each keep-out, with whether it keeps out right now (the conversation picker does only while at
+   its default spot in the top band). */
+const keepOuts = new Map<HTMLElement, () => boolean>();
 /* Each movable view's re-clamp: re-places it (through the floor) where it stands. */
 const reclamps = new Set<() => void>();
-export function keepOutFloor(left: number, width: number): number {
+/* The highest a view spanning [left, left + width] may sit; `self` (the view itself, when it is
+   a keep-out too) is never in its own way. */
+export function keepOutFloor(left: number, width: number, self?: HTMLElement): number {
    let floor = -Infinity;
-   for (const k of keepOuts) {
+   for (const [k, active] of keepOuts) {
+      if (k === self || !active()) continue;
       if (k.getClientRects().length === 0) continue; // not rendered: nothing to keep out of
       const r = k.getBoundingClientRect();
       if (left < r.right && left + width > r.left) floor = Math.max(floor, r.bottom + KEEPOUT_GAP);
    }
    return floor;
 }
-/* Registers fixed chrome as a keep-out. Every movable view is re-placed now (they restore their
-   saved positions as they mount, which may be before this chrome exists) and whenever the
-   chrome's size changes. Returns the unregister. */
-export function registerKeepOut(chrome: HTMLElement): () => void {
-   keepOuts.add(chrome);
-   const reclampAll = (): void => {
-      for (const reclamp of reclamps) reclamp();
-   };
-   const ro = new ResizeObserver(reclampAll);
+/* Re-place every movable view against the keep-outs as they are now. */
+export function keepOutsChanged(): void {
+   for (const reclamp of reclamps) reclamp();
+}
+/* Registers chrome as a keep-out, active while `active()` says so. Every movable view is
+   re-placed now (they restore their saved positions as they mount, which may be before this
+   chrome exists), whenever the chrome's size changes, and when it goes; call keepOutsChanged()
+   when `active()` changes. Returns the unregister. */
+export function registerKeepOut(
+   chrome: HTMLElement,
+   active: () => boolean = () => true
+): () => void {
+   keepOuts.set(chrome, active);
+   const ro = new ResizeObserver(keepOutsChanged);
    ro.observe(chrome);
-   reclampAll();
+   keepOutsChanged();
    return () => {
       ro.disconnect();
       keepOuts.delete(chrome);
+      keepOutsChanged(); // a view lifted below it at its default goes back
    };
 }
 
@@ -441,6 +452,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
    let pending: Snap | null = null;
    let otherRects: DOMRect[] = []; // sibling views, captured at drag start (they don't move)
    let stored: StoredPos | null = null; // per-axis anchor intent, once the user has placed it
+   let defaultLifted = false; // at its CSS default, with an inline top lifting it below a keep-out
 
    /* Two preview bars (one per edge the view is about to dock to). */
    const vbar = document.createElement("div");
@@ -460,12 +472,13 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       const maxTop = Math.max(edge, window.innerHeight - keepVisible - edge);
       const x = Math.min(maxLeft, Math.max(edge, left));
       /* The layout width, not just the drawn one: a receded (scaled-down) notice grows back to it. */
-      const floor = keepOutFloor(x, Math.max(r.width, el.offsetWidth));
+      const floor = keepOutFloor(x, Math.max(r.width, el.offsetWidth), el);
       const y = Math.max(Math.min(maxTop, Math.max(edge, top)), floor);
       el.style.left = `${Math.round(x)}px`;
       el.style.top = `${Math.round(y)}px`;
       el.style.right = "auto";
       el.style.bottom = "auto";
+      defaultLifted = false; // placed now, not at its default
    };
 
    /* Resolve one axis anchor to a pixel, given the current viewport dimension V and the
@@ -601,7 +614,7 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       /* Under fixed chrome at the chosen x (keepOutFloor), the stops above its floor are out of
          reach; the floor itself is the stop flush below it. Measured at the layout width, as
          place() does (a receded notice is drawn smaller). */
-      const floor = keepOutFloor(sx.pos, Math.max(w, el.offsetWidth));
+      const floor = keepOutFloor(sx.pos, Math.max(w, el.offsetWidth), el);
       const reachable = Number.isFinite(floor)
          ? [
               ...yStops.filter((s) => s.pos >= floor),
@@ -861,7 +874,45 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
          if (applyStored("all")) appliedRealSize = true;
       } else if (el.style.left) {
          place(parseFloat(el.style.left), parseFloat(el.style.top));
+      } else {
+         reclamp(); // at its CSS default: lifted below a keep-out only while one covers it
       }
+   };
+
+   /* Keep the view below a keep-out it would sit under (registerKeepOut, onResize, its own growth
+      in onSelfResize). A placed view (inline left/top) has only its top lifted: it isn't otherwise
+      re-placed. A view still at its CSS default gets an inline top only while a keep-out covers
+      it, and loses it again once none does, so it returns to its true default; its horizontal
+      default (left or right) stands. */
+   const reclamp = (): void => {
+      if (dragging || el.classList.contains("resizing")) return; // the gesture places it
+      const l = parseFloat(el.style.left);
+      if (Number.isFinite(l)) {
+         const t = parseFloat(el.style.top);
+         if (!Number.isFinite(t)) return;
+         const floor = keepOutFloor(
+            l,
+            Math.max(el.getBoundingClientRect().width, el.offsetWidth),
+            el
+         );
+         if (t >= floor) return;
+         el.style.top = `${Math.round(floor)}px`;
+         opts.onMoved?.();
+         return;
+      }
+      const before = el.style.top;
+      if (defaultLifted) {
+         el.style.top = "";
+         el.style.bottom = "";
+      }
+      const r = el.getBoundingClientRect(); // where its CSS default puts it
+      const floor = keepOutFloor(r.left, Math.max(r.width, el.offsetWidth), el);
+      defaultLifted = r.top < floor - 1; // a default spot laid out at the floor (sub-pixel) is clear
+      if (defaultLifted) {
+         el.style.top = `${Math.round(floor)}px`;
+         el.style.bottom = "auto";
+      }
+      if (el.style.top !== before) opts.onMoved?.();
    };
 
    /* Element self-scaling (a card hover-expanding, the music player growing as a track
@@ -872,19 +923,6 @@ export function makeMovableHandle(el: HTMLElement, opts: MovableOptions): Movabl
       being shown) does a full "all" recompute so a free axis is derived correctly; after
       that only size-sensitive hi/center anchors re-dock ("dockOnly"), leaving lo/free put.
       A transition back to 0x0 (the view hidden) re-arms the "all" recompute for next show. */
-   /* Lift a placed view to just below a keep-out it now sits under (registerKeepOut, its own
-      growth in onSelfResize). Only the top moves: it isn't otherwise re-placed. A view at its CSS
-      default has no inline position and is left alone. */
-   const reclamp = (): void => {
-      if (dragging || el.classList.contains("resizing")) return; // the gesture places it
-      const l = parseFloat(el.style.left);
-      const t = parseFloat(el.style.top);
-      if (!Number.isFinite(l) || !Number.isFinite(t)) return;
-      const floor = keepOutFloor(l, Math.max(el.getBoundingClientRect().width, el.offsetWidth));
-      if (t >= floor) return;
-      el.style.top = `${Math.round(floor)}px`;
-      opts.onMoved?.();
-   };
    const onSelfResize = (): void => {
       if (dragging) return;
       /* A view placed by its caller, not the user (a notice's default spot: inline left/top, no

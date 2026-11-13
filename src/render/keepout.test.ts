@@ -242,4 +242,27 @@ describe("more paths under a keep-out", () => {
       expect(card.style.top).toBe("56px");
       localStorage.removeItem("test.saved");
    });
+
+   it("a view at its CSS default is lifted only while covered, then back to its default", () => {
+      Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+      /* A readout docked by CSS to the top right (its default top 28): at 640..960. */
+      const readout = document.createElement("div");
+      document.body.appendChild(readout);
+      Object.defineProperty(readout, "offsetWidth", { value: 320, configurable: true });
+      Object.defineProperty(readout, "offsetHeight", { value: 280, configurable: true });
+      readout.getBoundingClientRect = () =>
+         new DOMRect(640, parseFloat(readout.style.top) || 28, 320, 280);
+      cleanups.push(makeMovable(readout, { storageKey: "test.readout", lockable: false }));
+      /* A narrow window: the centered menubar reaches it (450..750 over 640..960). */
+      const bar = boxed(450, 24, 300, 26);
+      const unregister = registerKeepOut(bar);
+      expect(readout.style.top).toBe("56px");
+      expect(readout.style.left).toBe(""); // its horizontal default stands
+      /* Wider: the menubar no longer reaches it, and it goes back to its CSS default. */
+      bar.getBoundingClientRect = () => new DOMRect(250, 24, 300, 26);
+      resized(bar);
+      expect(readout.style.top).toBe("");
+      unregister();
+   });
 });

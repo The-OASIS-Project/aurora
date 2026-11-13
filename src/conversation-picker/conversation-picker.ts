@@ -17,7 +17,7 @@
 
 import type { ConversationListSink, ConversationMeta } from "../ingest/ingest.ts";
 import { addCorners } from "../render/corners.ts";
-import { makeMovable } from "../render/movable.ts";
+import { keepOutsChanged, makeMovable, registerKeepOut } from "../render/movable.ts";
 import { onActivate } from "../render/activate.ts";
 import { openDialog } from "../menu/dialog.ts";
 import { confirmForgetMemories } from "../memory/forget-memories.ts";
@@ -134,9 +134,16 @@ export function mountConversationPicker(
       handle: ".cpick-head",
       ignore: ".cpick-new",
       lockSlot: (btn) => head.insertBefore(btn, newBtn), // the corner holds the collapse caret
-      onSnap: () => positionPanel(), // recompute open-up/down + clamp after the picker is moved
+      onSnap: () => {
+         positionPanel(); // recompute open-up/down + clamp after the picker is moved
+         keepOutsChanged(); // off its default spot it no longer keeps the top band's views below
+      },
       onMoved: () => positionPanel() // lifted below the menubar: the same
    });
+   /* At its default spot it is part of the top band, right under the menubar: a view in its
+      column (the telemetry readout in a narrow window) stacks below it. Once dragged it is an
+      ordinary movable view. */
+   const unregisterKeepOut = registerKeepOut(el, () => el.style.left === "");
 
    /* --- state ------------------------------------------------------------- */
    let listItems: ConversationMeta[] = []; // the paginated full list
@@ -543,6 +550,7 @@ export function mountConversationPicker(
          window.removeEventListener("resize", positionPanel);
          rowDisposers.forEach((d) => d());
          disposeToggle();
+         unregisterKeepOut();
          disposeMovable();
          el.remove();
       }
