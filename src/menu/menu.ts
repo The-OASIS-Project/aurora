@@ -6,6 +6,7 @@
  * and the anchor decide.
  */
 
+import { registerKeepOut } from "../render/movable.ts";
 import {
    effortLabel,
    formatBudgetTokens,
@@ -132,6 +133,8 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
    groups.push(system);
    bar.append(...groups.map((g) => g.el));
    root.appendChild(bar);
+   /* Movable views never sit under the menubar (it is drawn above them). */
+   const unregisterKeepOut = registerKeepOut(bar);
 
    const onBarClick = (e: Event): void => {
       const group = (e.target as HTMLElement).closest<HTMLElement>(".menu-group");
@@ -159,6 +162,7 @@ export function mountMenu(root: HTMLElement, opts: MenuOptions): MenuController 
    return {
       destroy: () => {
          document.removeEventListener("mousedown", onDocDown);
+         unregisterKeepOut();
          bar.remove();
       }
    };

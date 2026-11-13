@@ -27,6 +27,10 @@
       reads this property). One value so a resting card and an edge-snapped card sit
       at the same inset instead of 4px apart. */
    --movable-edge: 28px;
+   /* The top band's menubar row: where it starts and how tall it is (one menu button: a label
+      line plus its padding). The conversation picker's default sits right under it. */
+   --topband-top: 24px;
+   --menubar-row: calc(var(--fs-label) * 1.3 + 0.8rem);
 
    /* Type scale: the single source of truth is src/design/tokens.ts (TYPE), mirrored
       to these --fs-* by applyType() at boot, exactly like the palette. The values below
@@ -363,7 +367,7 @@ body.engaged #docks {
  * ========================================================================== */
 #menubar {
    position: absolute;
-   top: 24px;
+   top: var(--topband-top);
    left: 50%;
    transform: translateX(-50%);
    z-index: 30; /* above the click-to-front panel band (5..20) */
@@ -379,6 +383,7 @@ body.engaged #docks {
    border: none;
    font: inherit;
    font-size: var(--fs-label);
+   line-height: 1.3; /* with the padding, exactly --menubar-row */
    letter-spacing: 0.22em;
    text-transform: uppercase;
    color: var(--text-dim);

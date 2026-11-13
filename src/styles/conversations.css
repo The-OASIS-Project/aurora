@@ -1,14 +1,20 @@
 /*
- * Conversation picker: menu-band chrome in the top-left band (right of the clock, left
- * of the centered menubar). Collapsed = just the header; .open reveals the dropdown
- * panel. Surface language matches .menu-dropdown (ground-raise wash, accent hairline,
- * backdrop blur). Every color is a token or a color-mix of tokens - no literals.
+ * Conversation picker: top-band chrome, by default centered right under the menubar (one
+ * row down), clear of it at any window width. Once dragged, its saved position applies
+ * (makeMovable sets left/top and right:auto, which drops the centering), and makeMovable
+ * keeps it below the menubar too (the menubar is a keep-out). Collapsed = just the header;
+ * .open reveals the dropdown panel. Surface language matches .menu-dropdown (ground-raise
+ * wash, accent hairline, backdrop blur). Every color is a token or a color-mix of tokens -
+ * no literals.
  */
 
 .cpick {
    position: absolute;
-   top: 24px;
-   left: 420px;
+   top: calc(var(--topband-top) + var(--menubar-row) + 6px);
+   left: 0;
+   right: 0;
+   margin-inline: auto;
+   width: max-content;
    z-index: 6;
    font-family: var(--font-mono);
    /* The corner brackets frame the whole thing; they need a positioned host. */
@@ -365,13 +371,4 @@
 }
 .cpick-act-delete {
    --cpick-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 5 6 21 6'/%3E%3Cpath d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3Cline x1='10' y1='11' x2='10' y2='17'/%3E%3Cline x1='14' y1='11' x2='14' y2='17'/%3E%3C/svg%3E");
-}
-
-/* Narrow viewports: keep the panel from overrunning the menubar; the header can wrap
-   under the clock band if space is tight. */
-@media (max-width: 720px) {
-   .cpick {
-      left: 40px;
-      top: 78px;
-   }
 }
