@@ -1254,7 +1254,10 @@ export class DawnIngest implements Ingest {
       revision is still current: a later write, a conversation load, DAWN's tool switching the
       model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
    private llmWritesOwed: number[] = [];
-   /* A llama.cpp sync that waited for a model write's reply (the session's mode not yet known). */
+   /* load_conversation requests still waiting for their reply: each sets the session's LLM to
+      that conversation's settings when DAWN handles it. */
+   private convLoadsOwed = 0;
+   /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
@@ -1635,6 +1638,7 @@ export class DawnIngest implements Ingest {
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
+         this.convLoadsOwed = 0; // nor an older load
          this.loadedSyncDeferred = false;
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
@@ -2442,7 +2446,10 @@ export class DawnIngest implements Ingest {
             /* The local model list may have come first on this connection: now that the mode is
                known, follow llama.cpp's loaded model (a no-op otherwise). */
             if (appliesSelection) this.syncLoadedLocalModel();
-            else this.notifyLlm();
+            else {
+               this.notifyLlm();
+               this.runDeferredLoadedSync(); // this read may have been the last owed
+            }
             break;
          }
 
@@ -2485,8 +2492,6 @@ export class DawnIngest implements Ingest {
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
             const writeRev = this.llmWritesOwed.shift();
-            /* Every reply settled: a sync that waited for them runs against the mode they set. */
-            const runDeferredSync = this.loadedSyncDeferred && this.llmWritesOwed.length === 0;
             /* A reply to a write whose revision has passed is older than newer state: it can't
                undo it. One with no write of ours recorded (none owed) can't be older than ours. */
             const latestReply = writeRev === undefined || writeRev === this.llmRev;
@@ -2552,7 +2557,7 @@ export class DawnIngest implements Ingest {
                   hold: 9
                });
             }
-            if (runDeferredSync) this.syncLoadedLocalModel();
+            this.runDeferredLoadedSync(); // this reply may have been the last owed
             break;
          }
 
@@ -2624,145 +2629,13 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "load_conversation_response": {
-            /* A failed load (e.g. the conversation was deleted from another client) must
-               NOT wipe the surface: guard success and leave state untouched. */
-            if ((p as { success?: boolean }).success === false) {
-               if (this.resumingStored) {
-                  /* The persisted conversation is gone or inaccessible: silently fall
-                     back to a fresh chat - no error notice for an auto-resume. */
-                  this.resumingStored = false;
-                  this.settleTurnOnSwitch();
-                  this.convId = 0;
-                  localStorage.removeItem(CONV_KEY);
-                  this.sinks.conversationList.setActive(0);
-                  break;
-               }
-               if (this.reanchoring) {
-                  /* The conversation we were in was deleted/inaccessible while we were
-                     away: drop to a fresh chat so the next turn opens a new one via the
-                     convId===0 path, rather than tagging turns to a dead id. Silent. */
-                  this.reanchoring = false;
-                  this.settleTurnOnSwitch();
-                  this.convId = 0;
-                  localStorage.removeItem(CONV_KEY);
-                  this.sinks.conversationList.setActive(0);
-                  break;
-               }
-               this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-                  hold: 4
-               });
-               break;
-            }
-            const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
-            if (this.reanchoring) {
-               /* Reconnect re-anchor: DAWN's per-connection active conversation is now
-                  restored, so the next turn (typed or voice) is tagged correctly. Do NOT
-                  touch the transcript - it is already on screen; loadHistory would rebuild
-                  it needlessly. Reconcile the cheap server-authoritative bits only. */
-               this.reanchoring = false;
-               this.convId = cid;
-               localStorage.setItem(CONV_KEY, String(cid));
-               this.sinks.conversationList.setActive(cid);
-               this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
-               this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
-               this.setActiveTitle(String((p as { title?: string }).title ?? ""));
-               this.notifyLlm();
-               break;
-            }
-            /* Switching conversations: the shown context trace belonged to the previous
-               one, so clear it now (the next live turn here repopulates it). */
-            this.sinks.context.clear();
-            const msgs = (p.messages ?? []) as Array<{
-               role: string;
-               content: string;
-               id?: number;
-               tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
-               tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
-               is_error?: boolean; // on role:"tool" rows, the persisted confirmed-failure verdict (v81)
-            }>;
-            /* First pass: map each tool_call_id -> its result text + failure verdict from the
-               `role:"tool"` rows, so a reloaded pill can carry its result (for the expand panel) AND
-               red on a confirmed failure. These rows are filtered out of the rendered items below;
-               they exist only for this correlation. `is_error` (DB column) is the reload twin of the
-               live tool_step frame's `error` - same red-only semantics, absent => neutral. */
-            const toolResults = new Map<string, ReloadedToolResult>();
-            for (const m of msgs) {
-               if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
-                  toolResults.set(m.tool_call_id, {
-                     result: m.content ?? "",
-                     error: m.is_error === true
-                  });
-               }
-            }
-            const rows = msgs.filter((m) => m.role === "user" || m.role === "assistant");
-            const items: ConversationItem[] = [];
-            const consumedIds: number[] = [];
-            for (let i = 0; i < rows.length; i++) {
-               const m = rows[i];
-               const id = Number(m.id ?? 0) || undefined;
-               /* An old voice turn whose tool calls were saved as text notes (DAWN v92/v93): the
-                  same pills as a structured turn, from what the notes say, consuming the result
-                  notes that follow. Their DB ids are noted (after loadHistory, which resets the
-                  set) so a late message_appended can't re-render them. */
-               const notes = collectToolNotes(rows, i, String(id ?? `row${i}`));
-               if (notes) {
-                  items.push({
-                     role: "assistant",
-                     text: notes.prose.trim() ? notes.prose : undefined,
-                     tools: notes.tools,
-                     id
-                  });
-                  for (let k = 1; k <= notes.consumed; k++)
-                     consumedIds.push(Number(rows[i + k].id ?? 0));
-                  /* A prose-less item isn't stamped by loadHistory (it stamps only text items). */
-                  if (!notes.prose.trim() && id) consumedIds.push(id);
-                  i += notes.consumed;
-                  continue;
-               }
-               const info = interpretMessage(m.content);
-               /* The REAL tool source is the separate `tool_calls` column (ordered,
-                  id'd, with args + correlated results); interpretMessage's content-block
-                  tools are a legacy fallback. Prefer tool_calls when present. */
-               const structured = parseToolCalls(m.tool_calls, toolResults);
-               const tools = structured.length ? structured : info?.tools;
-               if (!info && !tools) continue;
-               /* Stamp the DB id so a late message_appended for a reloaded row can't
-                  re-double it (Phase-0 dedup prereq). */
-               items.push({
-                  role: m.role as "user" | "assistant",
-                  text: info?.text,
-                  tools,
-                  id,
-                  email:
-                     m.role === "user"
-                        ? toEmailRef((m as { email_ref?: unknown }).email_ref)
-                        : undefined
-               });
-            }
-            this.sinks.conversation.loadHistory(items);
-            for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
-            this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
-            this.resumingStored = false; // a successful load ends any in-flight resume
-            localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
-            this.sinks.conversationList.setActive(cid);
-            /* Reflect the conversation's server-side privacy so the toggle survives a
-               reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
-            this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
-            /* And its stamped LLM settings, so the MODEL panel shows what this
-               conversation actually runs on rather than the connect-time snapshot. */
-            this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
-            this.setActiveTitle(String((p as { title?: string }).title ?? ""));
-            /* Seed CONTEXT USAGE from the conversation's STORED last usage, so an opened
-               conversation shows its context fill before the first live `context` frame. */
-            const ctxMax = Number((p as { context_max?: number }).context_max ?? 0);
-            if (ctxMax > 0) {
-               const ctxTokens = Number((p as { context_tokens?: number }).context_tokens ?? 0);
-               this.sinks.telemetry.update({ ctx: formatCtx(ctxTokens, ctxMax) });
-            }
-            this.notifyLlm();
+         case "load_conversation_response":
+            if (this.convLoadsOwed > 0) this.convLoadsOwed--;
+            this.onConversationLoaded(p);
+            /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
+               it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
+            this.syncLoadedLocalModel();
             break;
-         }
 
          case "set_active_conversation_response": {
             /* The lightweight reconnect re-anchor's reply (no history replay). Any response
@@ -5439,6 +5312,143 @@ export class DawnIngest implements Ingest {
       this.sinks.telemetry.update({ title: t || "New conversation" });
    }
 
+   /* load_conversation_response: the conversation opened (or why it couldn't). */
+   private onConversationLoaded(p: Record<string, unknown>): void {
+      /* A failed load (e.g. the conversation was deleted from another client) must
+         NOT wipe the surface: guard success and leave state untouched. */
+      if ((p as { success?: boolean }).success === false) {
+         if (this.resumingStored) {
+            /* The persisted conversation is gone or inaccessible: silently fall
+               back to a fresh chat - no error notice for an auto-resume. */
+            this.resumingStored = false;
+            this.settleTurnOnSwitch();
+            this.convId = 0;
+            localStorage.removeItem(CONV_KEY);
+            this.sinks.conversationList.setActive(0);
+            return;
+         }
+         if (this.reanchoring) {
+            /* The conversation we were in was deleted/inaccessible while we were
+               away: drop to a fresh chat so the next turn opens a new one via the
+               convId===0 path, rather than tagging turns to a dead id. Silent. */
+            this.reanchoring = false;
+            this.settleTurnOnSwitch();
+            this.convId = 0;
+            localStorage.removeItem(CONV_KEY);
+            this.sinks.conversationList.setActive(0);
+            return;
+         }
+         this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+            hold: 4
+         });
+         return;
+      }
+      const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      if (this.reanchoring) {
+         /* Reconnect re-anchor: DAWN's per-connection active conversation is now
+            restored, so the next turn (typed or voice) is tagged correctly. Do NOT
+            touch the transcript - it is already on screen; loadHistory would rebuild
+            it needlessly. Reconcile the cheap server-authoritative bits only. */
+         this.reanchoring = false;
+         this.convId = cid;
+         localStorage.setItem(CONV_KEY, String(cid));
+         this.sinks.conversationList.setActive(cid);
+         this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+         this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+         this.setActiveTitle(String((p as { title?: string }).title ?? ""));
+         this.notifyLlm();
+         return;
+      }
+      /* Switching conversations: the shown context trace belonged to the previous
+         one, so clear it now (the next live turn here repopulates it). */
+      this.sinks.context.clear();
+      const msgs = (p.messages ?? []) as Array<{
+         role: string;
+         content: string;
+         id?: number;
+         tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
+         tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
+         is_error?: boolean; // on role:"tool" rows, the persisted confirmed-failure verdict (v81)
+      }>;
+      /* First pass: map each tool_call_id -> its result text + failure verdict from the
+         `role:"tool"` rows, so a reloaded pill can carry its result (for the expand panel) AND
+         red on a confirmed failure. These rows are filtered out of the rendered items below;
+         they exist only for this correlation. `is_error` (DB column) is the reload twin of the
+         live tool_step frame's `error` - same red-only semantics, absent => neutral. */
+      const toolResults = new Map<string, ReloadedToolResult>();
+      for (const m of msgs) {
+         if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
+            toolResults.set(m.tool_call_id, {
+               result: m.content ?? "",
+               error: m.is_error === true
+            });
+         }
+      }
+      const rows = msgs.filter((m) => m.role === "user" || m.role === "assistant");
+      const items: ConversationItem[] = [];
+      const consumedIds: number[] = [];
+      for (let i = 0; i < rows.length; i++) {
+         const m = rows[i];
+         const id = Number(m.id ?? 0) || undefined;
+         /* An old voice turn whose tool calls were saved as text notes (DAWN v92/v93): the
+            same pills as a structured turn, from what the notes say, consuming the result
+            notes that follow. Their DB ids are noted (after loadHistory, which resets the
+            set) so a late message_appended can't re-render them. */
+         const notes = collectToolNotes(rows, i, String(id ?? `row${i}`));
+         if (notes) {
+            items.push({
+               role: "assistant",
+               text: notes.prose.trim() ? notes.prose : undefined,
+               tools: notes.tools,
+               id
+            });
+            for (let k = 1; k <= notes.consumed; k++) consumedIds.push(Number(rows[i + k].id ?? 0));
+            /* A prose-less item isn't stamped by loadHistory (it stamps only text items). */
+            if (!notes.prose.trim() && id) consumedIds.push(id);
+            i += notes.consumed;
+            continue;
+         }
+         const info = interpretMessage(m.content);
+         /* The REAL tool source is the separate `tool_calls` column (ordered,
+            id'd, with args + correlated results); interpretMessage's content-block
+            tools are a legacy fallback. Prefer tool_calls when present. */
+         const structured = parseToolCalls(m.tool_calls, toolResults);
+         const tools = structured.length ? structured : info?.tools;
+         if (!info && !tools) continue;
+         /* Stamp the DB id so a late message_appended for a reloaded row can't
+            re-double it (Phase-0 dedup prereq). */
+         items.push({
+            role: m.role as "user" | "assistant",
+            text: info?.text,
+            tools,
+            id,
+            email:
+               m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined
+         });
+      }
+      this.sinks.conversation.loadHistory(items);
+      for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
+      this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+      this.resumingStored = false; // a successful load ends any in-flight resume
+      localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
+      this.sinks.conversationList.setActive(cid);
+      /* Reflect the conversation's server-side privacy so the toggle survives a
+         reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
+      this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+      /* And its stamped LLM settings, so the MODEL panel shows what this
+         conversation actually runs on rather than the connect-time snapshot. */
+      this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+      this.setActiveTitle(String((p as { title?: string }).title ?? ""));
+      /* Seed CONTEXT USAGE from the conversation's STORED last usage, so an opened
+         conversation shows its context fill before the first live `context` frame. */
+      const ctxMax = Number((p as { context_max?: number }).context_max ?? 0);
+      if (ctxMax > 0) {
+         const ctxTokens = Number((p as { context_tokens?: number }).context_tokens ?? 0);
+         this.sinks.telemetry.update({ ctx: formatCtx(ctxTokens, ctxMax) });
+      }
+      this.notifyLlm();
+   }
+
    /* Re-request get_config to refresh the cloud model lists + provider availability after a
       backend config edit. Asked lists-only (configAsks), so the response updates the lists
       only, never the current selection (which would clobber a loaded conversation's provider).
@@ -5667,9 +5677,9 @@ export class DawnIngest implements Ingest {
       current_model is only the session's own model echoed back, so there is nothing to follow.
       Nothing else is changed on the user's behalf. */
    private syncLoadedLocalModel(): void {
-      /* A model write still waiting for its reply (New Chat's reset, a pick) may move the session
-         to another mode: sync once the last reply says which (set_session_llm_response). */
-      if (this.llmWritesOwed.length > 0) {
+      /* Until the session's selection is known, the mode here may be stale: sync once the last
+         reply that could change it has come (runDeferredLoadedSync). */
+      if (!this.selectionSettled()) {
          this.loadedSyncDeferred = true;
          this.notifyLlm();
          return;
@@ -5687,6 +5697,25 @@ export class DawnIngest implements Ingest {
          });
       }
       this.notifyLlm();
+   }
+
+   /* Nothing still owed a reply could change the session's selection: no model write (New Chat's
+      reset, a pick), no conversation load (it applies that conversation's settings) and no full
+      config read (the selection itself, on connect or after DAWN's tool switched the model).
+      DAWN answers a connection's frames in order, but a load sent after the model list (the boot
+      or reconnect re-open) reaches DAWN after a sync the list would trigger, and would be undone
+      by it. Lists-only reads never touch the selection, so they don't count. */
+   private selectionSettled(): boolean {
+      return (
+         this.llmWritesOwed.length === 0 &&
+         this.convLoadsOwed === 0 &&
+         !this.configAsks.some((a) => !a.listsOnly)
+      );
+   }
+
+   /* A sync that waited (syncLoadedLocalModel) runs once the selection is known. */
+   private runDeferredLoadedSync(): void {
+      if (this.loadedSyncDeferred && this.selectionSettled()) this.syncLoadedLocalModel();
    }
 
    getModelControl(): ModelControl {
@@ -6204,6 +6233,7 @@ export class DawnIngest implements Ingest {
       if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState === WebSocket.OPEN) {
          if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
+         if (type === "load_conversation") this.convLoadsOwed++;
          this.ws.send(JSON.stringify(msg));
       }
    }

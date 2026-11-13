@@ -444,6 +444,86 @@ describe("switching to local mode", () => {
       }
    });
 
+   it("waits for a conversation being opened before following llama.cpp's model", () => {
+      /* The boot or reconnect re-open goes out after the model list, so DAWN would apply a sync
+         the list triggers after the load: on a cloud conversation, it would put it back on local. */
+      for (const convType of ["cloud", "local"]) {
+         const c = client("local", "old.gguf");
+         c.ing.loadConversation(7);
+         c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+         const syncs = () => c.llmWrites().filter((m) => m.payload?.from_restore === true);
+         expect(syncs()).toEqual([]); // not before the conversation's settings are known
+         c.frame("load_conversation_response", {
+            success: true,
+            conversation_id: 7,
+            messages: [],
+            llm_settings: {
+               llm_type: convType,
+               cloud_provider: "claude",
+               model: convType === "cloud" ? "claude-sonnet-5-5" : "old.gguf"
+            }
+         });
+         expect(c.ing.llm.mode).toBe(convType);
+         expect(syncs()).toEqual(
+            convType === "cloud"
+               ? []
+               : [
+                    {
+                       type: "set_session_llm",
+                       payload: { type: "local", model: "loaded.gguf", from_restore: true }
+                    }
+                 ]
+         );
+      }
+   });
+
+   it("a local conversation opened after the list follows llama.cpp's loaded model again", () => {
+      /* The boot order: the list's sync runs first, then the opened conversation restores the model
+         it was saved with, which a llama.cpp provider can't switch to. */
+      const c = client("local", "loaded.gguf");
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.loadConversation(7);
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [],
+         llm_settings: { llm_type: "local", cloud_provider: "claude", model: "old.gguf" }
+      });
+      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
+   it("a conversation that couldn't be opened leaves the session's mode to follow", () => {
+      const c = client("local", "old.gguf");
+      c.ing.loadConversation(7);
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
+   it("waits for the session's config before following llama.cpp's model", () => {
+      /* The mode left from the last connection is stale until the new one's config says. */
+      const c = client("local", "old.gguf");
+      c.ing.askConfig();
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
+      });
+      expect(c.llmWrites()).toEqual([]);
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-sonnet-5-5"]);
+   });
+
    it("opening another conversation ends a switch's wait at once, before its settings arrive", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.ing.getModelControl().setMode("local");
