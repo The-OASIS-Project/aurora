@@ -1254,6 +1254,8 @@ export class DawnIngest implements Ingest {
       revision is still current: a later write, a conversation load, DAWN's tool switching the
       model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
    private llmWritesOwed: number[] = [];
+   /* A llama.cpp sync that waited for a model write's reply (the session's mode not yet known). */
+   private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
@@ -1633,6 +1635,7 @@ export class DawnIngest implements Ingest {
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
+         this.loadedSyncDeferred = false;
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -2482,6 +2485,8 @@ export class DawnIngest implements Ingest {
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
             const writeRev = this.llmWritesOwed.shift();
+            /* Every reply settled: a sync that waited for them runs against the mode they set. */
+            const runDeferredSync = this.loadedSyncDeferred && this.llmWritesOwed.length === 0;
             /* A reply to a write whose revision has passed is older than newer state: it can't
                undo it. One with no write of ours recorded (none owed) can't be older than ours. */
             const latestReply = writeRev === undefined || writeRev === this.llmRev;
@@ -2547,6 +2552,7 @@ export class DawnIngest implements Ingest {
                   hold: 9
                });
             }
+            if (runDeferredSync) this.syncLoadedLocalModel();
             break;
          }
 
@@ -5656,6 +5662,14 @@ export class DawnIngest implements Ingest {
       current_model is only the session's own model echoed back, so there is nothing to follow.
       Nothing else is changed on the user's behalf. */
    private syncLoadedLocalModel(): void {
+      /* A model write still waiting for its reply (New Chat's reset, a pick) may move the session
+         to another mode: sync once the last reply says which (set_session_llm_response). */
+      if (this.llmWritesOwed.length > 0) {
+         this.loadedSyncDeferred = true;
+         this.notifyLlm();
+         return;
+      }
+      this.loadedSyncDeferred = false;
       const loaded = this.localLoadedModel;
       if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
          this.llm.model = loaded;

@@ -417,4 +417,30 @@ describe("switching to local mode", () => {
       expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["local", "configured-local"]);
       expect(c.llmWrites()).toEqual([]);
    });
+
+   it("waits for New Chat's reset before following llama.cpp's model, then follows its mode", () => {
+      for (const resetTo of ["cloud", "local"]) {
+         const c = client("local", "old.gguf");
+         c.ing.newChat(); // the reset's reply, with the mode it restores, is still on the way
+         c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+         const syncs = () => c.llmWrites().filter((m) => m.payload?.from_restore === true);
+         expect(syncs()).toEqual([]); // not before the reset's mode is known
+         c.frame("set_session_llm_response", {
+            success: true,
+            type: resetTo,
+            provider: "Claude",
+            model: resetTo === "cloud" ? "claude-sonnet-5-5" : ""
+         });
+         expect(syncs()).toEqual(
+            resetTo === "cloud"
+               ? []
+               : [
+                    {
+                       type: "set_session_llm",
+                       payload: { type: "local", model: "loaded.gguf", from_restore: true }
+                    }
+                 ]
+         );
+      }
+   });
 });
