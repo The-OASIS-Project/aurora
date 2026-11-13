@@ -1241,11 +1241,34 @@ export class DawnIngest implements Ingest {
       selection (mode/provider/model/reasoning) - that would revert a loaded conversation's
       provider back to the session default, since DAWN does not switch the session LLM on a
       conversation load (applyConvLlmSettings owns that, client-side). */
-   private modelsRefreshOnly = false;
+   /* The model selection's revision: bumped by everything that changes it (a set_session_llm
+      sent, DAWN's tool switching the model, a conversation's settings, New Chat). Each get_config
+      asked records the revision and its purpose (replies come in order). A reply asked at an
+      older revision is an older snapshot, and a lists-only one (a config edit, the MODEL panel
+      opening) never touches the selection: either way it updates only the lists and
+      availability. */
+   private llmRev = 0;
+   private configAsks: Array<{ rev: number; listsOnly: boolean }> = [];
+   /* The revision each set_session_llm sent created, oldest first (replies come in order). A
+      reply may change the selection, its reasoning or a pending switch only while its write's
+      revision is still current: a later write, a conversation load, DAWN's tool switching the
+      model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
+   private llmWritesOwed: number[] = [];
+   /* load_conversation requests still waiting for their reply: each sets the session's LLM to
+      that conversation's settings when DAWN handles it. */
+   private convLoadsOwed = 0;
+   /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
+   private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
    private localModels: string[] = [];
+   /* The model a llama.cpp local provider has loaded (it can't switch models). Only llama.cpp's
+      current_model means that: other providers echo the session's own model there (even a cloud
+      one), so for them this stays empty. Only a model in the list counts, never "(unknown)". */
+   private localLoadedModel = "";
+   /* The user switched to local mode before the local model list arrived: the list completes it. */
+   private localPickPending = false;
    private pendingNewConvTitle = ""; // title derived from the first message, applied on new_conversation_response
    private isPrivate = false;
    /* A private-first new conversation waiting for DAWN to confirm it (newConversation). */
@@ -1613,6 +1636,14 @@ export class DawnIngest implements Ingest {
             before we know, and pick the lightweight re-anchor even on a fresh session. */
          /* Ask for the configured ai_name so the reply header reads "Friday", not
             a generic label. Read-only request; ignored gracefully if refused. */
+         this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
+         this.llmWritesOwed = []; // nor an older model write
+         this.convLoadsOwed = 0; // nor an older load
+         this.loadedSyncDeferred = false;
+         /* Learned again from this connection's list (the local provider's models may have
+            changed meanwhile): until it comes, a switch to local waits for it. */
+         this.localModels = [];
+         this.localLoadedModel = "";
          ws.send(JSON.stringify({ type: "get_config" }));
          /* The user's timezone, so the clock shows their local time (the box running
             Chrome may be UTC). */
@@ -2384,8 +2415,11 @@ export class DawnIngest implements Ingest {
             /* A models-only refresh (MODEL panel open) must not touch the current
                selection - that could revert a loaded conversation's provider/model back to
                the session default. Update only the lists (above) + availability (below). */
-            if (!this.modelsRefreshOnly) {
+            const ask = this.configAsks.shift() ?? { rev: this.llmRev, listsOnly: false };
+            const appliesSelection = !ask.listsOnly && ask.rev === this.llmRev;
+            if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
+               this.localPickPending = false; // DAWN's own state now stands
                const prov = (rt.provider ?? "").toLowerCase();
                if (isLlmProvider(prov)) this.llm.provider = prov;
                if (rt.model) this.llm.model = rt.model;
@@ -2409,8 +2443,13 @@ export class DawnIngest implements Ingest {
                   openrouter: rt.openrouter_available === true || this.llm.provider === "openrouter"
                };
             }
-            this.modelsRefreshOnly = false;
-            this.notifyLlm();
+            /* The local model list may have come first on this connection: now that the mode is
+               known, follow llama.cpp's loaded model (a no-op otherwise). */
+            if (appliesSelection) this.syncLoadedLocalModel();
+            else {
+               this.notifyLlm();
+               this.runDeferredLoadedSync(); // this read may have been the last owed
+            }
             break;
          }
 
@@ -2420,18 +2459,30 @@ export class DawnIngest implements Ingest {
                reasoning_capabilities?: unknown;
             }>;
             this.localModels = models.map((m) => m.name ?? "").filter(Boolean);
+            const loaded = typeof p.current_model === "string" ? p.current_model : "";
+            this.localLoadedModel =
+               typeof p.provider === "string" &&
+               p.provider.toLowerCase() === "llama.cpp" &&
+               this.localModels.includes(loaded)
+                  ? loaded
+                  : "";
             this.localCaps = {};
             for (const m of models) {
                const parsed = m.name ? parseReasoningCaps(m.reasoning_capabilities) : null;
                if (m.name && parsed) this.localCaps[m.name] = parsed;
             }
-            /* Reconcile in case we are in local mode with a model that predates this list
-               (Mode switched to local before it arrived) - picks a valid local model now. */
-            this.reconcileModel();
+            if (this.localPickPending && this.llm.mode === "local") {
+               /* The user switched to local mode before this list arrived: complete their switch. */
+               this.localPickPending = false;
+               this.reconcileModel();
+            } else {
+               this.localPickPending = false;
+               this.syncLoadedLocalModel();
+            }
             break;
          }
 
-         case "set_session_llm_response":
+         case "set_session_llm_response": {
             /* Authoritative echo of a set_session_llm change (§9.1d). Reflect the
                value the SERVER resolved, not the one the user picked, across every
                field the response carries (provider / model / *_available /
@@ -2440,18 +2491,26 @@ export class DawnIngest implements Ingest {
                new model + availability set the optimistic local state does not know.
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
+            const writeRev = this.llmWritesOwed.shift();
+            /* A reply to a write whose revision has passed is older than newer state: it can't
+               undo it. One with no write of ours recorded (none owed) can't be older than ours. */
+            const latestReply = writeRev === undefined || writeRev === this.llmRev;
             if (p.success !== false) {
-               /* type (local|cloud): a "reset" from New can move the session across it. */
-               if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
-               if (typeof p.provider === "string") {
-                  const prov = p.provider.toLowerCase();
-                  if (isLlmProvider(prov)) this.llm.provider = prov;
+               if (latestReply) {
+                  /* type (local|cloud): a "reset" from New can move the session across it. */
+                  if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+                  /* Moved off local meanwhile (a "reset" from New): no local pick left to complete. */
+                  if (this.llm.mode !== "local") this.localPickPending = false;
+                  if (typeof p.provider === "string") {
+                     const prov = p.provider.toLowerCase();
+                     if (isLlmProvider(prov)) this.llm.provider = prov;
+                  }
+                  /* A local session with no named model ("server decides", e.g. after New's reset
+                     to a local default) echoes model "". Show "local", as get_config's llm_runtime
+                     names it, rather than keeping the previous (cloud) model's name. */
+                  if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+                  else if (this.llm.mode === "local" && p.model === "") this.llm.model = "local";
                }
-               /* A local session with no named model ("server decides", e.g. after New's reset to a
-                  local default) echoes model "". Show "local", as get_config's llm_runtime names it,
-                  rather than keeping the previous (cloud) model's name. */
-               if (typeof p.model === "string" && p.model) this.llm.model = p.model;
-               else if (this.llm.mode === "local" && p.model === "") this.llm.model = "local";
                /* Availability only when the echo actually carries it (both builders
                   do as of Phase 1); absent -> leave the current record untouched. */
                if (p.openai_available !== undefined) {
@@ -2463,11 +2522,14 @@ export class DawnIngest implements Ingest {
                         p.openrouter_available === true || this.llm.provider === "openrouter"
                   };
                }
-               this.applyReasoningFields(p);
-               if (p.reasoning_adjusted === true) {
-                  this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
-                     hold: 6
-                  });
+               /* An older reply's reasoning belongs to the model it was for, not the newer one. */
+               if (latestReply) {
+                  this.applyReasoningFields(p);
+                  if (p.reasoning_adjusted === true) {
+                     this.spikeNotice("llm-adjusted", "notice", this.reasoningAdjustedText(), {
+                        hold: 6
+                     });
+                  }
                }
                this.notifyLlm();
             } else {
@@ -2476,12 +2538,28 @@ export class DawnIngest implements Ingest {
                   not a chat line. The session kept its previous LLM. */
                const err = (p as { error?: string }).error;
                console.warn("[dawn] set_session_llm rejected:", err);
+               /* Nothing of a refused switch is left to complete, and the panel shows what the
+                  session still runs: DAWN's refusal echoes its config (unless a newer write is
+                  still owed a reply, which this refusal doesn't speak for). */
+               if (latestReply) {
+                  this.localPickPending = false;
+                  if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+                  if (typeof p.provider === "string") {
+                     const prov = p.provider.toLowerCase();
+                     if (isLlmProvider(prov)) this.llm.provider = prov;
+                  }
+                  if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+                  this.applyReasoningFields(p); // its reasoning too, as DAWN resolved it
+               }
+               this.notifyLlm();
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
                   tone: "attention",
                   hold: 9
                });
             }
+            this.runDeferredLoadedSync(); // this reply may have been the last owed
             break;
+         }
 
          case "get_my_settings_response": {
             /* An unset user zone ("") means the server's zone (DAWN user-timezone): DAWN sends its
@@ -2551,145 +2629,13 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "load_conversation_response": {
-            /* A failed load (e.g. the conversation was deleted from another client) must
-               NOT wipe the surface: guard success and leave state untouched. */
-            if ((p as { success?: boolean }).success === false) {
-               if (this.resumingStored) {
-                  /* The persisted conversation is gone or inaccessible: silently fall
-                     back to a fresh chat - no error notice for an auto-resume. */
-                  this.resumingStored = false;
-                  this.settleTurnOnSwitch();
-                  this.convId = 0;
-                  localStorage.removeItem(CONV_KEY);
-                  this.sinks.conversationList.setActive(0);
-                  break;
-               }
-               if (this.reanchoring) {
-                  /* The conversation we were in was deleted/inaccessible while we were
-                     away: drop to a fresh chat so the next turn opens a new one via the
-                     convId===0 path, rather than tagging turns to a dead id. Silent. */
-                  this.reanchoring = false;
-                  this.settleTurnOnSwitch();
-                  this.convId = 0;
-                  localStorage.removeItem(CONV_KEY);
-                  this.sinks.conversationList.setActive(0);
-                  break;
-               }
-               this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-                  hold: 4
-               });
-               break;
-            }
-            const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
-            if (this.reanchoring) {
-               /* Reconnect re-anchor: DAWN's per-connection active conversation is now
-                  restored, so the next turn (typed or voice) is tagged correctly. Do NOT
-                  touch the transcript - it is already on screen; loadHistory would rebuild
-                  it needlessly. Reconcile the cheap server-authoritative bits only. */
-               this.reanchoring = false;
-               this.convId = cid;
-               localStorage.setItem(CONV_KEY, String(cid));
-               this.sinks.conversationList.setActive(cid);
-               this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
-               this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
-               this.setActiveTitle(String((p as { title?: string }).title ?? ""));
-               this.notifyLlm();
-               break;
-            }
-            /* Switching conversations: the shown context trace belonged to the previous
-               one, so clear it now (the next live turn here repopulates it). */
-            this.sinks.context.clear();
-            const msgs = (p.messages ?? []) as Array<{
-               role: string;
-               content: string;
-               id?: number;
-               tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
-               tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
-               is_error?: boolean; // on role:"tool" rows, the persisted confirmed-failure verdict (v81)
-            }>;
-            /* First pass: map each tool_call_id -> its result text + failure verdict from the
-               `role:"tool"` rows, so a reloaded pill can carry its result (for the expand panel) AND
-               red on a confirmed failure. These rows are filtered out of the rendered items below;
-               they exist only for this correlation. `is_error` (DB column) is the reload twin of the
-               live tool_step frame's `error` - same red-only semantics, absent => neutral. */
-            const toolResults = new Map<string, ReloadedToolResult>();
-            for (const m of msgs) {
-               if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
-                  toolResults.set(m.tool_call_id, {
-                     result: m.content ?? "",
-                     error: m.is_error === true
-                  });
-               }
-            }
-            const rows = msgs.filter((m) => m.role === "user" || m.role === "assistant");
-            const items: ConversationItem[] = [];
-            const consumedIds: number[] = [];
-            for (let i = 0; i < rows.length; i++) {
-               const m = rows[i];
-               const id = Number(m.id ?? 0) || undefined;
-               /* An old voice turn whose tool calls were saved as text notes (DAWN v92/v93): the
-                  same pills as a structured turn, from what the notes say, consuming the result
-                  notes that follow. Their DB ids are noted (after loadHistory, which resets the
-                  set) so a late message_appended can't re-render them. */
-               const notes = collectToolNotes(rows, i, String(id ?? `row${i}`));
-               if (notes) {
-                  items.push({
-                     role: "assistant",
-                     text: notes.prose.trim() ? notes.prose : undefined,
-                     tools: notes.tools,
-                     id
-                  });
-                  for (let k = 1; k <= notes.consumed; k++)
-                     consumedIds.push(Number(rows[i + k].id ?? 0));
-                  /* A prose-less item isn't stamped by loadHistory (it stamps only text items). */
-                  if (!notes.prose.trim() && id) consumedIds.push(id);
-                  i += notes.consumed;
-                  continue;
-               }
-               const info = interpretMessage(m.content);
-               /* The REAL tool source is the separate `tool_calls` column (ordered,
-                  id'd, with args + correlated results); interpretMessage's content-block
-                  tools are a legacy fallback. Prefer tool_calls when present. */
-               const structured = parseToolCalls(m.tool_calls, toolResults);
-               const tools = structured.length ? structured : info?.tools;
-               if (!info && !tools) continue;
-               /* Stamp the DB id so a late message_appended for a reloaded row can't
-                  re-double it (Phase-0 dedup prereq). */
-               items.push({
-                  role: m.role as "user" | "assistant",
-                  text: info?.text,
-                  tools,
-                  id,
-                  email:
-                     m.role === "user"
-                        ? toEmailRef((m as { email_ref?: unknown }).email_ref)
-                        : undefined
-               });
-            }
-            this.sinks.conversation.loadHistory(items);
-            for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
-            this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
-            this.resumingStored = false; // a successful load ends any in-flight resume
-            localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
-            this.sinks.conversationList.setActive(cid);
-            /* Reflect the conversation's server-side privacy so the toggle survives a
-               reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
-            this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
-            /* And its stamped LLM settings, so the MODEL panel shows what this
-               conversation actually runs on rather than the connect-time snapshot. */
-            this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
-            this.setActiveTitle(String((p as { title?: string }).title ?? ""));
-            /* Seed CONTEXT USAGE from the conversation's STORED last usage, so an opened
-               conversation shows its context fill before the first live `context` frame. */
-            const ctxMax = Number((p as { context_max?: number }).context_max ?? 0);
-            if (ctxMax > 0) {
-               const ctxTokens = Number((p as { context_tokens?: number }).context_tokens ?? 0);
-               this.sinks.telemetry.update({ ctx: formatCtx(ctxTokens, ctxMax) });
-            }
-            this.notifyLlm();
+         case "load_conversation_response":
+            if (this.convLoadsOwed > 0) this.convLoadsOwed--;
+            this.onConversationLoaded(p);
+            /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
+               it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
+            this.syncLoadedLocalModel();
             break;
-         }
 
          case "set_active_conversation_response": {
             /* The lightweight reconnect re-anchor's reply (no history replay). Any response
@@ -4233,6 +4179,8 @@ export class DawnIngest implements Ingest {
       daemon's context (clear_session), drop our conversation id so the next message
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
    newChat(): void {
+      this.localPickPending = false; // a new chat starts from DAWN's defaults, not an old switch
+      this.llmRev++;
       this.send({ type: "clear_session" });
       /* A new chat starts on DAWN's configured default model (dawn.toml), not whatever the last
          conversation ran on: DAWN's "reset" restores the session LLM config to its defaults, and
@@ -4347,6 +4295,11 @@ export class DawnIngest implements Ingest {
       }
       this.convId = id;
       this.sinks.conversationList.setActive(id);
+      /* Opening another conversation ends a switch to local still waiting for the model list:
+         completed after this request, DAWN would save it onto the conversation being opened. Its
+         own settings are coming, so older config snapshots no longer describe the selection. */
+      this.localPickPending = false;
+      this.llmRev++;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
    }
 
@@ -5359,12 +5312,153 @@ export class DawnIngest implements Ingest {
       this.sinks.telemetry.update({ title: t || "New conversation" });
    }
 
+   /* load_conversation_response: the conversation opened (or why it couldn't). */
+   private onConversationLoaded(p: Record<string, unknown>): void {
+      /* A failed load (e.g. the conversation was deleted from another client) must
+         NOT wipe the surface: guard success and leave state untouched. */
+      if ((p as { success?: boolean }).success === false) {
+         if (this.resumingStored) {
+            /* The persisted conversation is gone or inaccessible: silently fall
+               back to a fresh chat - no error notice for an auto-resume. */
+            this.resumingStored = false;
+            this.settleTurnOnSwitch();
+            this.convId = 0;
+            localStorage.removeItem(CONV_KEY);
+            this.sinks.conversationList.setActive(0);
+            return;
+         }
+         if (this.reanchoring) {
+            /* The conversation we were in was deleted/inaccessible while we were
+               away: drop to a fresh chat so the next turn opens a new one via the
+               convId===0 path, rather than tagging turns to a dead id. Silent. */
+            this.reanchoring = false;
+            this.settleTurnOnSwitch();
+            this.convId = 0;
+            localStorage.removeItem(CONV_KEY);
+            this.sinks.conversationList.setActive(0);
+            return;
+         }
+         this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+            hold: 4
+         });
+         return;
+      }
+      const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      if (this.reanchoring) {
+         /* Reconnect re-anchor: DAWN's per-connection active conversation is now
+            restored, so the next turn (typed or voice) is tagged correctly. Do NOT
+            touch the transcript - it is already on screen; loadHistory would rebuild
+            it needlessly. Reconcile the cheap server-authoritative bits only. */
+         this.reanchoring = false;
+         this.convId = cid;
+         localStorage.setItem(CONV_KEY, String(cid));
+         this.sinks.conversationList.setActive(cid);
+         this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+         this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+         this.setActiveTitle(String((p as { title?: string }).title ?? ""));
+         this.notifyLlm();
+         return;
+      }
+      /* Switching conversations: the shown context trace belonged to the previous
+         one, so clear it now (the next live turn here repopulates it). */
+      this.sinks.context.clear();
+      const msgs = (p.messages ?? []) as Array<{
+         role: string;
+         content: string;
+         id?: number;
+         tool_calls?: unknown; // OpenAI-format array on assistant rows (webui_history.c)
+         tool_call_id?: string; // on role:"tool" rows, correlates a result to its call
+         is_error?: boolean; // on role:"tool" rows, the persisted confirmed-failure verdict (v81)
+      }>;
+      /* First pass: map each tool_call_id -> its result text + failure verdict from the
+         `role:"tool"` rows, so a reloaded pill can carry its result (for the expand panel) AND
+         red on a confirmed failure. These rows are filtered out of the rendered items below;
+         they exist only for this correlation. `is_error` (DB column) is the reload twin of the
+         live tool_step frame's `error` - same red-only semantics, absent => neutral. */
+      const toolResults = new Map<string, ReloadedToolResult>();
+      for (const m of msgs) {
+         if (m.role === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id) {
+            toolResults.set(m.tool_call_id, {
+               result: m.content ?? "",
+               error: m.is_error === true
+            });
+         }
+      }
+      const rows = msgs.filter((m) => m.role === "user" || m.role === "assistant");
+      const items: ConversationItem[] = [];
+      const consumedIds: number[] = [];
+      for (let i = 0; i < rows.length; i++) {
+         const m = rows[i];
+         const id = Number(m.id ?? 0) || undefined;
+         /* An old voice turn whose tool calls were saved as text notes (DAWN v92/v93): the
+            same pills as a structured turn, from what the notes say, consuming the result
+            notes that follow. Their DB ids are noted (after loadHistory, which resets the
+            set) so a late message_appended can't re-render them. */
+         const notes = collectToolNotes(rows, i, String(id ?? `row${i}`));
+         if (notes) {
+            items.push({
+               role: "assistant",
+               text: notes.prose.trim() ? notes.prose : undefined,
+               tools: notes.tools,
+               id
+            });
+            for (let k = 1; k <= notes.consumed; k++) consumedIds.push(Number(rows[i + k].id ?? 0));
+            /* A prose-less item isn't stamped by loadHistory (it stamps only text items). */
+            if (!notes.prose.trim() && id) consumedIds.push(id);
+            i += notes.consumed;
+            continue;
+         }
+         const info = interpretMessage(m.content);
+         /* The REAL tool source is the separate `tool_calls` column (ordered,
+            id'd, with args + correlated results); interpretMessage's content-block
+            tools are a legacy fallback. Prefer tool_calls when present. */
+         const structured = parseToolCalls(m.tool_calls, toolResults);
+         const tools = structured.length ? structured : info?.tools;
+         if (!info && !tools) continue;
+         /* Stamp the DB id so a late message_appended for a reloaded row can't
+            re-double it (Phase-0 dedup prereq). */
+         items.push({
+            role: m.role as "user" | "assistant",
+            text: info?.text,
+            tools,
+            id,
+            email:
+               m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined
+         });
+      }
+      this.sinks.conversation.loadHistory(items);
+      for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
+      this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+      this.resumingStored = false; // a successful load ends any in-flight resume
+      localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
+      this.sinks.conversationList.setActive(cid);
+      /* Reflect the conversation's server-side privacy so the toggle survives a
+         reload/reconnect/switch (DAWN persists it; we only forgot to read it). */
+      this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
+      /* And its stamped LLM settings, so the MODEL panel shows what this
+         conversation actually runs on rather than the connect-time snapshot. */
+      this.applyConvLlmSettings((p as { llm_settings?: unknown }).llm_settings);
+      this.setActiveTitle(String((p as { title?: string }).title ?? ""));
+      /* Seed CONTEXT USAGE from the conversation's STORED last usage, so an opened
+         conversation shows its context fill before the first live `context` frame. */
+      const ctxMax = Number((p as { context_max?: number }).context_max ?? 0);
+      if (ctxMax > 0) {
+         const ctxTokens = Number((p as { context_tokens?: number }).context_tokens ?? 0);
+         this.sinks.telemetry.update({ ctx: formatCtx(ctxTokens, ctxMax) });
+      }
+      this.notifyLlm();
+   }
+
    /* Re-request get_config to refresh the cloud model lists + provider availability after a
-      backend config edit. Sets modelsRefreshOnly so the response updates the lists only,
-      never the current selection (which would clobber a loaded conversation's provider).
+      backend config edit. Asked lists-only (configAsks), so the response updates the lists
+      only, never the current selection (which would clobber a loaded conversation's provider).
       Shared by the config_changed push and the MODEL-panel-open refetch. */
    private requestConfigRefresh(): void {
-      this.modelsRefreshOnly = true;
+      this.askConfig(true);
+   }
+
+   private askConfig(listsOnly = false): void {
+      this.configAsks.push({ rev: this.llmRev, listsOnly });
       this.send({ type: "get_config" });
    }
 
@@ -5379,6 +5473,8 @@ export class DawnIngest implements Ingest {
       const pl = msg && typeof msg === "object" ? msg.payload : undefined;
       if (!pl || typeof pl !== "object") return;
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
+      this.localPickPending = false; // a tool switched the model: nothing of the user's to complete
+      this.llmRev++; // older config snapshots no longer describe the selection
       if (typeof pl.provider === "string") {
          const prov = pl.provider.toLowerCase();
          if (isLlmProvider(prov)) this.llm.provider = prov;
@@ -5393,8 +5489,7 @@ export class DawnIngest implements Ingest {
       /* A switch_llm tool call changed the session model, and reasoning now depends on the model
          (P1.1b), but this frame carries no reasoning fields or caps. Re-read the session's
          runtime (a full get_config, not a lists-only refresh) for the effective values. */
-      this.modelsRefreshOnly = false;
-      this.send({ type: "get_config" });
+      this.askConfig();
       this.notifyLlm();
    }
 
@@ -5415,6 +5510,8 @@ export class DawnIngest implements Ingest {
       reconcileModel is deliberately NOT called - the stamped model is the truth even
       when it is absent from the active provider's list (as an OpenRouter model is). */
    private applyConvLlmSettings(settings: unknown): void {
+      this.localPickPending = false; // a loaded conversation ends any earlier switch's wait
+      this.llmRev++; // its settings are newer than any config snapshot in flight
       if (!settings || typeof settings !== "object") return;
       const s = settings as {
          llm_type?: string;
@@ -5431,7 +5528,10 @@ export class DawnIngest implements Ingest {
             segment (never grey the active provider). */
          this.llm.providers = { ...this.llm.providers, [prov]: true };
       }
+      /* An empty model (DAWN PR #113) means that type's or provider's own default, which DAWN
+         restored the session to: read the model that actually runs (a read, not a write). */
       if (s.model) this.llm.model = s.model;
+      else if (s.model === "") this.askConfig();
       this.applyReasoningFields(settings);
    }
 
@@ -5534,19 +5634,30 @@ export class DawnIngest implements Ingest {
       return mode === "local" ? this.localModels : this.cloudModels[provider];
    }
 
-   /* If the current model is not in the active list, switch to the default one.
-      For OpenRouter that is the operator's configured default index (parity with
-      the old WebUI); every other provider defaults to the first entry. */
+   /* After the user picks a mode or provider: if the current model isn't in that list, switch to
+      its default, as the user's own choice. Local mode prefers the model llama.cpp has loaded
+      (localLoadedModel), else the first; OpenRouter uses the operator's configured default index (parity with DAWN's
+      WebUI); every other provider, the first. Local mode with no list yet waits for it
+      (localPickPending), and the list's arrival completes the switch. */
    private reconcileModel(): void {
+      if (this.llm.mode !== "local") this.localPickPending = false; // switched away meanwhile
       const models = this.modelsFor(this.llm.mode, this.llm.provider);
-      if (models.length > 0 && !models.includes(this.llm.model)) {
+      if (this.llm.mode === "local" && models.length === 0 && !this.localLoadedModel) {
+         this.localPickPending = true;
+         this.notifyLlm();
+         return;
+      }
+      const preferred =
+         this.llm.mode === "local" && this.localLoadedModel ? this.localLoadedModel : "";
+      if (!models.includes(this.llm.model) && (models.length > 0 || preferred)) {
          const idx =
+            this.llm.mode === "cloud" && // the OpenRouter default indexes only its own list
             this.llm.provider === "openrouter" &&
             this.openrouterDefaultIdx >= 0 &&
             this.openrouterDefaultIdx < models.length
                ? this.openrouterDefaultIdx
                : 0;
-         this.llm.model = models[idx];
+         this.llm.model = preferred || models[idx];
          /* Keep reasoning valid for the new model so the panel's segmented controls always have
             an active value (the server resolves + echoes too, but this avoids a transient
             no-selection state until the echo lands). */
@@ -5557,6 +5668,54 @@ export class DawnIngest implements Ingest {
          }); // type too (see setProvider)
       }
       this.notifyLlm();
+   }
+
+   /* The local model list arrived with no switch of the user's waiting on it: in local mode with
+      llama.cpp, which can't switch models, the session follows the one it has loaded, as DAWN's
+      WebUI does. That is DAWN reporting its own state, not a choice, so it goes with from_restore
+      (DAWN applies it to the session without saving it on the conversation). For other providers
+      current_model is only the session's own model echoed back, so there is nothing to follow.
+      Nothing else is changed on the user's behalf. */
+   private syncLoadedLocalModel(): void {
+      /* Until the session's selection is known, the mode here may be stale: sync once the last
+         reply that could change it has come (runDeferredLoadedSync). */
+      if (!this.selectionSettled()) {
+         this.loadedSyncDeferred = true;
+         this.notifyLlm();
+         return;
+      }
+      this.loadedSyncDeferred = false;
+      const loaded = this.localLoadedModel;
+      if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
+         this.llm.model = loaded;
+         this.fitReasoningToModel();
+         /* type with the model: without it, a local name that starts like a cloud one (Ollama's
+            gpt-oss:20b) is taken for a cloud model, and DAWN moves the session to cloud. */
+         this.send({
+            type: "set_session_llm",
+            payload: { type: "local", model: loaded, from_restore: true }
+         });
+      }
+      this.notifyLlm();
+   }
+
+   /* Nothing still owed a reply could change the session's selection: no model write (New Chat's
+      reset, a pick), no conversation load (it applies that conversation's settings) and no full
+      config read (the selection itself, on connect or after DAWN's tool switched the model).
+      DAWN answers a connection's frames in order, but a load sent after the model list (the boot
+      or reconnect re-open) reaches DAWN after a sync the list would trigger, and would be undone
+      by it. Lists-only reads never touch the selection, so they don't count. */
+   private selectionSettled(): boolean {
+      return (
+         this.llmWritesOwed.length === 0 &&
+         this.convLoadsOwed === 0 &&
+         !this.configAsks.some((a) => !a.listsOnly)
+      );
+   }
+
+   /* A sync that waited (syncLoadedLocalModel) runs once the selection is known. */
+   private runDeferredLoadedSync(): void {
+      if (this.loadedSyncDeferred && this.selectionSettled()) this.syncLoadedLocalModel();
    }
 
    getModelControl(): ModelControl {
@@ -5630,7 +5789,7 @@ export class DawnIngest implements Ingest {
             /* Re-request get_config so a backend model-list edit is picked up live when the
                MODEL panel opens. The get_config_response handler refreshes this.cloudModels
                + availability and rebuilds the open panel, skipping the session selection (see
-               modelsRefreshOnly). Complements the config_changed push (which also fires this
+               a lists-only ask). Complements the config_changed push (which also fires this
                when the panel is closed); keeping both is belt-and-suspenders. */
             this.requestConfigRefresh();
          }
@@ -6071,7 +6230,12 @@ export class DawnIngest implements Ingest {
       Never `text`: a chat message is always attempted, and a refusal says so. */
       const type = (msg as { type?: unknown }).type;
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+      if (type === "set_session_llm") this.llmRev++; // see llmRev
+      if (this.ws?.readyState === WebSocket.OPEN) {
+         if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
+         if (type === "load_conversation") this.convLoadsOwed++;
+         this.ws.send(JSON.stringify(msg));
+      }
    }
 
    /* UNKNOWN_TYPE (DAWN bcb0bdc1+; older daemons send nothing): see the error case. Only an

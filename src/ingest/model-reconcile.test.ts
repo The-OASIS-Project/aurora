@@ -1,0 +1,534 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DawnIngest } from "./dawn-ws.ts";
+
+/* What the client writes when the local model list arrives (list_llm_models_response). A received
+   frame may complete or restore what the user chose, never start a new action: the list completes
+   a switch to local mode the user made before it came, and otherwise only follows the model a
+   llama.cpp provider has loaded (it can't switch models), as DAWN's WebUI does, with from_restore
+   so DAWN doesn't save it on the conversation. For other providers DAWN's current_model is the
+   session's own model echoed back (even a cloud one), so it is never taken as a local pick. */
+
+type Sent = { type: string; payload?: Record<string, unknown> };
+const clients: Array<Record<string, any>> = [];
+
+function client(mode: "local" | "cloud", model: string) {
+   const sink = new Proxy({}, { get: () => () => undefined });
+   const sinks = new Proxy({}, { get: () => sink });
+   const ing = new DawnIngest() as unknown as Record<string, any>;
+   clients.push(ing);
+   ing.emit = () => {};
+   ing.start(sinks);
+   const sent: Sent[] = [];
+   ing.ws = {
+      readyState: WebSocket.OPEN,
+      send: (t: string) => sent.push(JSON.parse(t)),
+      close: () => {}
+   };
+   ing.llm.mode = mode;
+   ing.llm.model = model;
+   const frame = (type: string, payload: object): void =>
+      ing.onFrame(JSON.stringify({ type, payload }));
+   const llmWrites = (): Sent[] => sent.filter((m) => m.type === "set_session_llm");
+   return { ing, sent, frame, llmWrites };
+}
+
+/* A list as DAWN sends it (webui_config.c): llama.cpp reports the loaded model as current_model;
+   other providers echo the session's model there. */
+const list = (provider: string, names: string[], current: string) => ({
+   models: names.map((name) => ({ name })),
+   provider,
+   current_model: current,
+   count: names.length
+});
+
+beforeEach(() => {
+   localStorage.clear();
+   vi.spyOn(console, "debug").mockImplementation(() => {});
+});
+afterEach(() => {
+   for (const ing of clients.splice(0)) ing.dispose();
+   vi.restoreAllMocks();
+});
+
+describe("the local model list arriving", () => {
+   it("llama.cpp in local mode: the session follows the loaded model, not saved as a choice", () => {
+      const c = client("local", "old-model");
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+      expect(c.ing.llm.model).toBe("loaded.gguf");
+   });
+
+   it("Ollama: current_model is the session's own echoed back, so nothing is written", () => {
+      const c = client("local", "llama3");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "llama3"));
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("a late list never undoes a local model the user picked meanwhile", () => {
+      const c = client("local", "llama3");
+      c.ing.getModelControl().setModel("qwen"); // while the connect-time list was in flight
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "llama3"));
+      expect(c.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { type: "local", model: "qwen" } }
+      ]);
+      expect(c.ing.llm.model).toBe("qwen");
+   });
+
+   it('leaves a stored model alone, and ignores DAWN\'s "(unknown)" placeholder', () => {
+      const c = client("local", "removed-model");
+      c.frame("list_llm_models_response", list("Ollama", [], "(unknown)"));
+      expect(c.llmWrites()).toEqual([]);
+      expect(c.ing.llm.model).toBe("removed-model");
+   });
+
+   it("writes nothing in cloud mode", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites()).toEqual([]);
+   });
+});
+
+describe("switching to local mode", () => {
+   it("never takes the cloud model DAWN echoed as the local pick", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "claude-sonnet-5-5"));
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { type: "local" } },
+         { type: "set_session_llm", payload: { type: "local", model: "llama3" } }
+      ]);
+   });
+
+   it("before the list arrives: the list completes it, as the user's choice", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local"); // no local list yet
+      expect(c.llmWrites()).toEqual([{ type: "set_session_llm", payload: { type: "local" } }]);
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
+
+   it("with llama.cpp: picks the model it has loaded", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "loaded.gguf" }
+      });
+   });
+
+   it("isn't completed after the user went back, or opened a conversation, meanwhile", () => {
+      const back = client("cloud", "claude-sonnet-5-5");
+      back.ing.getModelControl().setMode("local");
+      back.ing.getModelControl().setMode("cloud");
+      const sentBack = back.llmWrites().length;
+      back.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(back.llmWrites()).toHaveLength(sentBack);
+
+      const opened = client("cloud", "claude-sonnet-5-5");
+      /* The curated cloud list lacks the conversation's older model, so a completed "pick" would
+         replace it. */
+      opened.ing.cloudModels.claude = ["claude-sonnet-5-5"];
+      opened.ing.getModelControl().setMode("local");
+      /* A conversation is loaded before the list comes: its own settings stand. */
+      opened.ing.applyConvLlmSettings({
+         llm_type: "cloud",
+         cloud_provider: "claude",
+         model: "claude-legacy-4"
+      });
+      const sentOpened = opened.llmWrites().length;
+      opened.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-legacy-4"));
+      expect(opened.llmWrites()).toHaveLength(sentOpened);
+      expect(opened.ing.llm.model).toBe("claude-legacy-4");
+   });
+
+   it("a config reply asked before the switch doesn't undo it", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.askConfig(); // the connect-time get_config, still in flight
+      c.ing.getModelControl().setMode("local");
+      /* Its reply is a snapshot from before the switch. */
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
+      });
+      expect(c.ing.llm.mode).toBe("local");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
+
+   it("New Chat, or a load with no settings, ends a switch's wait", () => {
+      for (const end of [
+         (ing: Record<string, any>) => ing.newChat(),
+         (ing: Record<string, any>) => ing.applyConvLlmSettings(undefined)
+      ]) {
+         const c = client("cloud", "claude-sonnet-5-5");
+         c.ing.getModelControl().setMode("local");
+         end(c.ing);
+         c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+         expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
+      }
+   });
+
+   it("a refused switch isn't retried when the list arrives", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local");
+      c.frame("set_session_llm_response", {
+         success: false,
+         error: "Local LLM not available",
+         type: "cloud",
+         provider: "claude",
+         model: "claude-sonnet-5-5"
+      });
+      expect(c.ing.llm.mode).toBe("cloud"); // what the session still runs
+      const before = c.llmWrites().length;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites()).toHaveLength(before);
+   });
+
+   it("from OpenRouter, the local pick is the first local model, not OpenRouter's default index", () => {
+      const c = client("cloud", "openai/gpt-5.5");
+      c.ing.llm.provider = "openrouter";
+      c.ing.openrouterDefaultIdx = 1;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "openai/gpt-5.5"));
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
+
+   it("follows llama.cpp's loaded model whichever of the list and the config comes first", () => {
+      const runtime = {
+         success: true,
+         llm_runtime: { type: "local", provider: "", model: "old-model" }
+      };
+      const listFirst = client("cloud", ""); // nothing known yet on this connection
+      listFirst.ing.askConfig();
+      listFirst.frame(
+         "list_llm_models_response",
+         list("llama.cpp", ["loaded.gguf"], "loaded.gguf")
+      );
+      listFirst.frame("get_config_response", runtime);
+      expect(listFirst.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+
+      const configFirst = client("cloud", "");
+      configFirst.ing.askConfig();
+      configFirst.frame("get_config_response", runtime);
+      configFirst.frame(
+         "list_llm_models_response",
+         list("llama.cpp", ["loaded.gguf"], "loaded.gguf")
+      );
+      expect(configFirst.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
+   it("an older echo can't cancel a newer switch (local, cloud, local in quick succession)", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      const control = c.ing.getModelControl();
+      control.setMode("local");
+      control.setMode("cloud");
+      control.setMode("local"); // the latest choice, still waiting for the list
+      const echo = (type: string) =>
+         c.frame("set_session_llm_response", {
+            success: true,
+            type,
+            provider: "claude",
+            model: "claude-sonnet-5-5"
+         });
+      echo("local");
+      echo("cloud"); // older: mustn't undo the final switch
+      expect(c.ing.llm.mode).toBe("local");
+      echo("local");
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "local", model: "llama3" }
+      });
+   });
+
+   it("a lists-only config reply never changes the selection, even after DAWN's tool switched it", () => {
+      const c = client("local", "old-model");
+      c.ing.requestConfigRefresh(); // the MODEL panel opened: a lists-only ask, in flight
+      c.ing.applyLlmState(
+         JSON.stringify({
+            type: "llm_state_update",
+            payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
+         })
+      ); // a tool switched the model, and asks for the full config
+      const snapshot = (type: string, model: string) =>
+         c.frame("get_config_response", {
+            success: true,
+            llm_runtime: { type, provider: "Claude", model }
+         });
+      snapshot("local", "old-model"); // the lists-only reply, from before the switch
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      snapshot("cloud", "claude-opus-5-5"); // the full re-read
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("an older reply's reasoning doesn't overwrite the newer model's", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.reasoning = "adaptive";
+      c.ing.llm.effort = "medium";
+      const control = c.ing.getModelControl();
+      control.setModel("claude-a");
+      control.setModel("claude-b");
+      c.frame("set_session_llm_response", {
+         success: true,
+         model: "claude-a",
+         thinking_mode: "disabled",
+         reasoning_effort: "low"
+      });
+      expect([c.ing.llm.model, c.ing.llm.reasoning]).toEqual(["claude-b", "adaptive"]);
+      c.frame("set_session_llm_response", {
+         success: true,
+         model: "claude-b",
+         thinking_mode: "adaptive",
+         reasoning_effort: "high"
+      });
+      expect(c.ing.llm.effort).toBe("high");
+   });
+
+   it("a new connection forgets the old local list: a switch waits for the new one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.localModels = ["gone-model"]; // from before DAWN restarted
+      const sockets: Array<{ onopen: (() => void) | null }> = [];
+      vi.stubGlobal(
+         "WebSocket",
+         Object.assign(
+            class {
+               static OPEN = 1;
+               readyState = 1;
+               binaryType = "";
+               onopen: (() => void) | null = null;
+               onmessage = null;
+               onclose = null;
+               onerror = null;
+               constructor() {
+                  sockets.push(this);
+               }
+               send(t: string): void {
+                  c.sent.push(JSON.parse(t));
+               }
+               close(): void {}
+            },
+            { OPEN: 1 }
+         )
+      );
+      vi.stubGlobal("__APP_VERSION__", "test"); // the build defines it; the handshake sends it
+      c.ing.openSocket();
+      sockets[0].onopen?.();
+      const before = c.llmWrites().length;
+      c.ing.getModelControl().setMode("local");
+      expect(c.llmWrites().slice(before)).toEqual([
+         { type: "set_session_llm", payload: { type: "local" } }
+      ]);
+      vi.unstubAllGlobals();
+   });
+
+   it("a refusal shows the session's reasoning as well as its model", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.reasoning = "adaptive";
+      c.ing.llm.effort = "medium";
+      const control = c.ing.getModelControl();
+      control.setModel("claude-a"); // accepted, but its reply is no longer the latest
+      control.setProvider("openai"); // refused: no API key
+      c.frame("set_session_llm_response", { success: true, model: "claude-a" });
+      c.frame("set_session_llm_response", {
+         success: false,
+         error: "API key not configured for requested provider",
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-a",
+         thinking_mode: "adaptive",
+         reasoning_effort: "high"
+      });
+      expect([c.ing.llm.provider, c.ing.llm.model, c.ing.llm.effort]).toEqual([
+         "claude",
+         "claude-a",
+         "high"
+      ]);
+   });
+
+   it("a delayed echo doesn't undo a conversation load or a tool switch made after its write", () => {
+      for (const after of [
+         (ing: Record<string, any>) =>
+            ing.applyConvLlmSettings({
+               llm_type: "cloud",
+               cloud_provider: "claude",
+               model: "claude-opus-5-5",
+               thinking_mode: "adaptive",
+               reasoning_effort: "high"
+            }),
+         (ing: Record<string, any>) =>
+            ing.applyLlmState(
+               JSON.stringify({
+                  type: "llm_state_update",
+                  payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
+               })
+            )
+      ]) {
+         const c = client("cloud", "claude-sonnet-5-5");
+         c.ing.getModelControl().setModel("claude-a"); // its echo is still on the way
+         after(c.ing);
+         c.frame("set_session_llm_response", {
+            success: true,
+            type: "cloud",
+            provider: "Claude",
+            model: "claude-a",
+            thinking_mode: "disabled",
+            reasoning_effort: "low"
+         });
+         expect(c.ing.llm.model).toBe("claude-opus-5-5");
+         expect(c.ing.llm.reasoning).not.toBe("disabled");
+      }
+   });
+
+   it("a loaded conversation with no stored model reads the model that actually runs", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.applyConvLlmSettings({ llm_type: "local", model: "" });
+      expect(c.sent.filter((m) => m.type === "get_config")).toHaveLength(1);
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "local", provider: "", model: "configured-local" }
+      });
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["local", "configured-local"]);
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("waits for New Chat's reset before following llama.cpp's model, then follows its mode", () => {
+      for (const resetTo of ["cloud", "local"]) {
+         const c = client("local", "old.gguf");
+         c.ing.newChat(); // the reset's reply, with the mode it restores, is still on the way
+         c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+         const syncs = () => c.llmWrites().filter((m) => m.payload?.from_restore === true);
+         expect(syncs()).toEqual([]); // not before the reset's mode is known
+         c.frame("set_session_llm_response", {
+            success: true,
+            type: resetTo,
+            provider: "Claude",
+            model: resetTo === "cloud" ? "claude-sonnet-5-5" : ""
+         });
+         expect(syncs()).toEqual(
+            resetTo === "cloud"
+               ? []
+               : [
+                    {
+                       type: "set_session_llm",
+                       payload: { type: "local", model: "loaded.gguf", from_restore: true }
+                    }
+                 ]
+         );
+      }
+   });
+
+   it("waits for a conversation being opened before following llama.cpp's model", () => {
+      /* The boot or reconnect re-open goes out after the model list, so DAWN would apply a sync
+         the list triggers after the load: on a cloud conversation, it would put it back on local. */
+      for (const convType of ["cloud", "local"]) {
+         const c = client("local", "old.gguf");
+         c.ing.loadConversation(7);
+         c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+         const syncs = () => c.llmWrites().filter((m) => m.payload?.from_restore === true);
+         expect(syncs()).toEqual([]); // not before the conversation's settings are known
+         c.frame("load_conversation_response", {
+            success: true,
+            conversation_id: 7,
+            messages: [],
+            llm_settings: {
+               llm_type: convType,
+               cloud_provider: "claude",
+               model: convType === "cloud" ? "claude-sonnet-5-5" : "old.gguf"
+            }
+         });
+         expect(c.ing.llm.mode).toBe(convType);
+         expect(syncs()).toEqual(
+            convType === "cloud"
+               ? []
+               : [
+                    {
+                       type: "set_session_llm",
+                       payload: { type: "local", model: "loaded.gguf", from_restore: true }
+                    }
+                 ]
+         );
+      }
+   });
+
+   it("a local conversation opened after the list follows llama.cpp's loaded model again", () => {
+      /* The boot order: the list's sync runs first, then the opened conversation restores the model
+         it was saved with, which a llama.cpp provider can't switch to. */
+      const c = client("local", "loaded.gguf");
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.loadConversation(7);
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [],
+         llm_settings: { llm_type: "local", cloud_provider: "claude", model: "old.gguf" }
+      });
+      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
+   it("a conversation that couldn't be opened leaves the session's mode to follow", () => {
+      const c = client("local", "old.gguf");
+      c.ing.loadConversation(7);
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
+   it("waits for the session's config before following llama.cpp's model", () => {
+      /* The mode left from the last connection is stale until the new one's config says. */
+      const c = client("local", "old.gguf");
+      c.ing.askConfig();
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
+      });
+      expect(c.llmWrites()).toEqual([]);
+      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-sonnet-5-5"]);
+   });
+
+   it("opening another conversation ends a switch's wait at once, before its settings arrive", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local");
+      c.ing.loadConversation(7); // its load_conversation_response is still on the way
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
+   });
+});
