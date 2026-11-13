@@ -1246,6 +1246,12 @@ export class DawnIngest implements Ingest {
       LLM_ERROR that trails a specific error for the same failed turn (see the error case). */
    private lastErrorAt = 0;
    private localModels: string[] = [];
+   /* The model a llama.cpp local provider has loaded (it can't switch models). Only llama.cpp's
+      current_model means that: other providers echo the session's own model there (even a cloud
+      one), so for them this stays empty. Only a model in the list counts, never "(unknown)". */
+   private localLoadedModel = "";
+   /* The user switched to local mode before the local model list arrived: the list completes it. */
+   private localPickPending = false;
    private pendingNewConvTitle = ""; // title derived from the first message, applied on new_conversation_response
    private isPrivate = false;
    /* A private-first new conversation waiting for DAWN to confirm it (newConversation). */
@@ -2386,6 +2392,7 @@ export class DawnIngest implements Ingest {
                the session default. Update only the lists (above) + availability (below). */
             if (!this.modelsRefreshOnly) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
+               this.localPickPending = false; // DAWN's own state now stands
                const prov = (rt.provider ?? "").toLowerCase();
                if (isLlmProvider(prov)) this.llm.provider = prov;
                if (rt.model) this.llm.model = rt.model;
@@ -2420,14 +2427,26 @@ export class DawnIngest implements Ingest {
                reasoning_capabilities?: unknown;
             }>;
             this.localModels = models.map((m) => m.name ?? "").filter(Boolean);
+            const loaded = typeof p.current_model === "string" ? p.current_model : "";
+            this.localLoadedModel =
+               typeof p.provider === "string" &&
+               p.provider.toLowerCase() === "llama.cpp" &&
+               this.localModels.includes(loaded)
+                  ? loaded
+                  : "";
             this.localCaps = {};
             for (const m of models) {
                const parsed = m.name ? parseReasoningCaps(m.reasoning_capabilities) : null;
                if (m.name && parsed) this.localCaps[m.name] = parsed;
             }
-            /* Reconcile in case we are in local mode with a model that predates this list
-               (Mode switched to local before it arrived) - picks a valid local model now. */
-            this.reconcileModel();
+            if (this.localPickPending && this.llm.mode === "local") {
+               /* The user switched to local mode before this list arrived: complete their switch. */
+               this.localPickPending = false;
+               this.reconcileModel();
+            } else {
+               this.localPickPending = false;
+               this.syncLoadedLocalModel();
+            }
             break;
          }
 
@@ -2443,6 +2462,8 @@ export class DawnIngest implements Ingest {
             if (p.success !== false) {
                /* type (local|cloud): a "reset" from New can move the session across it. */
                if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
+               /* Moved off local meanwhile (a "reset" from New): no local pick left to complete. */
+               if (this.llm.mode !== "local") this.localPickPending = false;
                if (typeof p.provider === "string") {
                   const prov = p.provider.toLowerCase();
                   if (isLlmProvider(prov)) this.llm.provider = prov;
@@ -5379,6 +5400,7 @@ export class DawnIngest implements Ingest {
       const pl = msg && typeof msg === "object" ? msg.payload : undefined;
       if (!pl || typeof pl !== "object") return;
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
+      this.localPickPending = false; // a tool switched the model: nothing of the user's to complete
       if (typeof pl.provider === "string") {
          const prov = pl.provider.toLowerCase();
          if (isLlmProvider(prov)) this.llm.provider = prov;
@@ -5424,6 +5446,7 @@ export class DawnIngest implements Ingest {
          reasoning_effort?: string;
       };
       if (s.llm_type) this.llm.mode = s.llm_type === "local" ? "local" : "cloud";
+      this.localPickPending = false; // the loaded conversation's own settings stand
       const prov = (s.cloud_provider ?? "").toLowerCase();
       if (isLlmProvider(prov)) {
          this.llm.provider = prov;
@@ -5534,19 +5557,29 @@ export class DawnIngest implements Ingest {
       return mode === "local" ? this.localModels : this.cloudModels[provider];
    }
 
-   /* If the current model is not in the active list, switch to the default one.
-      For OpenRouter that is the operator's configured default index (parity with
-      the old WebUI); every other provider defaults to the first entry. */
+   /* After the user picks a mode or provider: if the current model isn't in that list, switch to
+      its default, as the user's own choice. Local mode prefers the model llama.cpp has loaded
+      (localLoadedModel), else the first; OpenRouter uses the operator's configured default index (parity with DAWN's
+      WebUI); every other provider, the first. Local mode with no list yet waits for it
+      (localPickPending), and the list's arrival completes the switch. */
    private reconcileModel(): void {
+      if (this.llm.mode !== "local") this.localPickPending = false; // switched away meanwhile
       const models = this.modelsFor(this.llm.mode, this.llm.provider);
-      if (models.length > 0 && !models.includes(this.llm.model)) {
+      if (this.llm.mode === "local" && models.length === 0 && !this.localLoadedModel) {
+         this.localPickPending = true;
+         this.notifyLlm();
+         return;
+      }
+      const preferred =
+         this.llm.mode === "local" && this.localLoadedModel ? this.localLoadedModel : "";
+      if (!models.includes(this.llm.model) && (models.length > 0 || preferred)) {
          const idx =
             this.llm.provider === "openrouter" &&
             this.openrouterDefaultIdx >= 0 &&
             this.openrouterDefaultIdx < models.length
                ? this.openrouterDefaultIdx
                : 0;
-         this.llm.model = models[idx];
+         this.llm.model = preferred || models[idx];
          /* Keep reasoning valid for the new model so the panel's segmented controls always have
             an active value (the server resolves + echoes too, but this avoids a transient
             no-selection state until the echo lands). */
@@ -5555,6 +5588,22 @@ export class DawnIngest implements Ingest {
             type: "set_session_llm",
             payload: { type: this.llm.mode, model: this.llm.model }
          }); // type too (see setProvider)
+      }
+      this.notifyLlm();
+   }
+
+   /* The local model list arrived with no switch of the user's waiting on it: in local mode with
+      llama.cpp, which can't switch models, the session follows the one it has loaded, as DAWN's
+      WebUI does. That is DAWN reporting its own state, not a choice, so it goes with from_restore
+      (DAWN applies it to the session without saving it on the conversation). For other providers
+      current_model is only the session's own model echoed back, so there is nothing to follow.
+      Nothing else is changed on the user's behalf. */
+   private syncLoadedLocalModel(): void {
+      const loaded = this.localLoadedModel;
+      if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
+         this.llm.model = loaded;
+         this.fitReasoningToModel();
+         this.send({ type: "set_session_llm", payload: { model: loaded, from_restore: true } });
       }
       this.notifyLlm();
    }
