@@ -5458,8 +5458,8 @@ export class DawnIngest implements Ingest {
    }
 
    private askConfig(listsOnly = false): void {
-      this.configAsks.push({ rev: this.llmRev, listsOnly });
-      this.send({ type: "get_config" });
+      /* Owed a reply only when it went out (a closed socket drops it; the next one asks again). */
+      if (this.send({ type: "get_config" })) this.configAsks.push({ rev: this.llmRev, listsOnly });
    }
 
    /* Apply an llm_state_update (mode/provider/model + provider availability). */
@@ -6225,17 +6225,18 @@ export class DawnIngest implements Ingest {
       };
    }
 
-   private send(msg: object): void {
+   /* True when the frame went out on an open socket. */
+   private send(msg: object): boolean {
       /* A type this DAWN said it doesn't handle isn't sent again on this connection (polls stop).
       Never `text`: a chat message is always attempted, and a refusal says so. */
       const type = (msg as { type?: unknown }).type;
-      if (typeof type === "string" && this.unsupportedTypes.has(type)) return;
+      if (typeof type === "string" && this.unsupportedTypes.has(type)) return false;
       if (type === "set_session_llm") this.llmRev++; // see llmRev
-      if (this.ws?.readyState === WebSocket.OPEN) {
-         if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
-         if (type === "load_conversation") this.convLoadsOwed++;
-         this.ws.send(JSON.stringify(msg));
-      }
+      if (this.ws?.readyState !== WebSocket.OPEN) return false;
+      if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
+      if (type === "load_conversation") this.convLoadsOwed++;
+      this.ws.send(JSON.stringify(msg));
+      return true;
    }
 
    /* UNKNOWN_TYPE (DAWN bcb0bdc1+; older daemons send nothing): see the error case. Only an

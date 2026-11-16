@@ -477,6 +477,22 @@ describe("switching to local mode", () => {
       }
    });
 
+   it("a config read that couldn't be sent isn't waited for", () => {
+      /* DAWN's tool switched the model while the socket was closed: its config read was dropped,
+         so nothing should hold the llama.cpp sync for its reply. */
+      const c = client("local", "old.gguf");
+      c.ing.ws.readyState = WebSocket.CLOSED;
+      c.ing.applyLlmState(JSON.stringify({ payload: { type: "local", model: "old.gguf" } }));
+      c.ing.ws.readyState = WebSocket.OPEN;
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true }
+         }
+      ]);
+   });
+
    it("a local conversation opened after the list follows llama.cpp's loaded model again", () => {
       /* The boot order: the list's sync runs first, then the opened conversation restores the model
          it was saved with, which a llama.cpp provider can't switch to. */
