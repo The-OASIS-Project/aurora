@@ -18,12 +18,15 @@
 import type {
    ActivityStatus,
    ConversationItem,
+   MemoryBatch,
+   MemoryMark,
    OutDocument,
    OutImage,
    ToolCall,
    UploadedDoc
 } from "../ingest/ingest.ts";
 import type { EmailRef } from "../ingest/email.ts";
+import { batchSummary, outsideText } from "../util/memory-text.ts";
 import { addCorners } from "../render/corners.ts";
 import {
    openDocViewer,
@@ -62,6 +65,7 @@ export interface ConversationController {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string, messageId?: number): void;
+   setMemoryMarks(marks: MemoryMark[]): void;
    showUser(text: string, messageId?: number, email?: EmailRef): void;
    addVisual(markup: string): void;
    noteMessageId(messageId: number): void;
@@ -93,7 +97,7 @@ export interface ConversationController {
       messageId: number;
       email?: EmailRef;
    }): void;
-   confirmTurn(text: string, ref?: string): void;
+   confirmTurn(text: string, ref?: string, messageId?: number): void;
    noteRefusal(text: string): void;
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
    releaseTurns(): void;
@@ -134,6 +138,8 @@ export interface ConversationOptions {
    onEmailRefBlocked?: () => void;
    /* A user turn's email chip was clicked: open that message in the Mail panel. */
    onOpenEmail?: (ref: EmailRef) => void;
+   /* A memory mark was clicked: show that batch (in the Memory panel). */
+   onOpenMemoryBatch?: (batch: MemoryBatch) => void;
    /* A second image message while the first is still unconfirmed: the draft is kept (only one
       image turn is held at a time, so a refusal always names exactly one). */
    onImageTurnBusy?: () => void;
@@ -320,15 +326,185 @@ export function mountConversation(
    const proseOf = (t: string): string => stripVisualsForStreaming(t).replace(/\s+/g, " ").trim();
    const visualCount = (t: string): number =>
       splitVisualSegments(t).filter((seg) => seg.kind === "visual").length;
+   /* --- Memory marks: what memory learned from this conversation (memory_batches), one quiet
+      chip per batch after the message it read up to: the newest message on screen with an id at
+      or below its after_message_id (ids grow within a conversation; DAWN's rule). A batch just
+      recorded may arrive before its reply has its id, so it waits a moment for it rather than
+      landing above the reply; one whose messages aren't on screen isn't drawn. A chip opens the
+      batch in the Memory panel. Not a turn, so it stays out of `messages`. */
+   let memoryMarks: MemoryMark[] = [];
+   let markEls = new Map<number, { batch: MemoryBatch; el: HTMLElement }>();
+   const markSince = new Map<number, number>(); // when a live mark first came (ms), for its wait
+   let markTimer = 0;
+   const MARK_WAIT_MS = 3000;
+   const MARK_RETRY_MS = 300;
+
+   const buildMark = (batch: MemoryBatch): HTMLElement => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "convo-memory";
+      el.dataset.batchId = String(batch.batchId);
+      el.dataset.status = batch.status;
+      const label = document.createElement("span");
+      label.className = "convo-memory-label";
+      label.textContent = "Memory";
+      const summary = document.createElement("span");
+      summary.className = "convo-memory-summary";
+      summary.textContent = batchSummary(batch);
+      el.append(label, summary);
+      const outside = outsideText(batch);
+      const state =
+         batch.status === "undone" ? "undone" : batch.status === "partial" ? "partly undone" : "";
+      if (outside) {
+         const o = document.createElement("span");
+         o.className = "convo-memory-outside";
+         o.textContent = outside;
+         el.append(o);
+      }
+      const open = opts.onOpenMemoryBatch;
+      el.setAttribute(
+         "aria-label",
+         `Memory: ${batchSummary(batch)}${state ? `, ${state}` : ""}${outside ? `. ${outside}` : ""}${open ? ". Open in the Memory panel" : ""}`
+      );
+      if (open) {
+         el.title = "Open in the Memory panel";
+         el.addEventListener("click", () => open(batch));
+      } else {
+         el.disabled = true;
+      }
+      return el;
+   };
+
+   /* The transcript's messages with ids, sorted by id (then position), and where the last message
+      without one is: built once per placement, so each mark's anchor is a lookup, not a scan. */
+   const indexRows = (): {
+      rows: Array<{ id: number; el: HTMLElement; pos: number }>;
+      lastIdless: number;
+   } => {
+      const rows: Array<{ id: number; el: HTMLElement; pos: number }> = [];
+      let lastIdless = -1;
+      let pos = 0;
+      for (const el of Array.from(scroll.children) as HTMLElement[]) {
+         if (el.classList.contains("convo-memory")) continue;
+         const raw = el.getAttribute("data-message-id");
+         if (raw !== null) {
+            const id = Number(raw);
+            if (Number.isFinite(id)) rows.push({ id, el, pos });
+         } else if (el.classList.contains("convo-msg")) {
+            lastIdless = pos;
+         }
+         pos++;
+      }
+      rows.sort((a, b) => a.id - b.id || a.pos - b.pos);
+      return { rows, lastIdless };
+   };
+
+   /* The newest message on screen at or below `after` (the later one of equal ids), and whether a
+      message after it has no id yet (a reply not adopted). */
+   const markAnchor = (
+      index: ReturnType<typeof indexRows>,
+      after: number
+   ): { anchor: HTMLElement | null; unadopted: boolean } => {
+      let lo = 0;
+      let hi = index.rows.length - 1;
+      let found = -1;
+      while (lo <= hi) {
+         const mid = (lo + hi) >> 1;
+         if (index.rows[mid].id <= after) {
+            found = mid;
+            lo = mid + 1;
+         } else {
+            hi = mid - 1;
+         }
+      }
+      if (found < 0) return { anchor: null, unadopted: false };
+      const row = index.rows[found];
+      return { anchor: row.el, unadopted: index.lastIdless > row.pos };
+   };
+
+   const placeMarks = (): void => {
+      window.clearTimeout(markTimer);
+      markTimer = 0;
+      const focused = [...markEls.entries()].find(([, m]) => m.el === document.activeElement)?.[0];
+      const index = indexRows();
+      const placed = new Map<number, { batch: MemoryBatch; el: HTMLElement }>();
+      const now = Date.now();
+      let waiting = false;
+      for (const { batch, live } of memoryMarks) {
+         if (!(batch.afterMessageId > 0)) continue; // DAWN placed it in the list only
+         const { anchor, unadopted } = markAnchor(index, batch.afterMessageId);
+         if (live) {
+            const since = markSince.get(batch.batchId) ?? now;
+            markSince.set(batch.batchId, since);
+            if ((!anchor || unadopted) && now - since < MARK_WAIT_MS) {
+               waiting = true;
+               continue;
+            }
+         }
+         /* No message of its own on screen: not drawn, unless nothing on screen has an id yet (a
+            fresh chat whose replies aren't adopted), where the end is where it happened. */
+         if (!anchor && (!live || index.rows.length > 0)) continue;
+         /* The same batch keeps its element; a changed one is drawn anew. */
+         const had = markEls.get(batch.batchId);
+         const mark = had && had.batch === batch ? had : { batch, el: buildMark(batch) };
+         if (had && had.el !== mark.el) had.el.remove();
+         if (anchor) {
+            /* After its message, and after the marks of earlier batches placed there. */
+            let at: Element = anchor;
+            while (
+               at.nextElementSibling?.classList.contains("convo-memory") &&
+               placed.has(Number((at.nextElementSibling as HTMLElement).dataset.batchId))
+            ) {
+               at = at.nextElementSibling;
+            }
+            if (at.nextElementSibling !== mark.el) at.after(mark.el);
+         } else if (scroll.lastElementChild !== mark.el) {
+            scroll.appendChild(mark.el); // waited long enough with nothing to follow: the end
+         }
+         placed.set(batch.batchId, mark);
+      }
+      for (const [id, m] of markEls) if (placed.get(id)?.el !== m.el) m.el.remove();
+      markEls = placed;
+      if (focused !== undefined) {
+         const el = markEls.get(focused)?.el;
+         if (el && document.activeElement !== el) el.focus();
+      }
+      if (waiting) markTimer = window.setTimeout(placeMarks, MARK_RETRY_MS);
+   };
+
+   /* Soon (a burst of ids stamped together places once), ahead of any waiting retry. */
+   const scheduleMarks = (): void => {
+      window.clearTimeout(markTimer);
+      markTimer = window.setTimeout(placeMarks, 0);
+   };
+
+   const setMemoryMarks = (marks: MemoryMark[]): void => {
+      memoryMarks = marks;
+      const ids = new Set(marks.map((m) => m.batch.batchId));
+      for (const id of [...markSince.keys()]) if (!ids.has(id)) markSince.delete(id);
+      placeMarks();
+   };
+
+   /* The transcript is being replaced: its marks go with it (the ingest sends the next set). */
+   const dropMarks = (): void => {
+      window.clearTimeout(markTimer);
+      markTimer = 0;
+      memoryMarks = [];
+      markEls = new Map();
+      markSince.clear();
+   };
+
    /* Stamp a DB id onto a bubble (dedup set + DOM attribute). Ignores non-positive ids. */
    const stampId = (msg: Msg, id: number): void => {
       if (!(id > 0) || msg.id === id) return;
       msg.id = id;
       msg.el.setAttribute("data-message-id", String(id));
       renderedIds.add(id);
+      if (memoryMarks.length > 0) scheduleMarks(); // a mark may have been waiting for this id
    };
    /* Drop all correlation state when the transcript is replaced (load / clear). */
    const resetCorrelation = (): void => {
+      dropMarks(); // the marks belong to the transcript being replaced
       renderedIds.clear();
       adoptMap.clear();
       adoptOrder.length = 0;
@@ -1765,6 +1941,7 @@ export function mountConversation(
       appendDelta,
       endReply,
       showReply,
+      setMemoryMarks,
       showUser,
       addVisual,
       showError,
@@ -1777,12 +1954,15 @@ export function mountConversation(
       linkStream,
       adoptId,
       renderAppended,
-      confirmTurn: (text: string, ref?: string) => {
+      confirmTurn: (text: string, ref?: string, messageId?: number) => {
          const t =
             ref !== undefined
                ? held.find((x) => x.ref === ref)
                : held.find((x) => x.sentText.trim() === text.trim());
-         if (t) releaseTurn(t);
+         if (!t) return;
+         /* The bubble drawn on send now has its saved row's id (a memory mark can follow it). */
+         if (messageId !== undefined && messageId > 0) stampId(t.msg, messageId);
+         releaseTurn(t);
       },
       releaseTurns: releaseAllTurns,
       noteRefusal,
@@ -1861,6 +2041,7 @@ export function mountConversation(
       noteMessageId,
       hasMessage,
       destroy: () => {
+         window.clearTimeout(markTimer);
          window.clearTimeout(shortTimer);
          window.clearTimeout(longTimer);
          if (raf) cancelAnimationFrame(raf);

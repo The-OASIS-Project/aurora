@@ -77,7 +77,7 @@ export interface ConversationSink {
    setThinking(thinking: boolean): void;
    /* A sent turn was accepted (DAWN echoed it): release what the composer held for it. Matched by
       the turn reference when DAWN echoes one (turn_refs), else by the echoed text. */
-   confirmTurn(text: string, ref?: string): void;
+   confirmTurn(text: string, ref?: string, messageId?: number): void;
    /* A sent turn was refused before it ran: "image" = the (single) held image turn (an IMAGE_*
       refusal, no turn refs), "newest" = the latest held turn (a refusal on receipt), `{ ref }` = the
       turn DAWN named (turn_refs). Its bubble
@@ -97,6 +97,9 @@ export interface ConversationSink {
    appendDelta(delta: string): void;
    endReply(): void;
    showReply(text: string, messageId?: number): void;
+   /* What memory learned from the conversation on screen (memory_batches), each after the message
+      its batch read up to: the whole set each time. Dropped with the transcript (load, clear). */
+   setMemoryMarks(marks: MemoryMark[]): void;
    /* A user turn this view didn't draw itself: a voice transcript, or another viewer's typed turn
       (possibly with the email it asked about). This view's own typed turns are drawn on submit. */
    showUser(text: string, messageId?: number, email?: EmailRef): void;
@@ -783,6 +786,13 @@ export interface MemoryBatch {
    outsideFrom: string | null;
    counts: Record<string, number>;
    ops: MemoryBatchOp[];
+}
+
+/* A batch drawn in the conversation on screen, after the message it read up to. `live`: just
+   recorded (pushed), so the reply it follows may not have its message id yet. */
+export interface MemoryMark {
+   batch: MemoryBatch;
+   live: boolean;
 }
 
 /* One page of the Learned list (list_memory_batches, newest first). */

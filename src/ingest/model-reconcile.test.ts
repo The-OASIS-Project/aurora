@@ -783,6 +783,27 @@ describe("with request_refs, model requests are settled by the request they name
       expect(c.ing.resumingStored).toBe(true); // the resume's own reply still decides
    });
 
+   it("a reconnect's replay refused by name goes back and restores the one on screen", () => {
+      const c = refs();
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped
+      c.frame("session", { authenticated: true, reconnected: false }); // replays 9, tagged
+      const replay = c.sent.filter((m) => m.type === "load_conversation").at(-1);
+      c.sent.length = 0;
+      c.frame("error", {
+         code: "SERVICE_UNAVAILABLE",
+         severity: "error",
+         req: replay?.payload?.req
+      });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 7
+      });
+      expect(c.ing.reanchoring).toBe(true);
+   });
+
    it("a reply settles the request it names, not the oldest", () => {
       const c = refs();
       c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
@@ -796,5 +817,64 @@ describe("with request_refs, model requests are settled by the request they name
       });
       expect(c.ing.llmWritesOwed.map((e: { req: string }) => e.req)).toEqual(["llm-1"]);
       expect(c.ing.llm.model).toBe("claude-haiku-5-5");
+   });
+});
+
+describe("a reconnect while an opened conversation hasn't loaded", () => {
+   it("loads it in full instead of re-anchoring to it under another transcript", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7); // A's transcript is on screen
+      c.ing.convId = 7;
+      c.ing.loadConversation(9); // B opened; the link drops before its reply
+      c.sent.length = 0;
+      c.frame("session", { authenticated: true, reconnected: true });
+      const types = c.sent.map((m) => m.type);
+      expect(types).toContain("load_conversation");
+      expect(types).not.toContain("set_active_conversation");
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 9
+      });
+   });
+
+   it("refused, the replay goes back to the conversation on screen and restores its context", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped: a new socket owes nothing of the old one's
+      c.frame("session", { authenticated: true, reconnected: false }); // a fresh session
+      c.sent.length = 0;
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 7
+      });
+      expect(c.ing.reanchoring).toBe(true); // rebuilt server-side, not redrawn
+   });
+
+   it("an open made while the replay is unanswered also restores, if both are refused", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped
+      c.frame("session", { authenticated: true, reconnected: false }); // replays 9
+      c.ing.loadConversation(11); // opened before the replay is answered
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      c.sent.length = 0;
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 7
+      }); // its context rebuilt, as the fresh session holds none
+   });
+
+   it("re-anchors lightly when the conversation on screen is the active one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.sent.length = 0;
+      c.frame("session", { authenticated: true, reconnected: true });
+      expect(c.sent.map((m) => m.type)).not.toContain("load_conversation");
    });
 });

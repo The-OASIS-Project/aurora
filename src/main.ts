@@ -785,6 +785,8 @@ const conversation = mountConversation(stage, {
    /* A chat bubble's email chip opens that message in the Mail panel (it shows + expands the panel;
       a message since moved reads "moved or deleted" there). */
    onOpenEmail: (ref) => emailPanel.openMessage(ref.accountId, ref.messageId),
+   /* A memory mark in the conversation: that batch, open in the Memory panel. */
+   onOpenMemoryBatch: (batch) => memoryPanel.focusBatch(batch),
    /* One image message in flight at a time (so a refusal can only mean that one): hold the next. */
    onImageTurnBusy: () =>
       dawn.notifyUser("Your last image message is still sending - try again in a moment."),

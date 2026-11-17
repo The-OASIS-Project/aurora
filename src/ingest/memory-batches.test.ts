@@ -9,7 +9,7 @@ import { DawnIngest } from "./dawn-ws.ts";
 type Sent = { type: string; payload?: Record<string, unknown> };
 const clients: Array<Record<string, any>> = [];
 
-function client(features: string[] = ["memory_batches"]) {
+function client(features: string[] = ["memory_batches"], conversation?: object) {
    const calls: Array<[string, unknown]> = [];
    const memoryBatches = new Proxy(
       {},
@@ -23,12 +23,14 @@ function client(features: string[] = ["memory_batches"]) {
          get: (_t, name) =>
             name === "memoryBatches"
                ? memoryBatches
-               : name === "notifications"
-                 ? {
-                      notify: (n: { summary: string }) => notices.push(n.summary),
-                      remove: () => undefined
-                   }
-                 : sink
+               : name === "conversation" && conversation
+                 ? conversation
+                 : name === "notifications"
+                   ? {
+                        notify: (n: { summary: string }) => notices.push(n.summary),
+                        remove: () => undefined
+                     }
+                   : sink
       }
    );
    const ing = new DawnIngest() as unknown as Record<string, any>;
@@ -259,6 +261,47 @@ describe("the Learned list over the wire", () => {
       expect(c.ing.memoryReqs.size).toBe(0);
       expect(c.ing.pendingFactForgets.size).toBe(0);
       vi.unstubAllGlobals();
+   });
+
+   it("a conversation's own batches are read for its marks, and drawn there", () => {
+      const marks: unknown[] = [];
+      const c = client(["memory_batches"], { setMemoryMarks: (m: unknown) => marks.push(m) });
+      c.ing.marks.show(7);
+      expect(c.sent.at(-1)).toEqual({
+         type: "list_memory_batches",
+         payload: { conversation_id: 7, limit: 20 }
+      });
+      c.frame("list_memory_batches_response", {
+         conversation_id: 7,
+         before_batch_id: null,
+         batches: [{ batch_id: 5, conversation_id: 7, after_message_id: 9, ops: [] }],
+         has_more: false
+      });
+      c.frame("memory_batch", { batch_id: 6, conversation_id: 7, after_message_id: 12, ops: [] });
+      const last = marks.at(-1) as Array<{ batch: { batchId: number }; live: boolean }>;
+      expect(last.map((m) => [m.batch.batchId, m.live])).toEqual([
+         [5, false],
+         [6, true]
+      ]);
+      /* The Learned list sees neither as its page; it does get the push. */
+      expect(c.calls.map(([name]) => name)).toEqual(["upsertBatch"]);
+   });
+
+   it("a typed turn's echo, confirmed, doesn't hide a later turn of the same words", () => {
+      const ids = new Set<number>();
+      const shown: number[] = [];
+      const c = client(["memory_batches", "turn_refs"], {
+         hasMessage: (id: number) => ids.has(id),
+         noteMessageId: (id: number) => ids.add(id),
+         confirmTurn: (_t: string, _r: string, id: number) => ids.add(id), // stamps the bubble
+         showUser: (_t: string, id: number) => shown.push(id),
+         setMemoryMarks: () => {}
+      });
+      c.ing.typedEchoes.push({ text: "lights on", at: performance.now(), ref: "1" });
+      c.frame("transcript", { role: "user", text: "lights on", message_id: 14, client_ref: "1" });
+      /* A spoken turn with the same words a moment later (another viewer's, or the voice path). */
+      c.frame("transcript", { role: "user", text: "lights on", message_id: 20 });
+      expect(shown).toEqual([20]);
    });
 
    it("without request_refs nothing is tagged", () => {

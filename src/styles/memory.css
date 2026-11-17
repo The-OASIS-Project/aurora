@@ -370,3 +370,22 @@
       background: color-mix(in srgb, var(--accent) 12%, transparent);
    }
 }
+
+/* The batch a conversation's mark asked for: lit for a moment, then it settles. */
+.memory-batch.memory-batch-lit {
+   animation: memory-batch-lit 4s ease;
+}
+@keyframes memory-batch-lit {
+   0%,
+   60% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent);
+   }
+   100% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+   }
+}
+@media (prefers-reduced-motion: reduce) {
+   .memory-batch.memory-batch-lit {
+      animation: none;
+   }
+}

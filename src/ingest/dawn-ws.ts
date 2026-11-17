@@ -101,6 +101,7 @@ import {
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
 import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
+import { MemoryMarks } from "./memory-marks.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 
@@ -226,7 +227,8 @@ type MemoryReq =
    | { kind: "list"; id: number; before: number | null }
    | { kind: "undo"; batchId: number; opId: number | null }
    | { kind: "keep"; batchId: number; opId: number }
-   | { kind: "forget"; factId: number };
+   | { kind: "forget"; factId: number }
+   | { kind: "marks"; id: number; conversationId: number };
 
 /* A Learned-list page (DAWN allows up to 50). */
 const MEMORY_BATCH_PAGE = 20;
@@ -1279,6 +1281,9 @@ export class DawnIngest implements Ingest {
       req?: string;
       /* Why it was sent, so a refused one can be sent again the same way (see loadRetry). */
       purpose?: LoadPurpose;
+      /* Refused, going back must also restore that conversation's server context (a reconnect's
+         replay of an interrupted open; see loadRestores). */
+      restore?: boolean;
    }> = [];
    /* With request_refs (DAWN #116) each get_config, set_session_llm and load_conversation carries
       a `req` (the flags arrive with the config frame, so a connection's first requests don't):
@@ -1294,6 +1299,10 @@ export class DawnIngest implements Ingest {
    /* A resume, re-anchor or reload DAWN refused while it couldn't check the login: sent again,
       the same way, once DAWN answers a ping. */
    private loadRetry: { id: number; purpose: LoadPurpose } | null = null;
+   /* The load being sent replays an open a link loss interrupted: refused, it returns to the
+      conversation on screen AND restores that one's server context (the new session may not hold
+      it). Set by the session handler, taken by send. */
+   private loadRestores = false;
    /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
       by send). */
    private loadBack: number | undefined;
@@ -1304,6 +1313,14 @@ export class DawnIngest implements Ingest {
       answer, and settles it as failed. */
    private memoryReqs = new Map<string, MemoryReq>();
    private memoryReqSeq = 0;
+   /* The conversation whose transcript is drawn (0: a fresh chat). The active id can run ahead of
+      it (an open still loading); a reconnect then must load it in full, not just re-anchor. */
+   private drawnConvId = 0;
+   /* What memory learned from the conversation on screen, drawn as marks in it. */
+   private marks = new MemoryMarks(
+      (conversationId, before) => this.listConversationBatches(conversationId, before),
+      (m) => this.sinks.conversation.setMemoryMarks(m)
+   );
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
@@ -1694,6 +1711,7 @@ export class DawnIngest implements Ingest {
          this.pendingFactForgets.clear();
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
+         this.marks.linkDown();
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -1829,6 +1847,7 @@ export class DawnIngest implements Ingest {
          this.pendingFactForgets.clear(); // their replies can't come now
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
+         this.marks.linkDown();
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -2310,12 +2329,23 @@ export class DawnIngest implements Ingest {
                FALSE - it restores the server context AND re-renders the transcript (loadHistory)
                so the display catches up to the latest turns, not stuck on a stale view. */
             if (this.convId > 0) {
-               if (this.reclaiming) {
+               /* A conversation opened but not yet drawn when the link dropped (the active id ran
+                  ahead of the transcript) loads in full too: a re-anchor would point the session
+                  at it while another conversation stays on screen. */
+               if (this.reclaiming || this.convId !== this.drawnConvId) {
+                  /* Refused (the conversation gone meanwhile), the replay of an interrupted open
+                     goes back to the one on screen, as the open itself would have. */
+                  if (!this.reclaiming && this.convId !== this.drawnConvId) {
+                     this.loadBack = this.drawnConvId;
+                     this.loadRestores = true;
+                  }
                   this.reclaiming = false;
                   this.send({
                      type: "load_conversation",
                      payload: { conversation_id: this.convId }
                   });
+                  this.loadBack = undefined;
+                  this.loadRestores = false;
                } else {
                   this.reanchoring = true;
                   if ((p as { reconnected?: boolean }).reconnected === false) {
@@ -2358,7 +2388,10 @@ export class DawnIngest implements Ingest {
             /* The Learned list exists only on a DAWN that records batches; on each connect what
                changed while away comes from a fresh first page. */
             this.sinks.memoryBatches.setAvailable(this.hasFeature("memory_batches"));
-            if (this.hasFeature("memory_batches")) this.sinks.memoryBatches.linkUp();
+            if (this.hasFeature("memory_batches")) {
+               this.sinks.memoryBatches.linkUp();
+               this.marks.refresh();
+            }
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -2740,12 +2773,14 @@ export class DawnIngest implements Ingest {
             if ((p as { success?: boolean }).success === false) {
                this.settleTurnOnSwitch();
                this.convId = 0;
+               this.showConversation(0);
                localStorage.removeItem(CONV_KEY);
                this.sinks.conversationList.setActive(0);
                break;
             }
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
             this.convId = cid;
+            this.showConversation(cid);
             localStorage.setItem(CONV_KEY, String(cid));
             this.sinks.conversationList.setActive(cid);
             this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
@@ -2807,9 +2842,16 @@ export class DawnIngest implements Ingest {
 
          case "list_memory_batches_response": {
             const asked = this.memoryReplied(p);
-            /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
-               the conversation markers, which this client doesn't draw yet. */
-            if (p.conversation_id != null) break;
+            /* The per-conversation form (conversation_id echoed) is the marks'; the other is the
+               Learned list's page. */
+            if (p.conversation_id != null) {
+               this.marks.page({
+                  conversationId: rowId(p.conversation_id) ?? 0,
+                  ...parseMemoryBatchPage(p),
+                  ...(asked?.kind === "marks" ? { request: asked.id } : {})
+               });
+               break;
+            }
             const page = parseMemoryBatchPage(p);
             if (asked?.kind === "list") page.request = asked.id;
             this.sinks.memoryBatches.setPage(page);
@@ -2821,10 +2863,14 @@ export class DawnIngest implements Ingest {
             const removedId = p.removed === true ? rowId(p.batch_id) : null;
             if (removedId !== null) {
                this.sinks.memoryBatches.removeBatch(removedId);
+               this.marks.remove(removedId);
                break;
             }
             const batch = parseMemoryBatch(p);
-            if (batch) this.sinks.memoryBatches.upsertBatch(batch);
+            if (batch) {
+               this.sinks.memoryBatches.upsertBatch(batch);
+               this.marks.push(batch);
+            }
             break;
          }
 
@@ -2977,6 +3023,7 @@ export class DawnIngest implements Ingest {
             if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
                this.settleTurnOnSwitch(); // its live turn (if any) is now foreign; don't strand the visuals
                this.convId = 0;
+               this.showConversation(0);
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.sinks.conversation.clear();
                this.sinks.context.clear();
@@ -3054,6 +3101,7 @@ export class DawnIngest implements Ingest {
                ends, rather than gating it as foreign and stranding the reactor mid-reply. */
             if (this.convId > 0) this.resetTurnConv = this.convId;
             this.convId = 0;
+            this.showConversation(0);
             this.setActiveTitle(""); // fresh chat -> HUD shows "New conversation"
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
@@ -3099,6 +3147,7 @@ export class DawnIngest implements Ingest {
             );
             this.pendingNewConvTitle = "";
             this.convId = Number(np.conversation_id ?? 0);
+            this.showConversation(this.convId);
             if (this.convId <= 0 && !serverInitiated) this.settlePrivateCreate(false);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
@@ -4124,24 +4173,20 @@ export class DawnIngest implements Ingest {
                appended the typed bubble locally (recorded in typedEchoes), so dedupe that
                and display only what has no local counterpart - i.e. spoken input. */
             if (p.role === "user" && typeof p.text === "string") {
-               /* Confirm our held turn: by its ref when DAWN echoes one (turn_refs), else the oldest held
-                  turn with this text. */
-               if (p.replay !== true) {
-                  const ref =
-                     typeof (p as { client_ref?: unknown }).client_ref === "string"
-                        ? (p as { client_ref: string }).client_ref
-                        : undefined;
-                  if (ref !== undefined || !this.hasFeature("turn_refs"))
-                     this.sinks.conversation.confirmTurn(p.text, ref);
-               }
-               this.handleIncomingUser(
-                  p.text.trim(),
-                  Number((p as { message_id?: number }).message_id ?? 0),
-                  p.replay === true,
+               const ref =
                   typeof (p as { client_ref?: unknown }).client_ref === "string"
                      ? (p as { client_ref: string }).client_ref
-                     : undefined
-               );
+                     : undefined;
+               const messageId = Number((p as { message_id?: number }).message_id ?? 0);
+               /* First the echo bookkeeping (it consumes our typed echo while the id is still new),
+                  then the held turn's confirm, which gives its bubble the id: the other way round,
+                  the id would already be known and the echo left behind, hiding a later turn of the
+                  same words. */
+               this.handleIncomingUser(p.text.trim(), messageId, p.replay === true, ref);
+               /* Confirm our held turn: by its ref when DAWN echoes one (turn_refs), else the oldest
+                  held turn with this text. */
+               if (p.replay !== true && (ref !== undefined || !this.hasFeature("turn_refs")))
+                  this.sinks.conversation.confirmTurn(p.text, ref, messageId);
                break;
             }
             /* A visual the render_visual tool just drew (DAWN sends the tool's whole result live; the
@@ -4327,6 +4372,7 @@ export class DawnIngest implements Ingest {
          for the panel. Sent after clear_session, so no conversation is active to stamp it on. */
       this.send({ type: "set_session_llm", payload: { type: "reset" } });
       this.convId = 0;
+      this.showConversation(0);
       localStorage.removeItem(CONV_KEY); // fresh chat: nothing to resume until a message opens one
       /* Finalize any in-flight streamed bubble before wiping (both the menu New Chat and the
          picker "+ New" arrive here). */
@@ -4439,6 +4485,9 @@ export class DawnIngest implements Ingest {
          .reverse()
          .find((l) => l.back !== undefined && l.id === this.convId);
       const back = waiting ? waiting.back : this.convId;
+      /* And whether going back must restore that conversation's server context (a reconnect's
+         replay still unanswered). */
+      if (waiting?.restore) this.loadRestores = true;
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       /* Opening another conversation ends a switch to local still waiting for the model list:
@@ -4449,6 +4498,7 @@ export class DawnIngest implements Ingest {
       if (id !== back) this.loadBack = back;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
       this.loadBack = undefined;
+      this.loadRestores = false;
    }
 
    newConversation(opts: { private?: boolean } = {}): Promise<boolean> {
@@ -4523,6 +4573,29 @@ export class DawnIngest implements Ingest {
       return sent ? id : 0;
    }
 
+   /* The transcript on screen is now this conversation's: its memory marks follow it. */
+   private showConversation(id: number): void {
+      this.drawnConvId = id;
+      this.marks.show(id);
+   }
+
+   /* A page of one conversation's batches, for the marks drawn in it (memory-marks.ts). */
+   private listConversationBatches(conversationId: number, before: number | null): number {
+      if (!this.hasFeature("memory_batches") || conversationId <= 0) return 0;
+      const payload: Record<string, number> = {
+         conversation_id: conversationId,
+         limit: MEMORY_BATCH_PAGE
+      };
+      if (before !== null && before > 0) payload.before_batch_id = before;
+      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
+      const sent = this.sendMemory("list_memory_batches", payload, {
+         kind: "marks",
+         id,
+         conversationId
+      });
+      return sent ? id : 0;
+   }
+
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
       if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
       const payload: Record<string, number> = { batch_id: batchId };
@@ -4593,6 +4666,10 @@ export class DawnIngest implements Ingest {
          typeof p.message === "string" && p.message
             ? p.message
             : "DAWN couldn't do this right now. Try again in a moment.";
+      if (pending.kind === "marks") {
+         this.marks.failed(pending.id);
+         return true;
+      }
       if (pending.kind === "list") {
          this.sinks.memoryBatches.setPage({
             before: pending.before,
@@ -5659,7 +5736,7 @@ export class DawnIngest implements Ingest {
    /* load_conversation_response: the conversation opened (or why it couldn't). */
    private onConversationLoaded(
       p: Record<string, unknown>,
-      load?: { id: number; back?: number }
+      load?: { id: number; back?: number; restore?: boolean }
    ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
@@ -5670,6 +5747,7 @@ export class DawnIngest implements Ingest {
             this.resumingStored = false;
             this.settleTurnOnSwitch();
             this.convId = 0;
+            this.showConversation(0);
             localStorage.removeItem(CONV_KEY);
             this.sinks.conversationList.setActive(0);
             return;
@@ -5681,6 +5759,7 @@ export class DawnIngest implements Ingest {
             this.reanchoring = false;
             this.settleTurnOnSwitch();
             this.convId = 0;
+            this.showConversation(0);
             localStorage.removeItem(CONV_KEY);
             this.sinks.conversationList.setActive(0);
             return;
@@ -5688,20 +5767,22 @@ export class DawnIngest implements Ingest {
          /* One the user opened (a picker row, a batch's title) whose conversation is gone: back to
             the one still open, which DAWN's session never left, unless something else has moved
             the view since. Turns must not go to a conversation that doesn't exist. */
-         if (load?.back !== undefined && this.convId === load.id) {
-            this.convId = load.back;
-            this.sinks.conversationList.setActive(load.back);
-         }
-         this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-            hold: 4
-         });
+         if (load) this.returnFromOpen(load);
+         else
+            this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+               hold: 4
+            });
          return;
       }
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
       this.loadRetry = null; // a conversation is loaded: a refused one waiting to resend is moot
       /* It's on screen now: the way back for any opened load still unanswered (the same one
          opened twice, say, the second refused). */
-      for (const l of this.convLoadsOwed) if (l.back !== undefined) l.back = cid;
+      for (const l of this.convLoadsOwed) {
+         if (l.back === undefined) continue;
+         l.back = cid;
+         l.restore = undefined; // its context is DAWN's now: nothing to restore going back to it
+      }
       if (this.reanchoring) {
          /* Reconnect re-anchor: DAWN's per-connection active conversation is now
             restored, so the next turn (typed or voice) is tagged correctly. Do NOT
@@ -5709,6 +5790,7 @@ export class DawnIngest implements Ingest {
             it needlessly. Reconcile the cheap server-authoritative bits only. */
          this.reanchoring = false;
          this.convId = cid;
+         this.showConversation(cid);
          localStorage.setItem(CONV_KEY, String(cid));
          this.sinks.conversationList.setActive(cid);
          this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
@@ -5787,6 +5869,7 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.loadHistory(items);
       for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
       this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+      this.showConversation(cid); // after loadHistory drew the transcript the marks go in
       this.resumingStored = false; // a successful load ends any in-flight resume
       localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
       this.sinks.conversationList.setActive(cid);
@@ -5822,6 +5905,29 @@ export class DawnIngest implements Ingest {
       return at < 0 ? undefined : owed.splice(at, 1)[0];
    }
 
+   /* An open that didn't happen (failed, or refused): back to the conversation on screen, which
+      DAWN's session never left, unless the view has moved on since. A reconnect's replay also
+      rebuilds that conversation's server context (a fresh session holds none), without redrawing
+      it; or goes to a fresh chat when none was on screen. */
+   private returnFromOpen(load: { id: number; back?: number; restore?: boolean }): void {
+      if (load.back !== undefined && this.convId === load.id) {
+         this.convId = load.back;
+         this.sinks.conversationList.setActive(load.back);
+         if (load.restore) {
+            if (load.back > 0) {
+               this.reanchoring = true;
+               this.send({ type: "load_conversation", payload: { conversation_id: load.back } });
+            } else {
+               this.showConversation(0);
+               localStorage.removeItem(CONV_KEY);
+            }
+         }
+      }
+      this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+         hold: 4
+      });
+   }
+
    /* An error naming a model request (request_refs): DAWN refused it and no reply will come.
       A refused open goes the way a failed one does (back to the conversation on screen); a
       refused model change leaves the panel showing a choice that never happened, so DAWN's
@@ -5837,13 +5943,7 @@ export class DawnIngest implements Ingest {
             /* One the user opened: back to the conversation on screen, as a failed open does, but
                settled from its own entry: the shared resume / re-anchor flags may belong to another
                load still on its way, whose own reply must keep them. */
-            if (entry.back !== undefined && this.convId === entry.id) {
-               this.convId = entry.back;
-               this.sinks.conversationList.setActive(entry.back);
-            }
-            this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-               hold: 4
-            });
+            this.returnFromOpen(entry);
          } else {
             /* A resume, re-anchor or reclaim refused while DAWN couldn't check the login: the
                conversation isn't gone, so it stays the one to resume (a failed load would drop
@@ -6705,7 +6805,13 @@ export class DawnIngest implements Ingest {
                  : this.reanchoring
                    ? "reanchor"
                    : "reload";
-         this.convLoadsOwed.push({ id, back: this.loadBack, req, purpose });
+         this.convLoadsOwed.push({
+            id,
+            back: this.loadBack,
+            req,
+            purpose,
+            restore: this.loadRestores || undefined
+         });
       }
       this.ws.send(JSON.stringify(msg));
       return true;

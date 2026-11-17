@@ -1037,3 +1037,65 @@
    color: var(--text-faint);
    border: 1px dashed color-mix(in srgb, var(--text) 20%, transparent);
 }
+
+/* What memory learned from the conversation: one quiet chip after the message a batch read up
+   to (src/conversation, memory marks). Calmer than the tool pills: no fill, a faint ring, the
+   accent only on intent. Opens the batch in the Memory panel. */
+.convo-memory {
+   display: inline-flex;
+   align-items: baseline;
+   flex-wrap: wrap;
+   gap: 0.2rem 0.45rem;
+   align-self: flex-start;
+   margin: 0.05rem 0 0.25rem 0.8rem;
+   padding: 0.08rem 0.55rem;
+   font: inherit;
+   font-size: var(--fs-label);
+   line-height: 1.4;
+   text-align: left;
+   color: var(--text-faint);
+   background: none;
+   border: none;
+   border-radius: 999px;
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+   cursor: pointer;
+   transition:
+      color 140ms ease,
+      box-shadow 140ms ease;
+}
+.convo-memory-label {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.12em;
+   text-transform: uppercase;
+   color: color-mix(in srgb, var(--accent) 70%, var(--text-faint));
+}
+.convo-memory-outside {
+   color: color-mix(in srgb, var(--cool) 70%, var(--text-faint));
+}
+.convo-memory:hover:not(:disabled),
+.convo-memory:focus-visible {
+   color: var(--text-dim);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.convo-memory:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}
+.convo-memory:disabled {
+   cursor: default;
+}
+/* Several after one message read as one quiet stack, not spaced like turns (the scroll's 1rem
+   gap less a little). Margins don't collapse in the flex column, so a negative top pulls it up. */
+.convo-memory + .convo-memory {
+   margin-top: -0.7rem;
+}
+/* And it hugs the message it follows. */
+.convo-msg + .convo-memory {
+   margin-top: -0.5rem;
+}
+/* Undone: it steps back further. */
+.convo-memory[data-status="undone"] .convo-memory-summary {
+   text-decoration: line-through;
+   text-decoration-color: color-mix(in srgb, var(--text-faint) 60%, transparent);
+}
