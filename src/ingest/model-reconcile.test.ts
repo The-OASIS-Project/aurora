@@ -548,3 +548,43 @@ describe("switching to local mode", () => {
       expect(c.llmWrites().some((m) => m.payload?.model === "llama3")).toBe(false);
    });
 });
+
+describe("opening a conversation that's gone", () => {
+   it("goes back to the one still open, so turns don't go to a deleted conversation", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.convId = 7;
+      c.ing.loadConversation(9); // a picker row or a batch's title, deleted meanwhile
+      expect(c.ing.convId).toBe(9);
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+   });
+
+   it("two refused in a row go back to the one on screen, not the first refused", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.loadConversation(11); // both deleted meanwhile
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+   });
+
+   it("opened twice, the first opens and the second is refused: it stays on that one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.loadConversation(9); // a double-click
+      c.frame("load_conversation_response", { success: true, conversation_id: 9, messages: [] });
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(9);
+   });
+
+   it("leaves a view that moved on since alone", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.loadConversation(11); // opened another before the first was refused
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(11);
+   });
+});

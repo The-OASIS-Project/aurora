@@ -36,7 +36,7 @@ ingest  ->  state  ->  choreography  ->  render
 - **ingest** (`src/ingest/`) is the single boundary to DAWN. An `Ingest` implementation
   feeds a set of sinks: the four that drive the seam below (store, reactor, conversation,
   HUD telemetry) plus the self-owned interactive views it feeds directly (music, calendar, watches,
-  stocks, Home Assistant, library, context, notifications, conversation list, and the memory-forget
+  stocks, Home Assistant, library, context, notifications, conversation list, memory batches, and the memory-forget
   offer). `DawnIngest` is the real WebSocket client. `StubIngest` (fake data) was its
   stand-in, but no longer matches what `main.ts` needs; it is being replaced by a fake DAWN
   the real client talks to (`tests/fake-dawn/`, see docs/FAKE_DAWN_PLAN.md).
@@ -164,8 +164,9 @@ src/
                      display + the composer's attach/upload (attachments.ts), and the
                      ordered/expandable tool-use pills (live tool_step + reload rehydration)
   conversation-picker/  the top-band history panel
-  memory/            the "forget what a conversation taught" confirms (the post-private
-                     offer sink + the picker's per-row Forget)
+  memory/            the movable Memory panel (what memory learned per batch: undo / keep /
+                     forget, memory_batches; default-off) + the "forget what a conversation
+                     taught" confirms (the post-private offer sink + the picker's per-row Forget)
   context/           the movable "why did it say that" panel (context_injection + gold)
   library/           the movable notes + documents viewer
   notify/            the self-owned movable notification cards + importance model

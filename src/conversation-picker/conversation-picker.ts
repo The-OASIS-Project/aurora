@@ -371,7 +371,11 @@ export function mountConversationPicker(
       const input = document.createElement("input");
       input.type = "text";
       input.className = "cpick-rename-input";
-      input.value = c.title || ""; // property assignment, not markup - safe
+      /* The title as it was when the edit began: a rename that lands meanwhile (another client,
+         an auto-title) patches c.title under the open input, and clicking away unchanged must
+         not send the old title back over it. */
+      const original = c.title || "";
+      input.value = original; // property assignment, not markup - safe
       titleEl.replaceWith(input);
       input.focus();
       input.select();
@@ -379,7 +383,7 @@ export function mountConversationPicker(
          if (editingId !== c.id) return;
          editingId = 0;
          const next = input.value.trim();
-         if (next && next !== c.title) {
+         if (next && next !== original) {
             patchLocal(c.id, (x) => (x.title = next));
             opts.onRename(c.id, next);
          }
@@ -528,7 +532,9 @@ export function mountConversationPicker(
             c.title = newTitle;
             found = true;
          });
-         if (found) render(); // unknown id (auto-title before a refetch) -> tolerated no-op
+         /* Unknown id (an auto-title before a refetch): a tolerated no-op. While a rename input
+            is live, the redraw waits for its commit / cancel (it would drop the keystrokes). */
+         if (found && editingId === 0) render();
       },
       markAppended: (id) => {
          if (id === activeId) return; // the active view reloads via the ingest, not a badge

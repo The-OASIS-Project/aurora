@@ -100,6 +100,7 @@ import {
 } from "../model/model.ts";
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
+import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 
@@ -216,6 +217,16 @@ function providerLabel(p: LlmProvider): string {
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
+/* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
+type MemoryReq =
+   | { kind: "list"; id: number; before: number | null }
+   | { kind: "undo"; batchId: number; opId: number | null }
+   | { kind: "keep"; batchId: number; opId: number }
+   | { kind: "forget"; factId: number };
+
+/* A Learned-list page (DAWN allows up to 50). */
+const MEMORY_BATCH_PAGE = 20;
+
 /* Context-panel memory delete: item_id prefix -> the user-scoped delete verb + its id field
    (verified in dawn/src/webui/webui_memory.c + memory_focus_adapters.c). Only these prefixes
    have an id-based delete; relation/document_chunk/calendar_occ and preferences do not. Paired
@@ -1254,9 +1265,21 @@ export class DawnIngest implements Ingest {
       revision is still current: a later write, a conversation load, DAWN's tool switching the
       model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
    private llmWritesOwed: number[] = [];
-   /* load_conversation requests still waiting for their reply: each sets the session's LLM to
-      that conversation's settings when DAWN handles it. */
-   private convLoadsOwed = 0;
+   /* load_conversation requests still waiting for their reply, oldest first (DAWN answers in
+      order): each sets the session's LLM to that conversation's settings when DAWN handles it.
+      One the user opened records the conversation that was open before (`back`): a refused load
+      (the conversation deleted meanwhile) returns to it, as DAWN's session never left it. */
+   private convLoadsOwed: Array<{ id: number; back?: number }> = [];
+   /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
+      by send). */
+   private loadBack: number | undefined;
+   /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
+   private pendingFactForgets = new Set<number>();
+   /* The Learned list's requests still owed a reply, by the `req` they carry (request_refs): an
+      error naming one (SERVICE_UNAVAILABLE when DAWN can't check the login, say) is its only
+      answer, and settles it as failed. */
+   private memoryReqs = new Map<string, MemoryReq>();
+   private memoryReqSeq = 0;
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
@@ -1638,8 +1661,14 @@ export class DawnIngest implements Ingest {
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
-         this.convLoadsOwed = 0; // nor an older load
+         this.convLoadsOwed = []; // nor an older load
          this.loadedSyncDeferred = false;
+         /* Nor the Learned list's requests on an older socket. Its close normally said so, but a
+            socket that opened before the old one's close arrived (a fast reconnect, a reclaim)
+            skips that cleanup (the stale-socket guard), so say it here too. */
+         this.pendingFactForgets.clear();
+         this.memoryReqs.clear();
+         this.sinks.memoryBatches.linkDown();
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -1772,6 +1801,9 @@ export class DawnIngest implements Ingest {
          this.alarmChime.stopLoop();
          this.ringingAlarms.clear();
          this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
+         this.pendingFactForgets.clear(); // their replies can't come now
+         this.memoryReqs.clear();
+         this.sinks.memoryBatches.linkDown();
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -2279,6 +2311,10 @@ export class DawnIngest implements Ingest {
                break;
             }
             this.email.setServerSupport(this.hasFeature("email_client"));
+            /* The Learned list exists only on a DAWN that records batches; on each connect what
+               changed while away comes from a fresh first page. */
+            this.sinks.memoryBatches.setAvailable(this.hasFeature("memory_batches"));
+            if (this.hasFeature("memory_batches")) this.sinks.memoryBatches.linkUp();
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -2630,8 +2666,7 @@ export class DawnIngest implements Ingest {
          }
 
          case "load_conversation_response":
-            if (this.convLoadsOwed > 0) this.convLoadsOwed--;
-            this.onConversationLoaded(p);
+            this.onConversationLoaded(p, this.convLoadsOwed.shift());
             /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
                it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
             this.syncLoadedLocalModel();
@@ -2664,11 +2699,12 @@ export class DawnIngest implements Ingest {
          }
 
          case "rename_conversation_response":
-            /* No conversation_id echo, and no conversation_renamed push on a manual
-               rename: the panel already patched optimistically. Reconcile on failure by
+            /* No conversation_id echo: the panel already patched optimistically. An older DAWN
+               sends no conversation_renamed for it (DAWN #120 does, before or after this reply,
+               carrying the stored title, so the order doesn't matter). Reconcile on failure by
                refetching the server's truth; on success a debounced refresh closes the window
                where a list refetch already in flight (from a concurrent remote change) would
-               otherwise land after and revert the optimistic patch (a rename emits no frame). */
+               otherwise land after and revert the optimistic patch. */
             if ((p as { success?: boolean }).success === false) this.requestConversations();
             else this.scheduleListRefresh();
             break;
@@ -2685,6 +2721,13 @@ export class DawnIngest implements Ingest {
          case "delete_memory_fact_response":
          case "delete_memory_entity_response":
          case "delete_memory_summary_response": {
+            /* A Forget from the Learned list (the reply names its fact): the panel's own. */
+            const forgotId = type === "delete_memory_fact_response" ? rowId(p.fact_id) : null;
+            if (forgotId !== null && this.pendingFactForgets.delete(forgotId)) {
+               this.memoryReplied(p, (r) => r.kind === "forget" && r.factId === forgotId);
+               this.onMemoryForgotten(forgotId, p);
+               break;
+            }
             /* The Context panel confirm-gated + optimistically removed the row. On success
                there is nothing to do; a genuine failure surfaces a notice. "Not found" means
                it was already gone (a re-click, or deleted elsewhere), so treat it as success -
@@ -2706,6 +2749,37 @@ export class DawnIngest implements Ingest {
             }
             break;
          }
+
+         case "list_memory_batches_response": {
+            const asked = this.memoryReplied(p);
+            /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
+               the conversation markers, which this client doesn't draw yet. */
+            if (p.conversation_id != null) break;
+            const page = parseMemoryBatchPage(p);
+            if (asked?.kind === "list") page.request = asked.id;
+            this.sinks.memoryBatches.setPage(page);
+            break;
+         }
+
+         case "memory_batch": {
+            /* Recorded, changed by an undo / keep / forgotten fact, or removed by a forget. */
+            const removedId = p.removed === true ? rowId(p.batch_id) : null;
+            if (removedId !== null) {
+               this.sinks.memoryBatches.removeBatch(removedId);
+               break;
+            }
+            const batch = parseMemoryBatch(p);
+            if (batch) this.sinks.memoryBatches.upsertBatch(batch);
+            break;
+         }
+
+         case "undo_memory_batch_response":
+            this.onMemoryUndone(p);
+            break;
+
+         case "keep_memory_op_response":
+            this.onMemoryKept(p);
+            break;
 
          case "set_private_response": {
             /* The conversation's privacy is persisted; a private flip also privated its
@@ -2862,13 +2936,15 @@ export class DawnIngest implements Ingest {
          }
 
          case "conversation_renamed": {
-            /* Server auto-title (NOT a manual rename): live-patch the row title. */
+            /* A title changed: DAWN's own auto-title, and (DAWN #120) any rename, from any client,
+               this one's included. Live-patch the row title. */
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             const t =
                typeof (p as { title?: string }).title === "string"
                   ? (p as { title: string }).title
                   : "";
             if (cid) this.sinks.conversationList.markRenamed(cid, t);
+            if (cid) this.sinks.memoryBatches.renameConversation(cid, t);
             if (cid === this.convId) this.setActiveTitle(t); // keep the HUD readout current
             break;
          }
@@ -3026,6 +3102,15 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
+            /* A Learned-list request DAWN refused (it names it by `req`): settled here, never a
+               reactor error. */
+            if (this.settleMemoryRefusal(p)) {
+               /* What the code means for the whole connection still applies. */
+               if (code === "UNKNOWN_TYPE") this.onUnknownType(str(p.request_type), str(p.req));
+               if (code === "UNAUTHORIZED")
+                  void this.onUnauthorized(typeof p.message === "string" ? p.message : undefined);
+               break;
+            }
             /* This DAWN doesn't handle a message type we sent (an older daemon, or a subsystem
                like Home Assistant or the calendar not built in). Never a visible error: fail the
                matching request fast, stop sending that type on this connection, and note it. It
@@ -4293,6 +4378,12 @@ export class DawnIngest implements Ingest {
          this.settlePrivateCreate(false);
          this.discardNextCreate = true; // its new_conversation_response must not steal the view
       }
+      /* The way back is the conversation actually on screen: opened while another opened one is
+         still unanswered (and still the active id), it's that one's way back. */
+      const waiting = [...this.convLoadsOwed]
+         .reverse()
+         .find((l) => l.back !== undefined && l.id === this.convId);
+      const back = waiting ? waiting.back : this.convId;
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       /* Opening another conversation ends a switch to local still waiting for the model list:
@@ -4300,7 +4391,9 @@ export class DawnIngest implements Ingest {
          own settings are coming, so older config snapshots no longer describe the selection. */
       this.localPickPending = false;
       this.llmRev++;
+      if (id !== back) this.loadBack = back;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
+      this.loadBack = undefined;
    }
 
    newConversation(opts: { private?: boolean } = {}): Promise<boolean> {
@@ -4338,6 +4431,9 @@ export class DawnIngest implements Ingest {
    renameConversation(id: number, title: string): void {
       if (id > 0 && title.trim()) {
          this.send({ type: "rename_conversation", payload: { conversation_id: id, title } });
+         /* The Learned list follows renames from conversation_renamed alone: only a DAWN that
+            titles its batches (#120) shows one, and that DAWN sends the frame for every rename
+            (a refused one sends none, so nothing wrong is shown). */
       }
    }
 
@@ -4353,6 +4449,199 @@ export class DawnIngest implements Ingest {
    setPinned(id: number, pinned: boolean): void {
       if (id > 0)
          this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
+   }
+
+   /* --- The Learned list (memory_batches). The writes come only from the panel's buttons (Undo
+      all and Forget behind their named confirms there). Undo and Keep run on a DAWN worker and
+      answer when it ends; DAWN pushes the changed batch first, so the list redraws from that
+      and the reply only says how it went. */
+   listMemoryBatches(before?: number): number {
+      if (!this.hasFeature("memory_batches")) return 0;
+      const payload: Record<string, number> = { limit: MEMORY_BATCH_PAGE };
+      if (before !== undefined && before > 0) payload.before_batch_id = before;
+      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
+      const sent = this.sendMemory("list_memory_batches", payload, {
+         kind: "list",
+         id,
+         before: payload.before_batch_id ?? null
+      });
+      return sent ? id : 0;
+   }
+
+   undoMemoryBatch(batchId: number, opId: number | null): boolean {
+      if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
+      const payload: Record<string, number> = { batch_id: batchId };
+      if (opId !== null && opId > 0) payload.op_id = opId;
+      return this.sendMemory("undo_memory_batch", payload, {
+         kind: "undo",
+         batchId,
+         opId: payload.op_id ?? null
+      });
+   }
+
+   keepMemoryOp(batchId: number, opId: number): boolean {
+      if (!this.hasFeature("memory_batches") || batchId <= 0 || opId <= 0) return false;
+      return this.sendMemory(
+         "keep_memory_op",
+         { batch_id: batchId, op_id: opId },
+         { kind: "keep", batchId, opId }
+      );
+   }
+
+   /* The forget DAWN suggested (an op's action "forget"): the ordinary delete_memory_fact, which
+      records the forget and pushes the batch without that row. */
+   forgetMemoryFact(factId: number): boolean {
+      if (!this.hasFeature("memory_batches") || factId <= 0) return false;
+      if (!this.sendMemory("delete_memory_fact", { fact_id: factId }, { kind: "forget", factId }))
+         return false;
+      this.pendingFactForgets.add(factId);
+      return true;
+   }
+
+   /* A Learned-list request, tagged with a `req` when DAWN echoes it (request_refs). */
+   private sendMemory(type: string, payload: Record<string, number>, pending: MemoryReq): boolean {
+      const id = ++this.memoryReqSeq;
+      const req = this.hasFeature("request_refs") ? `mem-${id}` : "";
+      if (!this.send({ type, payload: req ? { ...payload, req } : payload })) return false;
+      if (req) this.memoryReqs.set(req, pending);
+      return true;
+   }
+
+   /* A reply settles its request: the one it names (request_refs), else, for a reply DAWN's
+      worker sends (Undo, Keep and Forget, which don't echo `req`), the oldest one it matches. */
+   private memoryReplied(
+      p: Record<string, unknown>,
+      matches?: (pending: MemoryReq) => boolean
+   ): MemoryReq | undefined {
+      const named = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
+      if (named) {
+         this.memoryReqs.delete(p.req as string);
+         return named;
+      }
+      if (!matches) return undefined;
+      for (const [req, pending] of this.memoryReqs) {
+         if (!matches(pending)) continue;
+         this.memoryReqs.delete(req);
+         return pending;
+      }
+      return undefined;
+   }
+
+   /* An error naming a Learned-list request (request_refs): DAWN refused it, and no reply will
+      come. Settle it as failed, so the list stops loading and the buttons come back; nothing is
+      sent again (the user retries). Whether it was one. */
+   private settleMemoryRefusal(p: Record<string, unknown>): boolean {
+      const pending = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
+      if (!pending || p.severity === "info") return false;
+      this.memoryReqs.delete(p.req as string);
+      const message =
+         typeof p.message === "string" && p.message
+            ? p.message
+            : "DAWN couldn't do this right now. Try again in a moment.";
+      if (pending.kind === "list") {
+         this.sinks.memoryBatches.setPage({
+            before: pending.before,
+            batches: [],
+            nextBefore: null,
+            error: message,
+            request: pending.id
+         });
+         return true;
+      }
+      this.memoryNotice(message, true);
+      if (pending.kind === "forget") {
+         this.pendingFactForgets.delete(pending.factId);
+         this.sinks.memoryBatches.actionDone({ kind: "forget", factId: pending.factId, ok: false });
+      } else if (pending.kind === "keep") {
+         this.sinks.memoryBatches.actionDone({
+            kind: "keep",
+            batchId: pending.batchId,
+            opId: pending.opId,
+            ok: false,
+            factId: null
+         });
+      } else {
+         this.sinks.memoryBatches.actionDone({
+            kind: "undo",
+            batchId: pending.batchId,
+            opId: pending.opId,
+            ok: false
+         });
+      }
+      return true;
+   }
+
+   private onMemoryUndone(p: Record<string, unknown>): void {
+      /* One with no usable batch id still ends the undo that was running (the panel's slot). */
+      const batchId = rowId(p.batch_id) ?? 0;
+      const opId = rowId(p.op_id);
+      /* DAWN runs one per user at a time, so a reply without usable ids is the one running. */
+      this.memoryReplied(
+         p,
+         (r) => r.kind === "undo" && (batchId === 0 || (r.batchId === batchId && r.opId === opId))
+      );
+      const undone = Array.isArray(p.undone) ? p.undone.length : 0;
+      const stale = Array.isArray(p.stale) ? p.stale.length : 0;
+      const error = typeof p.error === "string" && p.error ? p.error : "";
+      /* Done: the pushed batch already shows it. Anything else is said once, calmly. */
+      if (p.status === "ok") {
+         if (undone === 0) this.memoryNotice("Nothing left to undo", false);
+      } else if (p.status === "partial") {
+         const them =
+            stale === 1
+               ? "1 item changed since and stayed as it is"
+               : `${stale} items changed since and stayed as they are`;
+         this.memoryNotice(`Undid ${undone}; ${them}.`, false);
+      } else if (p.status === "stale") {
+         this.memoryNotice(error || "This memory changed since; nothing was undone.", false);
+      } else {
+         this.memoryNotice(error || "Couldn't undo this.", true);
+      }
+      this.sinks.memoryBatches.actionDone({
+         kind: "undo",
+         batchId,
+         opId,
+         ok: p.status === "ok"
+      });
+   }
+
+   private onMemoryKept(p: Record<string, unknown>): void {
+      /* One with no usable ids still ends the keep that was running (the panel's slot). */
+      const batchId = rowId(p.batch_id) ?? 0;
+      const opId = rowId(p.op_id) ?? 0;
+      this.memoryReplied(
+         p,
+         (r) =>
+            r.kind === "keep" &&
+            (batchId === 0 || opId === 0 || (r.batchId === batchId && r.opId === opId))
+      );
+      const ok = p.status === "ok" && batchId > 0 && opId > 0;
+      if (p.status !== "ok") {
+         const error = typeof p.error === "string" && p.error ? p.error : "";
+         this.memoryNotice(error || "Couldn't keep this.", true);
+      }
+      this.sinks.memoryBatches.actionDone({
+         kind: "keep",
+         batchId,
+         opId,
+         ok,
+         factId: ok ? rowId(p.fact_id) : null
+      });
+   }
+
+   private onMemoryForgotten(factId: number, p: Record<string, unknown>): void {
+      /* "Not found": already gone (forgotten elsewhere), which is what was asked. */
+      const error = typeof p.error === "string" ? p.error : "";
+      const ok = p.success !== false || /not found/i.test(error);
+      if (!ok) this.memoryNotice(error || "Couldn't forget that memory", true);
+      this.sinks.memoryBatches.actionDone({ kind: "forget", factId, ok });
+   }
+
+   private memoryNotice(text: string, failed: boolean): void {
+      this.spikeNotice("memory-batch", failed ? "attention" : "memory", text, {
+         hold: failed ? 6 : 5,
+         ...(failed ? { tone: "attention" as const } : {})
+      });
    }
 
    /* Forget what a conversation (and its continuations) taught memory. DESTRUCTIVE: reached
@@ -5313,7 +5602,10 @@ export class DawnIngest implements Ingest {
    }
 
    /* load_conversation_response: the conversation opened (or why it couldn't). */
-   private onConversationLoaded(p: Record<string, unknown>): void {
+   private onConversationLoaded(
+      p: Record<string, unknown>,
+      load?: { id: number; back?: number }
+   ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
       if ((p as { success?: boolean }).success === false) {
@@ -5338,12 +5630,22 @@ export class DawnIngest implements Ingest {
             this.sinks.conversationList.setActive(0);
             return;
          }
+         /* One the user opened (a picker row, a batch's title) whose conversation is gone: back to
+            the one still open, which DAWN's session never left, unless something else has moved
+            the view since. Turns must not go to a conversation that doesn't exist. */
+         if (load?.back !== undefined && this.convId === load.id) {
+            this.convId = load.back;
+            this.sinks.conversationList.setActive(load.back);
+         }
          this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
             hold: 4
          });
          return;
       }
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      /* It's on screen now: the way back for any opened load still unanswered (the same one
+         opened twice, say, the second refused). */
+      for (const l of this.convLoadsOwed) if (l.back !== undefined) l.back = cid;
       if (this.reanchoring) {
          /* Reconnect re-anchor: DAWN's per-connection active conversation is now
             restored, so the next turn (typed or voice) is tagged correctly. Do NOT
@@ -5708,7 +6010,7 @@ export class DawnIngest implements Ingest {
    private selectionSettled(): boolean {
       return (
          this.llmWritesOwed.length === 0 &&
-         this.convLoadsOwed === 0 &&
+         this.convLoadsOwed.length === 0 &&
          !this.configAsks.some((a) => !a.listsOnly)
       );
    }
@@ -6234,7 +6536,12 @@ export class DawnIngest implements Ingest {
       if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState !== WebSocket.OPEN) return false;
       if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
-      if (type === "load_conversation") this.convLoadsOwed++;
+      if (type === "load_conversation") {
+         const id = Number(
+            (msg as { payload?: { conversation_id?: unknown } }).payload?.conversation_id
+         );
+         this.convLoadsOwed.push({ id, back: this.loadBack });
+      }
       this.ws.send(JSON.stringify(msg));
       return true;
    }

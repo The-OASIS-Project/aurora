@@ -37,6 +37,7 @@ import "./styles/watchlist.css";
 import "./styles/library.css";
 import "./styles/docview.css";
 import "./styles/context.css";
+import "./styles/memory.css";
 import "./styles/notifications.css";
 import "./styles/dialog.css";
 import "./styles/conversations.css";
@@ -82,6 +83,7 @@ import type { EmailSource } from "./ingest/email.ts";
 import { mountWatchlistPanel } from "./watchlist/watchlist-panel.ts";
 import { mountLibraryPanel } from "./library/library-panel.ts";
 import { mountContextPanel } from "./context/context-panel.ts";
+import { mountMemoryPanel } from "./memory/memory-panel.ts";
 import { mountConversationPicker } from "./conversation-picker/conversation-picker.ts";
 import { mountForgetLearned } from "./memory/forget-memories.ts";
 import { Notifications } from "./notify/notifications.ts";
@@ -379,6 +381,17 @@ const contextPanel = mountContextPanel(stage, {
    onDeleteMemory: (itemId) => ingest.deleteMemory(itemId)
 });
 
+/* The Memory panel: what memory learned, a batch at a time, with undo / keep / forget on the
+   user's own memory (memory_batches). Offered only by a DAWN that records batches; defaults
+   hidden, summoned from the Panels menu. */
+const memoryPanel = mountMemoryPanel(stage, {
+   list: (before) => ingest.listMemoryBatches(before),
+   undo: (batchId, opId) => ingest.undoMemoryBatch(batchId, opId),
+   keep: (batchId, opId) => ingest.keepMemoryOp(batchId, opId),
+   forget: (factId) => ingest.forgetMemoryFact(factId),
+   open: (conversationId) => ingest.loadConversation(conversationId)
+});
+
 /* The conversation picker: fixed menu-band chrome (top band, between the clock and the
    center menu) that lists / searches / opens the user's conversations and does the
    sanctioned conversation writes (new, rename, pin, and confirm-gated delete). It reaches
@@ -528,6 +541,10 @@ const menu = mountMenu(stage, {
          { id: "watchlist", label: "Watchlist", enabled: watchlistPanel.isVisible() },
          { id: "library", label: "Library", enabled: libraryPanel.isVisible() },
          { id: "context", label: "Context", enabled: contextPanel.isVisible() },
+         /* Only on a DAWN that records what memory learned. */
+         ...(memoryPanel.isAvailable()
+            ? [{ id: "memory", label: "Memory", enabled: memoryPanel.isVisible() }]
+            : []),
          { id: "music", label: "Music", enabled: musicPlayer.isVisible() },
          { id: "clock", label: "Clock", enabled: hud.clock.isVisible() },
          { id: "telemetry", label: "Telemetry", enabled: hud.status.isVisible() }
@@ -549,6 +566,7 @@ const menu = mountMenu(stage, {
       else if (id === "watchlist") watchlistPanel.setVisible(!watchlistPanel.isVisible());
       else if (id === "library") libraryPanel.setVisible(!libraryPanel.isVisible());
       else if (id === "context") contextPanel.setVisible(!contextPanel.isVisible());
+      else if (id === "memory") memoryPanel.setVisible(!memoryPanel.isVisible());
       else if (id === "clock") hud.clock.setVisible(!hud.clock.isVisible());
       else if (id === "telemetry") hud.status.setVisible(!hud.status.isVisible());
       else store.toggleEnabled(id);
@@ -848,6 +866,7 @@ ingest.start({
          stocksPanel.setTimezone(tz); // the portfolio "as of" stamp too
          watchlistPanel.setTimezone(tz); // and the watchlist "as of" stamp
          contextPanel.setTimezone(tz); // and the Context panel's item dates
+         memoryPanel.setTimezone(tz); // and when each batch was learned
          emailPanel.setTimezone(tz); // and the Mail panel's dates
          libraryPanel.setTimezone(tz); // and the Library's item dates
       }
@@ -862,7 +881,8 @@ ingest.start({
    context: contextPanel,
    notifications,
    conversationList: conversationPicker,
-   memoryForget: forgetLearned
+   memoryForget: forgetLearned,
+   memoryBatches: memoryPanel
 });
 
 /* 5. Resize: the render layer and anchor own pixels, so they resize; nothing
@@ -962,6 +982,7 @@ function dispose(): void {
    watchlistPanel.destroy();
    libraryPanel.destroy();
    contextPanel.destroy();
+   memoryPanel.destroy();
    conversationPicker.destroy();
    notifications.dispose();
    standby.destroy(); // remove the global activity listeners + overlay (or HMR stacks them)

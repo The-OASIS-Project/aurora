@@ -605,6 +605,45 @@ describe("the fake's interactive requests", () => {
    const others = { except: "default" };
    afterEach(() => vi.useRealTimers());
 
+   it("memory batches: the Learned list reads them, and undo / keep / forget change them", () => {
+      const { send, to } = interactive();
+      const c = client();
+      const page = send("list_memory_batches", { limit: 20 });
+      c.frame(page[0]);
+      const [shown] = c.called("memoryBatches", "setPage")[0] as [{ batches: Array<any> }];
+      expect(shown.batches.map((b) => b.batchId)).toEqual([3, 2, 1]);
+      expect(shown.batches[0].ops.map((o: { action: string }) => o.action)).toEqual([
+         "undo",
+         "undo",
+         "undo",
+         "keep"
+      ]);
+      /* Each change: the batch to every tab first, then the reply to the asker. */
+      const undo = send("undo_memory_batch", { batch_id: 3, op_id: 9002 });
+      expect(undo.map((f) => f.type)).toEqual(["memory_batch", "undo_memory_batch_response"]);
+      expect(to(others).map((f) => f.type)).toEqual(["memory_batch"]);
+      expect(undo[0].payload.status).toBe("partial");
+      const keep = send("keep_memory_op", { batch_id: 3, op_id: 9004 });
+      expect(keep[1].payload).toMatchObject({ status: "ok", fact_id: expect.any(Number) });
+      expect(keep[0].payload.ops.at(-1)).toMatchObject({ op: "added", action: "undo" });
+      const forget = send("delete_memory_fact", { fact_id: 5011 });
+      expect(forget[1].payload).toMatchObject({ fact_id: 5011, success: true });
+      expect(forget[0].payload.ops).toEqual([expect.objectContaining({ fact_id: 5010 })]);
+      /* The client reads every frame the fake sent. */
+      for (const f of [...undo, ...keep]) c.frame(f);
+      expect(c.called("memoryBatches", "upsertBatch")).toHaveLength(2);
+      expect(c.called("memoryBatches", "actionDone").map(([r]) => r)).toEqual([
+         { kind: "undo", batchId: 3, opId: 9002, ok: true },
+         { kind: "keep", batchId: 3, opId: 9004, ok: true, factId: keep[1].payload.fact_id }
+      ]);
+      /* Paging: the cursor names where the next page starts. */
+      const first = send("list_memory_batches", { limit: 2 });
+      expect(first[0].payload).toMatchObject({ has_more: true, next_before_batch_id: 2 });
+      const rest = send("list_memory_batches", { limit: 2, before_batch_id: 2 });
+      expect(rest[0].payload.batches.map((b: { batch_id: number }) => b.batch_id)).toEqual([1]);
+      expect(rest[0].payload.has_more).toBe(false);
+   });
+
    it("a turn in a conversation: echoed at once, the reply streams, both rows saved", () => {
       vi.useFakeTimers();
       const { fake, pushed, send, to } = interactive();

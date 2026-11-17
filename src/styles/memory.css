@@ -1,0 +1,372 @@
+/*
+ * Memory panel: what memory learned, a batch at a time. The same machined, frosted card as the
+ * Context and Library panels. A batch rests at one quiet line and opens to its changes; tags stay
+ * calm (amber only for a change that couldn't be undone, the alert hue only on a Forget the user
+ * is about to press). Phosphor tokens only, no color literals.
+ */
+
+.memory {
+   position: absolute;
+   right: var(--movable-edge);
+   top: 120px;
+   z-index: 5;
+   width: var(--movable-width);
+   display: flex;
+   flex-direction: column;
+   gap: 0.7rem;
+   padding: 0.95rem 1.05rem 1.05rem;
+   background: color-mix(in srgb, var(--ground-raise) 34%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   backdrop-filter: blur(7px);
+}
+/* Hidden from the Panels menu, or not offered by this DAWN. */
+.memory.memory-off,
+.memory.memory-unavailable {
+   display: none;
+}
+.memory .panel-corner {
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* A new batch landed while open: a brief ring, nothing more. */
+.memory.memory-pulse {
+   animation: memory-pulse 800ms ease;
+}
+@keyframes memory-pulse {
+   0% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 85%, transparent);
+   }
+   100% {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+   }
+}
+
+/* Header doubles as the drag handle. */
+.memory-head {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.6rem;
+   cursor: var(--move-cursor, grab);
+}
+.memory.movable-dragging .memory-head {
+   cursor: var(--move-cursor, grabbing);
+}
+.memory-title {
+   font-size: var(--fs-data);
+   color: var(--text);
+   letter-spacing: 0.04em;
+   text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.memory-sub {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.06em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+/* Spoken, never seen. */
+.memory-live {
+   position: absolute;
+   width: 1px;
+   height: 1px;
+   overflow: hidden;
+   clip-path: inset(50%);
+   white-space: nowrap;
+}
+
+/* List. Sizing / hover-expand / grip come from the shared .lcard rules. */
+.memory-list {
+   display: flex;
+   flex-direction: column;
+   gap: 0.45rem;
+   outline: none;
+   scrollbar-width: thin;
+   scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.memory-list::-webkit-scrollbar {
+   display: block;
+   width: 8px;
+}
+.memory-list::-webkit-scrollbar-thumb {
+   background: color-mix(in srgb, var(--accent) 34%, transparent);
+   border-radius: 4px;
+}
+.memory-list.overflowing {
+   -webkit-mask-image: none;
+   mask-image: none;
+}
+.memory-note {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   line-height: 1.5;
+   color: var(--text-faint);
+   padding: 0.35rem 0;
+}
+
+/* One batch: a quiet line until opened. */
+.memory-batch {
+   display: flex;
+   flex-direction: column;
+   gap: 0.35rem;
+   padding: 0.4rem 0.5rem;
+   border-radius: 2px;
+   background: color-mix(in srgb, var(--accent) 4%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+   transition: background 160ms ease;
+}
+.memory-batch.open {
+   background: color-mix(in srgb, var(--accent) 7%, transparent);
+   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+/* An undone batch steps back. */
+.memory-batch[data-status="undone"] .memory-batch-summary {
+   color: var(--text-faint);
+}
+.memory-batch-head {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.6rem;
+   width: 100%;
+   padding: 0;
+   border: 0;
+   background: none;
+   color: inherit;
+   font: inherit;
+   text-align: left;
+   cursor: pointer;
+}
+.memory-batch-head:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}
+/* The conversation a batch came from: its name, which opens it. */
+.memory-batch-title-row {
+   display: flex;
+   align-items: baseline;
+   justify-content: space-between;
+   gap: 0.6rem;
+}
+.memory-batch-conv {
+   min-width: 0;
+   padding: 0;
+   border: 0;
+   background: none;
+   font: inherit;
+   font-size: var(--fs-data);
+   line-height: 1.35;
+   color: var(--text);
+   text-align: left;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+   cursor: pointer;
+}
+.memory-batch-conv:hover:not(:disabled) {
+   color: var(--accent-glow);
+   text-decoration: underline;
+   text-decoration-color: color-mix(in srgb, var(--accent) 50%, transparent);
+   text-underline-offset: 0.18em;
+}
+/* Offline: opening a conversation waits for the link. */
+.memory-batch-conv:disabled {
+   cursor: default;
+}
+.memory-batch-conv:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}
+.memory-batch[data-status="undone"] .memory-batch-conv {
+   color: var(--text-faint);
+}
+.memory-batch-summary {
+   font-size: var(--fs-data);
+   line-height: 1.35;
+   color: var(--text);
+}
+.memory-batch-head:hover .memory-batch-summary {
+   color: var(--accent-glow);
+}
+/* Under a title, the summary is the quieter second line. */
+.memory-batch-title-row + .memory-batch-head .memory-batch-summary {
+   font-size: var(--fs-label);
+   color: var(--text-dim);
+}
+.memory-batch-title-row + .memory-batch-head:hover .memory-batch-summary {
+   color: var(--accent-glow);
+}
+.memory-when {
+   flex: 0 0 auto;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+}
+.memory-batch-tags,
+.memory-op-meta {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: baseline;
+   gap: 0.35rem 0.5rem;
+}
+
+/* Small outlined tags: a state, or what outside text it read. */
+.memory-tag {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   text-transform: uppercase;
+   padding: 0.05rem 0.3rem;
+   border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+   border-radius: 2px;
+   color: var(--text-faint);
+}
+.memory-tag.tone-good {
+   color: var(--accent);
+   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.memory-tag.tone-warn {
+   color: var(--warn);
+   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.memory-tag.tone-outside {
+   color: var(--cool);
+   border-color: color-mix(in srgb, var(--cool) 45%, transparent);
+}
+
+/* The changes of an open batch. */
+.memory-ops {
+   display: flex;
+   flex-direction: column;
+   gap: 0.4rem;
+   padding-top: 0.35rem;
+   border-top: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* A change: its kind, its text, and its action on one line; what follows lines up under the text. */
+.memory-op {
+   display: grid;
+   grid-template-columns: auto minmax(0, 1fr) auto;
+   align-items: baseline;
+   gap: 0.2rem 0.5rem;
+   padding: 0.2rem 0.3rem;
+   border-radius: 2px;
+}
+.memory-op > .memory-action {
+   grid-column: 3;
+}
+.memory-op-meta,
+.memory-op-reason {
+   grid-column: 2 / -1;
+}
+/* What a Keep just stored: lit for a moment, then it settles. */
+.memory-op.memory-op-new {
+   animation: memory-op-new 4s ease;
+}
+@keyframes memory-op-new {
+   0%,
+   60% {
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      box-shadow: inset 3px 0 0 0 var(--accent);
+   }
+   100% {
+      background: transparent;
+      box-shadow: inset 3px 0 0 0 transparent;
+   }
+}
+.memory-op-label {
+   flex: 0 0 auto;
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.08em;
+   text-transform: uppercase;
+   color: var(--accent);
+}
+.memory-op-text {
+   grid-column: 2;
+   font-size: var(--fs-data);
+   line-height: 1.4;
+   color: var(--text-dim);
+   overflow-wrap: anywhere;
+}
+/* Undone, taken up, expired: no longer in effect. */
+.memory-op[data-status="undone"] .memory-op-text,
+.memory-op[data-status="consumed"] .memory-op-text,
+.memory-op[data-status="expired"] .memory-op-text {
+   color: var(--text-faint);
+   text-decoration: line-through;
+   text-decoration-color: color-mix(in srgb, var(--text-faint) 60%, transparent);
+}
+.memory-op-target {
+   font-size: var(--fs-label);
+   line-height: 1.4;
+   color: var(--text-faint);
+   overflow-wrap: anywhere;
+}
+.memory-op-reason {
+   font-size: var(--fs-label);
+   line-height: 1.45;
+   color: var(--text-faint);
+   overflow-wrap: anywhere;
+}
+.memory-op-reason-by {
+   font-family: var(--font-mono);
+   font-size: var(--fs-nano);
+   letter-spacing: 0.06em;
+   text-transform: uppercase;
+}
+
+/* Undo / Keep / Forget: quiet text buttons that brighten on intent. */
+.memory-action,
+.memory-more {
+   flex: 0 0 auto;
+   padding: 0.05rem 0.4rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.04em;
+   color: var(--text-faint);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+   border-radius: 2px;
+   cursor: pointer;
+   transition:
+      color 140ms ease,
+      border-color 140ms ease;
+}
+.memory-action:hover:not(:disabled),
+.memory-more:hover:not(:disabled) {
+   color: var(--accent-glow);
+   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.memory-action.action-forget:hover:not(:disabled) {
+   color: var(--alert-glow);
+   border-color: color-mix(in srgb, var(--alert) 55%, transparent);
+}
+.memory-action:focus-visible,
+.memory-more:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 1px;
+}
+.memory-action:disabled,
+.memory-more:disabled {
+   cursor: default;
+   opacity: 0.55;
+}
+.memory-batch-foot {
+   display: flex;
+   justify-content: flex-end;
+}
+.memory-more {
+   align-self: center;
+   margin-top: 0.2rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+   .memory.memory-pulse,
+   .memory-op.memory-op-new {
+      animation: none;
+   }
+   .memory-op.memory-op-new {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+   }
+}

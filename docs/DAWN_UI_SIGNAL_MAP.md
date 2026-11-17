@@ -1127,6 +1127,33 @@ BEHAVIOUR changes are now advertised.
   tagged (the shared cookie).
 - `server_features` (`{home_assistant}`: compiled-in subsystems) is a separate frame, unchanged.
 
+### 9.16 What memory learned per batch (the Memory panel) - consumed 2026-11-17
+
+DAWN's `memory_batches` (DAWN #100; `WEBSOCKET_PROTOCOL.md`, "Consolidation: what memory learned
+per batch"; batches exist only with `[memory] consolidator = "agent"`). The Memory panel
+(`src/memory/memory-panel.ts`, default-off, offered only with the flag) lists them newest first.
+
+- **Reads:** `list_memory_batches {before_batch_id?, limit}` (keyset pages; Aurora asks 20) only
+  while the panel is shown; a fresh first page on each connect. The per-conversation form
+  (`conversation_id`) is for conversation markers, not drawn yet.
+- **Push:** `memory_batch` replaces a batch by id; `{batch_id, removed:true}` drops it. A push
+  for what a page on its way will hold waits for that page; the rest apply at once. Hiding the
+  panel lets go of the list, and the shown list keeps at most what the pages brought.
+- **Writes, from a button only:** `undo_memory_batch` (one op, or the whole batch: "Undo all",
+  confirmed), `keep_memory_op`, and Forget = `delete_memory_fact` with the op's `fact_id`
+  (confirmed; its reply echoes `fact_id`, which routes it back to the panel). Each change shows
+  only the `action` DAWN marks on it. Undo and Keep share one per-user slot at DAWN, so one runs
+  at a time; their replies come when DAWN's worker ends, after the changed batch's push.
+- **Refusals:** with `request_refs` (DAWN #116) the four requests carry a `req`; an `error` naming
+  one (SERVICE_UNAVAILABLE when DAWN can't check the login, say) is its only answer and settles it
+  as failed (the list stops loading, the buttons come back; nothing is resent). Without the flag a
+  refused request waits for the next connect.
+- **`conversation_title`** (DAWN #120, no flag, presence-detected; <=255 bytes, `""` = untitled,
+  null = none): heads the batch and opens its conversation. `conversation_renamed` (since #120
+  also sent for every manual rename, possibly before `rename_conversation_response`) patches it.
+- Every string (memory text, the model's `reason`, titles) is bound via textContent; a `reason`
+  with `reason_by:"model"` reads "Model's reason:".
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
