@@ -107,7 +107,8 @@ export interface ConversationController {
    confirmTurn(text: string, ref?: string, messageId?: number): void;
    noteRefusal(text: string): void;
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
-   releaseTurns(): void;
+   /* `keep`: the ref of a turn still waiting at DAWN (turn_wait), whose draft survives a link loss. */
+   releaseTurns(keep?: string): void;
    /* Put an email the user chose ("Discuss") into the composer as a removable chip, and focus the
       input for their question. One at a time: a new one replaces the old. */
    addEmailRef(ref: EmailRef): void;
@@ -914,7 +915,9 @@ export function mountConversation(
          const detail = chip?.parentElement?.querySelector<HTMLElement>(".convo-tool-detail");
          if (detail) detail.hidden = !detail.hidden;
       });
-      scroll.appendChild(el);
+      /* While our message waits, the other turn's tools go above it, with its text. */
+      if (waitAnchor && messages.includes(waitAnchor)) scroll.insertBefore(el, waitAnchor.el);
+      else scroll.appendChild(el);
       toolGroup = { el, summary, list, pills: [], byId: new Map() };
       return toolGroup;
    };
@@ -1560,9 +1563,10 @@ export function mountConversation(
       for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
       held = held.filter((x) => x !== t);
    };
-   const releaseAllTurns = (): void => {
-      for (const t of held) for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
-      held = [];
+   const releaseAllTurns = (keep?: string): void => {
+      for (const t of held)
+         if (t.ref !== keep) for (const im of t.images) URL.revokeObjectURL(im.previewUrl);
+      held = keep === undefined ? [] : held.filter((t) => t.ref === keep);
       pendingVisuals = []; // a link loss or switch: a visual waiting for its reply won't get one now
    };
 

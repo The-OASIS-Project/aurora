@@ -1123,7 +1123,13 @@ export class DawnIngest implements Ingest {
          buffered tail included); updateMicMute combines it with DAWN's speaking state so the
          mic stays muted through the whole reply - sentence gaps and tail. No-op outside
          continuous mode, so PTT is unaffected. */
-      onActive: () => this.updateMicMute()
+      onActive: (on: boolean) => {
+         this.updateMicMute();
+         if (!on && this.speechTail) {
+            this.speechTail = false; // the reply's speech has played out
+            if (!this.ownTurn) this.sinks.conversation.setTurnActive(false);
+         }
+      }
    });
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
@@ -1382,6 +1388,11 @@ export class DawnIngest implements Ingest {
    /* This session's turn waiting for another on the same conversation (turn_wait), and that
       conversation: shown on the held bubble, with the offer to stop the other reply. */
    private turnWait: (TurnWait & { conversationId: number }) | null = null;
+   /* The same wait kept across a link loss: DAWN keeps the turn waiting but doesn't say so again
+      after a reconnect, so a reconnect to the same session shows it again (and its draft is kept). */
+   private keptWait: (TurnWait & { conversationId: number }) | null = null;
+   /* This session's speech still playing after its turn ended: Stop stops it here. */
+   private speechTail = false;
    private assistantName = "DAWN"; // config ai_name, for the forget-learned prompt's wording
    /* Busy re-asks of conversation_learned so far, per conversation, and their pending timers. */
    private readonly learnedRetries = new Map<number, number>();
@@ -1887,8 +1898,9 @@ export class DawnIngest implements Ingest {
          this.ownTurn = false;
          this.liveStreamId = 0;
          this.replyEnded = false;
+         this.speechTail = false;
          this.sinks.conversation.setTurnActive(false);
-         this.setTurnWait(null);
+         this.setTurnWait(null, true); // kept: DAWN still holds the turn
          this.pendingFactForgets.clear(); // their replies can't come now
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
@@ -2363,6 +2375,22 @@ export class DawnIngest implements Ingest {
                while a user who never touched keepalive emits nothing and doesn't spam the audit log. */
             if ((p as { reconnected?: boolean }).reconnected === false)
                this.keepaliveServerOn = false;
+            /* A turn that waited when the link went: still waiting in the same session (DAWN sends
+               its frames when it starts), gone with a fresh one (the reload shows what was saved). */
+            if (this.keptWait) {
+               const k = this.keptWait;
+               if (
+                  (p as { reconnected?: boolean }).reconnected === true &&
+                  k.conversationId === this.convId
+               ) {
+                  this.setTurnWait({ ...k, stopping: false });
+                  this.ownTurn = true;
+                  this.sinks.conversation.setTurnActive(true);
+               } else {
+                  this.keptWait = null;
+                  this.sinks.conversation.releaseTurns();
+               }
+            }
             if (this.keepaliveOn !== this.keepaliveServerOn) {
                this.send({
                   type: this.keepaliveOn ? "session_keepalive_enable" : "session_keepalive_disable"
@@ -2513,6 +2541,12 @@ export class DawnIngest implements Ingest {
                stopAfterMs: after,
                stopping: false
             });
+            /* DAWN says this session's turn waits: it is ours to stop, whatever state came before
+               (another app's reply may be speaking here). */
+            if (!this.stopped) {
+               this.ownTurn = true;
+               this.sinks.conversation.setTurnActive(true);
+            }
             break;
          }
 
@@ -4207,6 +4241,7 @@ export class DawnIngest implements Ingest {
             if (this.dropsStoppedReply()) break; // the stopped reply's late start
             this.liveStreamId = Number(p.stream_id ?? 0);
             this.replyEnded = false;
+            this.setTurnWait(null); // our turn runs (a grant lost to a link loss says no more)
             this.sinks.conversation.startReply();
             break;
 
@@ -4354,6 +4389,7 @@ export class DawnIngest implements Ingest {
                   held turn with this text. */
                if (p.replay !== true && (ref !== undefined || !this.hasFeature("turn_refs")))
                   this.sinks.conversation.confirmTurn(p.text, ref, messageId);
+               if (ref !== undefined && this.keptWait?.ref === ref) this.setTurnWait(null); // it started
                break;
             }
             /* A visual the render_visual tool just drew (DAWN sends the tool's whole result live; the
@@ -5398,6 +5434,13 @@ export class DawnIngest implements Ingest {
       untouched). A reply in progress stays on screen, marked stopped, and its speech stops at
       once; a turn still waiting for another comes back unsent (turn_unsent). */
    cancelTurn(): void {
+      /* Only the speech of a finished turn is left: stop it here (DAWN has nothing to cancel). */
+      if (this.speechTail && !this.ownTurn) {
+         this.speechTail = false;
+         this.tts.stop();
+         this.sinks.conversation.setTurnActive(false);
+         return;
+      }
       if (this.ws?.readyState !== WebSocket.OPEN || this.stopped) return;
       if (!this.ownTurn && !this.turnWait) return;
       this.send({ type: "cancel" });
@@ -5435,7 +5478,8 @@ export class DawnIngest implements Ingest {
       return this.stopped !== null && !this.stopped.afterReply;
    }
 
-   private setTurnWait(w: (TurnWait & { conversationId: number }) | null): void {
+   private setTurnWait(w: (TurnWait & { conversationId: number }) | null, keep = false): void {
+      if (!keep) this.keptWait = w;
       if (w === null && this.turnWait === null) return;
       this.turnWait = w;
       this.sinks.conversation.setTurnWait(
@@ -5467,12 +5511,15 @@ export class DawnIngest implements Ingest {
          }
          this.ownTurn = true;
       } else if (st === "idle" || st === "error") {
+         /* Its speech can still be playing here (DAWN runs ahead of what's heard). */
+         if (this.ownTurn && st === "idle" && this.tts.isSpeaking()) this.speechTail = true;
          this.ownTurn = false;
          this.replyEnded = false;
          this.liveStreamId = 0;
       }
       this.sinks.conversation.setTurnActive(
-         this.ownTurn && (st === "thinking" || st === "summarizing" || st === "speaking")
+         (this.ownTurn && (st === "thinking" || st === "summarizing" || st === "speaking")) ||
+            (this.speechTail && st === "idle")
       );
    }
 
@@ -7028,7 +7075,7 @@ export class DawnIngest implements Ingest {
       /* Link down: an unechoed turn's fate can't be learned now; stop holding drafts for them. Not on
          "stale" (one missed heartbeat): the socket is still open and refusals still arrive. */
       if (status !== "connected" && status !== "stale" && this.sinks)
-         this.sinks.conversation.releaseTurns();
+         this.sinks.conversation.releaseTurns(this.keptWait?.ref);
       if (status !== "connected") this.settlePrivateCreate(false); // a pending private create can't complete now
       this.status(status, detail);
    }

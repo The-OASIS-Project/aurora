@@ -64,6 +64,12 @@ function client(features: string[] = ["turn_wait"], convId = 7) {
    return { ing, sent, calls, notices, frame, named, active };
 }
 
+/* What the socket's close does for a waiting turn (dawn-ws.ts onclose, then the link status). */
+function linkDown(c: ReturnType<typeof client>): void {
+   c.ing.setTurnWait(null, true);
+   (DawnIngest.prototype as any).emit.call(c.ing, "disconnected");
+}
+
 beforeEach(() => {
    localStorage.clear();
    vi.spyOn(console, "debug").mockImplementation(() => {});
@@ -193,6 +199,27 @@ describe("Stop", () => {
       expect(c.named("addVisual")).toEqual([]);
    });
 
+   it("stays offered while the reply's speech still plays after DAWN's idle, and stops it here", () => {
+      const c = client();
+      let speaking = true;
+      c.ing.tts.isSpeaking = () => speaking;
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.frame("state", { state: "speaking", conversation_id: 7 });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.active()).toBe(true);
+      c.ing.cancelTurn();
+      expect(c.sent).toEqual([]); // nothing for DAWN to cancel
+      expect(c.ing.tts.stop).toHaveBeenCalled();
+      expect(c.active()).toBe(false);
+      /* Played out on its own instead: Stop goes. */
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.active()).toBe(true);
+      speaking = false;
+      c.ing.tts.onActive(false); // TtsPlayback's played-out callback
+      expect(c.active()).toBe(false);
+   });
+
    it("isn't offered to a tab that only hears another tab's reply", () => {
       const c = client();
       c.frame("state", { state: "speaking", conversation_id: 7 });
@@ -267,6 +294,53 @@ describe("turn_wait", () => {
          holder: "turn",
          stopAfterMs: 600_000
       });
+   });
+
+   it("a wait is this session's turn to stop, even while another app's reply speaks", () => {
+      const c = client();
+      c.frame("state", { state: "speaking", conversation_id: 7 }); // another app's reply
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "3",
+         waiting: true,
+         holder: "turn"
+      });
+      c.frame("state", { state: "thinking", conversation_id: 7, detail: "Finishing…" });
+      expect(c.active()).toBe(true);
+      c.ing.cancelTurn();
+      expect(c.sent.map((m) => m.type)).toEqual(["cancel"]);
+   });
+
+   it("keeps a waiting turn's draft across a link loss, and shows the wait again on the same session", () => {
+      const c = client();
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "3",
+         waiting: true,
+         holder: "turn"
+      });
+      linkDown(c);
+      expect(c.named("releaseTurns").at(-1)).toEqual(["3"]);
+      c.frame("session", { authenticated: true, token: "t", reconnected: true, session_id: 1 });
+      expect(c.named("setTurnWait").at(-1)?.[0]).toMatchObject({ ref: "3" });
+      expect(c.active()).toBe(true);
+      /* Its echo: it started. */
+      c.frame("transcript", { role: "user", text: "hi", client_ref: "3", conversation_id: 7 });
+      expect(c.named("setTurnWait").at(-1)).toEqual([null]);
+   });
+
+   it("drops the kept wait when the reconnect lands on a fresh session", () => {
+      const c = client();
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "3",
+         waiting: true,
+         holder: "turn"
+      });
+      linkDown(c);
+      c.frame("session", { authenticated: true, token: "t", reconnected: false, session_id: 2 });
+      expect(c.named("releaseTurns").at(-1)).toEqual([]);
+      expect(c.named("setTurnWait").at(-1)).toEqual([null]);
    });
 
    it("ignores a wait on a conversation that isn't on screen", () => {

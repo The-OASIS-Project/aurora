@@ -97,7 +97,7 @@ export interface ConversationSink {
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
    /* Stop holding every sent turn (the link dropped or the conversation changed: their fate can't
       be learned now). */
-   releaseTurns(): void;
+   releaseTurns(keep?: string): void; // keep: a turn still waiting at DAWN (turn_wait)
    /* A message wasn't sent: say why right above the composer, where the user is looking (a floating
       card would be dimmed by the very focus a restored draft puts on the input). */
    noteRefusal(text: string): void;
