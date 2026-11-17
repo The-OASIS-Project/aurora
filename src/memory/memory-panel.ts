@@ -41,7 +41,8 @@ export interface MemoryPanelController extends MemoryBatchesSink {
 
 export interface MemoryPanelOptions {
    /* Each returns false when nothing was sent (not connected). */
-   list(before?: number): boolean;
+   /* The request's id, or 0 when nothing was sent (not connected). */
+   list(before?: number): number;
    undo(batchId: number, opId: number | null): boolean;
    keep(batchId: number, opId: number): boolean;
    forget(factId: number): boolean;
@@ -199,7 +200,7 @@ export function mountMemoryPanel(
    /* Every page asked for on this connection, oldest first (DAWN answers in order). Each reply
       settles the oldest; one asked before the panel let go of its list (hidden meanwhile) is no
       longer wanted, and its reply changes nothing. */
-   let asked: Array<{ before: number | null; wanted: boolean }> = [];
+   let asked: Array<{ id: number; before: number | null; wanted: boolean }> = [];
    /* How many batches the pages brought: the list keeps at most that many (newest first), so new
       batches pushed over days push the oldest back behind "Show older" rather than piling up. */
    let paged = 0;
@@ -230,14 +231,15 @@ export function mountMemoryPanel(
    /* --- reading ----------------------------------------------------------- */
    const requestPage = (before?: number): void => {
       if (loading) return;
-      if (!opts.list(before)) {
+      const id = opts.list(before);
+      if (!id) {
          if (before === undefined && !loaded) status = "offline";
          else footNote = NOT_SENT;
          render();
          return;
       }
       loading = before === undefined ? "first" : "older";
-      asked.push({ before: before ?? null, wanted: true });
+      asked.push({ id, before: before ?? null, wanted: true });
       if (before === undefined) status = "idle";
       footNote = "";
       render();
@@ -675,11 +677,13 @@ export function mountMemoryPanel(
          ensureLoaded();
       },
       setPage(page: MemoryBatchPage) {
-         /* The oldest page asked for this cursor: this reply's (replies come in order, but a
-            refusal can come ahead of replies to earlier requests). One no longer wanted (or a
+         /* The request it answers: the one it names (request_refs), else the oldest page asked
+            for this cursor (replies come in order). One no longer wanted (or a
             reply nothing asked for) changes nothing, and leaves the page that is wanted still
             loading. */
-         const at = asked.findIndex((a) => a.before === page.before);
+         const at = asked.findIndex((a) =>
+            page.request !== undefined ? a.id === page.request : a.before === page.before
+         );
          if (at < 0) return;
          const [mine] = asked.splice(at, 1);
          if (!mine.wanted) return;

@@ -70,8 +70,9 @@ const batch = (
 
 function mounted(sent = true) {
    const calls: string[] = [];
+   let asked = 0; // each page request's id
    const panel = mountMemoryPanel(document.body, {
-      list: (before) => (calls.push(`list:${before ?? "first"}`), sent),
+      list: (before) => (calls.push(`list:${before ?? "first"}`), sent ? ++asked : 0),
       undo: (b, o) => (calls.push(`undo:${b}:${o ?? "all"}`), sent),
       keep: (b, o) => (calls.push(`keep:${b}:${o}`), sent),
       forget: (f) => (calls.push(`forget:${f}`), sent),
@@ -402,6 +403,25 @@ describe("the Learned list", () => {
       expect(el.textContent).toContain("Loading…"); // the stale older page changed nothing
       panel.setPage({ before: null, batches: [batch(31, [op(3)])], nextBefore: null, error: null });
       expect(el.querySelectorAll(".memory-batch")).toHaveLength(1);
+   });
+
+   it("a refusal of the newer first page isn't mistaken for the older one's reply", () => {
+      const { panel, el } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true); // request 1
+      panel.setVisible(false);
+      panel.setVisible(true); // request 2, the one wanted
+      /* DAWN refuses request 2 at once (errors aren't queued); request 1's page follows. */
+      panel.setPage({ before: null, batches: [], nextBefore: null, error: "Busy", request: 2 });
+      panel.setPage({
+         before: null,
+         batches: [batch(5, [op(1)])],
+         nextBefore: null,
+         error: null,
+         request: 1
+      });
+      expect(el.textContent).toContain("Busy");
+      expect(el.querySelectorAll(".memory-batch")).toHaveLength(0);
    });
 
    it("a push held for an older page is kept only within what that page brought", () => {

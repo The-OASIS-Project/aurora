@@ -219,7 +219,7 @@ const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (c
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
 /* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
 type MemoryReq =
-   | { kind: "list"; before: number | null }
+   | { kind: "list"; id: number; before: number | null }
    | { kind: "undo"; batchId: number; opId: number | null }
    | { kind: "keep"; batchId: number; opId: number }
    | { kind: "forget"; factId: number };
@@ -2711,10 +2711,10 @@ export class DawnIngest implements Ingest {
          case "delete_memory_fact_response":
          case "delete_memory_entity_response":
          case "delete_memory_summary_response": {
-            this.memoryReplied(p);
             /* A Forget from the Learned list (the reply names its fact): the panel's own. */
             const forgotId = type === "delete_memory_fact_response" ? rowId(p.fact_id) : null;
             if (forgotId !== null && this.pendingFactForgets.delete(forgotId)) {
+               this.memoryReplied(p, (r) => r.kind === "forget" && r.factId === forgotId);
                this.onMemoryForgotten(forgotId, p);
                break;
             }
@@ -2740,13 +2740,16 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "list_memory_batches_response":
-            this.memoryReplied(p);
+         case "list_memory_batches_response": {
+            const asked = this.memoryReplied(p);
             /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
                the conversation markers, which this client doesn't draw yet. */
             if (p.conversation_id != null) break;
-            this.sinks.memoryBatches.setPage(parseMemoryBatchPage(p));
+            const page = parseMemoryBatchPage(p);
+            if (asked?.kind === "list") page.request = asked.id;
+            this.sinks.memoryBatches.setPage(page);
             break;
+         }
 
          case "memory_batch": {
             /* Recorded, changed by an undo / keep / forgotten fact, or removed by a forget. */
@@ -2761,12 +2764,10 @@ export class DawnIngest implements Ingest {
          }
 
          case "undo_memory_batch_response":
-            this.memoryReplied(p);
             this.onMemoryUndone(p);
             break;
 
          case "keep_memory_op_response":
-            this.memoryReplied(p);
             this.onMemoryKept(p);
             break;
 
@@ -3094,7 +3095,10 @@ export class DawnIngest implements Ingest {
             /* A Learned-list request DAWN refused (it names it by `req`): settled here, never a
                reactor error. */
             if (this.settleMemoryRefusal(p)) {
+               /* What the code means for the whole connection still applies. */
                if (code === "UNKNOWN_TYPE") this.onUnknownType(str(p.request_type), str(p.req));
+               if (code === "UNAUTHORIZED")
+                  void this.onUnauthorized(typeof p.message === "string" ? p.message : undefined);
                break;
             }
             /* This DAWN doesn't handle a message type we sent (an older daemon, or a subsystem
@@ -4433,14 +4437,17 @@ export class DawnIngest implements Ingest {
       all and Forget behind their named confirms there). Undo and Keep run on a DAWN worker and
       answer when it ends; DAWN pushes the changed batch first, so the list redraws from that
       and the reply only says how it went. */
-   listMemoryBatches(before?: number): boolean {
-      if (!this.hasFeature("memory_batches")) return false;
+   listMemoryBatches(before?: number): number {
+      if (!this.hasFeature("memory_batches")) return 0;
       const payload: Record<string, number> = { limit: MEMORY_BATCH_PAGE };
       if (before !== undefined && before > 0) payload.before_batch_id = before;
-      return this.sendMemory("list_memory_batches", payload, {
+      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
+      const sent = this.sendMemory("list_memory_batches", payload, {
          kind: "list",
+         id,
          before: payload.before_batch_id ?? null
       });
+      return sent ? id : 0;
    }
 
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
@@ -4475,15 +4482,31 @@ export class DawnIngest implements Ingest {
 
    /* A Learned-list request, tagged with a `req` when DAWN echoes it (request_refs). */
    private sendMemory(type: string, payload: Record<string, number>, pending: MemoryReq): boolean {
-      const req = this.hasFeature("request_refs") ? `mem-${++this.memoryReqSeq}` : "";
+      const id = ++this.memoryReqSeq;
+      const req = this.hasFeature("request_refs") ? `mem-${id}` : "";
       if (!this.send({ type, payload: req ? { ...payload, req } : payload })) return false;
       if (req) this.memoryReqs.set(req, pending);
       return true;
    }
 
-   /* A reply settles its request. */
-   private memoryReplied(p: Record<string, unknown>): void {
-      if (typeof p.req === "string") this.memoryReqs.delete(p.req);
+   /* A reply settles its request: the one it names (request_refs), else, for a reply DAWN's
+      worker sends (Undo, Keep and Forget, which don't echo `req`), the oldest one it matches. */
+   private memoryReplied(
+      p: Record<string, unknown>,
+      matches?: (pending: MemoryReq) => boolean
+   ): MemoryReq | undefined {
+      const named = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
+      if (named) {
+         this.memoryReqs.delete(p.req as string);
+         return named;
+      }
+      if (!matches) return undefined;
+      for (const [req, pending] of this.memoryReqs) {
+         if (!matches(pending)) continue;
+         this.memoryReqs.delete(req);
+         return pending;
+      }
+      return undefined;
    }
 
    /* An error naming a Learned-list request (request_refs): DAWN refused it, and no reply will
@@ -4502,7 +4525,8 @@ export class DawnIngest implements Ingest {
             before: pending.before,
             batches: [],
             nextBefore: null,
-            error: message
+            error: message,
+            request: pending.id
          });
          return true;
       }
@@ -4533,6 +4557,11 @@ export class DawnIngest implements Ingest {
       /* One with no usable batch id still ends the undo that was running (the panel's slot). */
       const batchId = rowId(p.batch_id) ?? 0;
       const opId = rowId(p.op_id);
+      /* DAWN runs one per user at a time, so a reply without usable ids is the one running. */
+      this.memoryReplied(
+         p,
+         (r) => r.kind === "undo" && (batchId === 0 || (r.batchId === batchId && r.opId === opId))
+      );
       const undone = Array.isArray(p.undone) ? p.undone.length : 0;
       const stale = Array.isArray(p.stale) ? p.stale.length : 0;
       const error = typeof p.error === "string" && p.error ? p.error : "";
@@ -4562,6 +4591,12 @@ export class DawnIngest implements Ingest {
       /* One with no usable ids still ends the keep that was running (the panel's slot). */
       const batchId = rowId(p.batch_id) ?? 0;
       const opId = rowId(p.op_id) ?? 0;
+      this.memoryReplied(
+         p,
+         (r) =>
+            r.kind === "keep" &&
+            (batchId === 0 || opId === 0 || (r.batchId === batchId && r.opId === opId))
+      );
       const ok = p.status === "ok" && batchId > 0 && opId > 0;
       if (p.status !== "ok") {
          const error = typeof p.error === "string" && p.error ? p.error : "";

@@ -793,6 +793,9 @@ export interface MemoryBatchPage {
    /* Where the next page starts (null: no more). */
    nextBefore: number | null;
    error: string | null;
+   /* The request it answers (Ingest.listMemoryBatches' id), when DAWN names it (request_refs);
+      absent: replies come in the order asked. */
+   request?: number;
 }
 
 /* The end of an Undo, Keep or Forget (each runs on a DAWN worker and can take seconds). `ok`
@@ -1008,9 +1011,10 @@ export interface Ingest {
       `before` (absent: the newest). The writes are the user's own memory, each from a button:
       undo one op, or every op of a batch (opId null; the caller confirms that one); keep a
       candidate memory set aside; forget a fact memory suggested forgetting (DESTRUCTIVE: the
-      caller confirms it). Each answers through MemoryBatchesSink.actionDone. All return false
-      when nothing was sent (not connected, or this DAWN doesn't record batches). */
-   listMemoryBatches(before?: number): boolean;
+      caller confirms it). Each answers through MemoryBatchesSink.actionDone. The writes return
+      false, and the read 0, when nothing was sent (not connected, or this DAWN doesn't record
+      batches); the read returns the request's id otherwise (its page carries it back). */
+   listMemoryBatches(before?: number): number;
    undoMemoryBatch(batchId: number, opId: number | null): boolean;
    keepMemoryOp(batchId: number, opId: number): boolean;
    forgetMemoryFact(factId: number): boolean;

@@ -95,8 +95,8 @@ export class StubIngest implements Ingest {
    deleteMemory(_itemId: string): void {}
    forgetConversationMemories(_id: number): void {}
    /* No memory batches behind the stub (it never advertises memory_batches). */
-   listMemoryBatches(_before?: number): boolean {
-      return false;
+   listMemoryBatches(_before?: number): number {
+      return 0;
    }
    undoMemoryBatch(_batchId: number, _opId: number | null): boolean {
       return false;

@@ -59,7 +59,7 @@ afterEach(() => {
 describe("the Learned list over the wire", () => {
    it("sends nothing to a DAWN that doesn't record batches", () => {
       const c = client([]);
-      expect(c.ing.listMemoryBatches()).toBe(false);
+      expect(c.ing.listMemoryBatches()).toBe(0);
       expect(c.ing.undoMemoryBatch(4, null)).toBe(false);
       expect(c.ing.keepMemoryOp(4, 2)).toBe(false);
       expect(c.ing.forgetMemoryFact(9)).toBe(false);
@@ -173,7 +173,8 @@ describe("the Learned list over the wire", () => {
                before: null,
                batches: [],
                nextBefore: null,
-               error: "Couldn't check the login; try again"
+               error: "Couldn't check the login; try again",
+               request: 1
             }
          ],
          ["actionDone", { kind: "undo", batchId: 4, opId: 2, ok: false }],
@@ -190,6 +191,39 @@ describe("the Learned list over the wire", () => {
       });
       refuse("mem-4");
       expect(c.calls.filter(([name]) => name === "actionDone")).toHaveLength(3);
+   });
+
+   it("a worker's untagged reply settles the request it answers", () => {
+      const c = client(["memory_batches", "request_refs"]);
+      c.ing.undoMemoryBatch(4, 2);
+      /* DAWN's worker replies without the req: the undo is done all the same. */
+      c.frame("undo_memory_batch_response", { batch_id: 4, op_id: 2, status: "ok", undone: [2] });
+      expect(c.ing.memoryReqs.size).toBe(0);
+      c.ing.forgetMemoryFact(9);
+      c.frame("delete_memory_fact_response", { fact_id: 9, success: true });
+      expect(c.ing.memoryReqs.size).toBe(0);
+   });
+
+   it("a refused request that says the login ended also signs out", () => {
+      const c = client(["memory_batches", "request_refs"]);
+      const signOut = vi.fn(async () => {});
+      c.ing.onUnauthorized = signOut;
+      c.ing.listMemoryBatches();
+      c.frame("error", {
+         code: "UNAUTHORIZED",
+         message: "Session expired",
+         severity: "error",
+         req: "mem-1"
+      });
+      expect(c.calls.map(([name]) => name)).toEqual(["setPage"]);
+      expect(signOut).toHaveBeenCalledWith("Session expired");
+   });
+
+   it("a page carries the request it answers", () => {
+      const c = client(["memory_batches", "request_refs"]);
+      expect(c.ing.listMemoryBatches()).toBe(1);
+      c.frame("list_memory_batches_response", { before_batch_id: null, batches: [], req: "mem-1" });
+      expect((c.calls[0][1] as { request?: number }).request).toBe(1);
    });
 
    it("without request_refs nothing is tagged", () => {
