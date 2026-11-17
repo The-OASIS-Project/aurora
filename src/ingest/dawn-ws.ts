@@ -4124,7 +4124,11 @@ export class DawnIngest implements Ingest {
                         ? (p as { client_ref: string }).client_ref
                         : undefined;
                   if (ref !== undefined || !this.hasFeature("turn_refs"))
-                     this.sinks.conversation.confirmTurn(p.text, ref);
+                     this.sinks.conversation.confirmTurn(
+                        p.text,
+                        ref,
+                        Number((p as { message_id?: number }).message_id ?? 0)
+                     );
                }
                this.handleIncomingUser(
                   p.text.trim(),
@@ -4431,6 +4435,9 @@ export class DawnIngest implements Ingest {
          .reverse()
          .find((l) => l.back !== undefined && l.id === this.convId);
       const back = waiting ? waiting.back : this.convId;
+      /* And whether going back must restore that conversation's server context (a reconnect's
+         replay still unanswered). */
+      if (waiting?.restore) this.loadRestores = true;
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       /* Opening another conversation ends a switch to local still waiting for the model list:
@@ -4441,6 +4448,7 @@ export class DawnIngest implements Ingest {
       if (id !== back) this.loadBack = back;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
       this.loadBack = undefined;
+      this.loadRestores = false;
    }
 
    newConversation(opts: { private?: boolean } = {}): Promise<boolean> {
@@ -5733,7 +5741,11 @@ export class DawnIngest implements Ingest {
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
       /* It's on screen now: the way back for any opened load still unanswered (the same one
          opened twice, say, the second refused). */
-      for (const l of this.convLoadsOwed) if (l.back !== undefined) l.back = cid;
+      for (const l of this.convLoadsOwed) {
+         if (l.back === undefined) continue;
+         l.back = cid;
+         l.restore = undefined; // its context is DAWN's now: nothing to restore going back to it
+      }
       if (this.reanchoring) {
          /* Reconnect re-anchor: DAWN's per-connection active conversation is now
             restored, so the next turn (typed or voice) is tagged correctly. Do NOT

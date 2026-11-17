@@ -171,6 +171,26 @@ describe("memory marks in the conversation", () => {
       expect(order()).toEqual(["u?", "m6"]);
    });
 
+   it("say an undone batch is undone, not only show it struck through", () => {
+      const view = mount();
+      view.loadHistory(history);
+      view.setMemoryMarks([{ batch: batch(3, 15, { status: "undone" }), live: false }]);
+      expect(document.querySelector(".convo-memory")?.getAttribute("aria-label")).toContain(
+         "2 learned, 1 updated, undone"
+      );
+   });
+
+   it("follow a typed message once DAWN confirms it with its id", () => {
+      const view = mount();
+      view.loadHistory(history.slice(0, 2)); // up to reply 11
+      const input = document.getElementById("composer-input") as HTMLTextAreaElement;
+      input.value = "and another thing";
+      document.getElementById("composer")!.dispatchEvent(new Event("submit", { cancelable: true }));
+      view.confirmTurn("and another thing", undefined, 14); // DAWN's echo
+      view.setMemoryMarks([{ batch: batch(7, 14), live: false }]);
+      expect(order()).toEqual(["u10", "a11", "u14", "m7"]);
+   });
+
    it("go with the transcript", () => {
       const view = mount();
       view.loadHistory(history);

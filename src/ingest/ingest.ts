@@ -77,7 +77,7 @@ export interface ConversationSink {
    setThinking(thinking: boolean): void;
    /* A sent turn was accepted (DAWN echoed it): release what the composer held for it. Matched by
       the turn reference when DAWN echoes one (turn_refs), else by the echoed text. */
-   confirmTurn(text: string, ref?: string): void;
+   confirmTurn(text: string, ref?: string, messageId?: number): void;
    /* A sent turn was refused before it ran: "image" = the (single) held image turn (an IMAGE_*
       refusal, no turn refs), "newest" = the latest held turn (a refusal on receipt), `{ ref }` = the
       turn DAWN named (turn_refs). Its bubble

@@ -97,7 +97,7 @@ export interface ConversationController {
       messageId: number;
       email?: EmailRef;
    }): void;
-   confirmTurn(text: string, ref?: string): void;
+   confirmTurn(text: string, ref?: string, messageId?: number): void;
    noteRefusal(text: string): void;
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
    releaseTurns(): void;
@@ -353,6 +353,8 @@ export function mountConversation(
       summary.textContent = batchSummary(batch);
       el.append(label, summary);
       const outside = outsideText(batch);
+      const state =
+         batch.status === "undone" ? "undone" : batch.status === "partial" ? "partly undone" : "";
       if (outside) {
          const o = document.createElement("span");
          o.className = "convo-memory-outside";
@@ -362,7 +364,7 @@ export function mountConversation(
       const open = opts.onOpenMemoryBatch;
       el.setAttribute(
          "aria-label",
-         `Memory: ${batchSummary(batch)}${outside ? `. ${outside}` : ""}${open ? ". Open in the Memory panel" : ""}`
+         `Memory: ${batchSummary(batch)}${state ? `, ${state}` : ""}${outside ? `. ${outside}` : ""}${open ? ". Open in the Memory panel" : ""}`
       );
       if (open) {
          el.title = "Open in the Memory panel";
@@ -1952,12 +1954,15 @@ export function mountConversation(
       linkStream,
       adoptId,
       renderAppended,
-      confirmTurn: (text: string, ref?: string) => {
+      confirmTurn: (text: string, ref?: string, messageId?: number) => {
          const t =
             ref !== undefined
                ? held.find((x) => x.ref === ref)
                : held.find((x) => x.sentText.trim() === text.trim());
-         if (t) releaseTurn(t);
+         if (!t) return;
+         /* The bubble drawn on send now has its saved row's id (a memory mark can follow it). */
+         if (messageId !== undefined && messageId > 0) stampId(t.msg, messageId);
+         releaseTurn(t);
       },
       releaseTurns: releaseAllTurns,
       noteRefusal,

@@ -621,6 +621,23 @@ describe("a reconnect while an opened conversation hasn't loaded", () => {
       expect(c.ing.reanchoring).toBe(true); // rebuilt server-side, not redrawn
    });
 
+   it("an open made while the replay is unanswered also restores, if both are refused", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped
+      c.frame("session", { authenticated: true, reconnected: false }); // replays 9
+      c.ing.loadConversation(11); // opened before the replay is answered
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      c.sent.length = 0;
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 7
+      }); // its context rebuilt, as the fresh session holds none
+   });
+
    it("re-anchors lightly when the conversation on screen is the active one", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.ing.showConversation(7);
