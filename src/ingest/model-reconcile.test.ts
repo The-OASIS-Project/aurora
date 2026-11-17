@@ -588,3 +588,118 @@ describe("opening a conversation that's gone", () => {
       expect(c.ing.convId).toBe(11);
    });
 });
+
+describe("with request_refs, model requests are settled by the request they name", () => {
+   const refs = () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.serverFeatures = new Set(["request_refs"]);
+      return c;
+   };
+
+   it("tags each with a req", () => {
+      const c = refs();
+      c.ing.askConfig();
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      c.ing.loadConversation(9);
+      const tagged = c.sent
+         .filter((m) => ["get_config", "set_session_llm", "load_conversation"].includes(m.type))
+         .map((m) => [m.type, m.payload?.req]);
+      expect(tagged).toEqual([
+         ["get_config", "llm-1"],
+         ["set_session_llm", "llm-2"],
+         ["load_conversation", "llm-3"]
+      ]);
+   });
+
+   it("a refused model change reads the session's selection again", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      const before = c.sent.length;
+      c.frame("error", {
+         code: "SERVICE_UNAVAILABLE",
+         message: "Couldn't check the login; try again",
+         severity: "error",
+         req: "llm-1"
+      });
+      expect(c.ing.llmWritesOwed).toEqual([]);
+      expect(c.sent.slice(before).map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("a refused open goes back to the conversation on screen", () => {
+      const c = refs();
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.ing.convLoadsOwed).toEqual([]);
+   });
+
+   it("a refused read stops holding the llama.cpp sync", () => {
+      const c = refs();
+      c.ing.askConfig();
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.llm.mode = "local";
+      expect(c.llmWrites()).toEqual([]); // waiting for the read
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true, req: "llm-2" }
+         }
+      ]);
+   });
+
+   it("a refused resume keeps the conversation, and resumes it once DAWN answers again", () => {
+      const c = refs();
+      localStorage.setItem("dawn.hero.convId", "42");
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.ing.convId).toBe(42);
+      expect(localStorage.getItem("dawn.hero.convId")).toBe("42");
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 42
+      });
+      expect(c.ing.resumingStored).toBe(true);
+   });
+
+   it("a refused model change is read again once DAWN answers, if its read was refused too", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" }); // its read
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("New Chat's refused reset isn't announced as the user's model change", () => {
+      const c = refs();
+      const notices: string[] = [];
+      c.ing.spikeNotice = (id: string) => notices.push(id);
+      c.ing.send({ type: "set_session_llm", payload: { type: "reset" } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(notices).not.toContain("llm-switch-error");
+      expect(c.sent.at(-1)?.type).toBe("get_config"); // the selection is read all the same
+   });
+
+   it("a reply settles the request it names, not the oldest", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
+      c.ing.getModelControl().setModel("claude-haiku-5-5"); // llm-2
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-haiku-5-5",
+         req: "llm-2"
+      });
+      expect(c.ing.llmWritesOwed.map((e: { req: string }) => e.req)).toEqual(["llm-1"]);
+      expect(c.ing.llm.model).toBe("claude-haiku-5-5");
+   });
+});

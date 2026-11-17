@@ -1154,6 +1154,23 @@ per batch"; batches exist only with `[memory] consolidator = "agent"`). The Memo
 - Every string (memory text, the model's `reason`, titles) is bound via textContent; a `reason`
   with `reason_by:"model"` reads "Model's reason:".
 
+### 9.17 Matching replies and refusals by request (`request_refs`) - consumed 2026-11-17
+
+DAWN #116: any message may carry `payload.req` (an opaque id); while DAWN handles it, every `error`
+it sends carries `req` + `request_type` and every `*_response` carries `req`. Errors are written at
+once and replies queued, so an error can arrive ahead of replies to earlier requests: match by
+`req`, never by order. Not covered: `text` turns (their errors carry `client_ref`), `session`/the
+connect batch, `state`, `pong`, `music_state`, `restart_response`, and anything a worker thread
+sends later (Undo/Keep/Forget replies, a turn failing as it runs).
+
+Aurora tags `get_config`, `set_session_llm` and `load_conversation` (`dawn-ws.ts` `send`), and the
+Learned list's requests (§9.16). A reply naming a `req` settles that request; one without settles
+the oldest sent without one (a connection's first requests go out before the config frame says
+the flag). An error naming one is its refusal: a refused open goes back to the conversation on
+screen, a refused model change re-reads the session's selection (the panel showed a choice that
+didn't happen), a refused read stops being waited for. Without the flag, everything stays matched
+in order.
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and
