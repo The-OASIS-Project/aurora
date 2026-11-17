@@ -439,6 +439,17 @@ describe("the Learned list", () => {
       expect(el.querySelector(".memory-batch-conv")?.textContent).toBe("Summer trip");
    });
 
+   it("a batch pushed after a rename, but built before it, keeps the new title", () => {
+      const { panel, el } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      const before = batch(5, [op(1)], { conversationTitle: "Trip plans" });
+      panel.setPage({ before: null, batches: [before], nextBefore: null, error: null, request: 1 });
+      panel.renameConversation(7, "Summer trip");
+      panel.upsertBatch({ ...before, status: "partial" }); // an undo's push, built earlier
+      expect(el.querySelector(".memory-batch-conv")?.textContent).toBe("Summer trip");
+   });
+
    it("a push held for an older page is kept only within what that page brought", () => {
       const { panel, el, button } = mounted();
       panel.setAvailable(true);

@@ -56,6 +56,8 @@ const POS_KEY = "dawn.hero.memoryPos";
 const PULSE_MS = 800;
 const HIGHLIGHT_MS = 4000;
 const CLOCK_MS = 60_000;
+/* Renames remembered while the list is held (each conversation's latest). */
+const RENAMES_KEPT = 256;
 /* The list always keeps at least a page (DAWN's page size, as the ingest asks for). */
 const PAGE_FLOOR = 20;
 
@@ -196,9 +198,10 @@ export function mountMemoryPanel(
    /* Pushes that came while a page was on its way, for what that page will hold: applied over it
       when it lands (newer than the page), dropped with it if it fails. null = removed. */
    const pushedWhileLoading = new Map<number, MemoryBatch | null>();
-   /* Renames that came while a page was on its way, by conversation: DAWN sends the notice at
-      once but queues the page, so a page built before the rename can land after it. */
-   const renamedWhileLoading = new Map<number, string>();
+   /* The latest title from each rename heard while the list is held, by conversation. DAWN
+      sends the notice at once but queues pages and batch pushes, so one built before a rename
+      can land after it: every batch that comes in takes the latest title heard. */
+   const renamed = new Map<number, string>();
    let nextBefore: number | null = null;
    /* Every page asked for on this connection, oldest first (DAWN answers in order). Each reply
       settles the oldest; one asked before the panel let go of its list (hidden meanwhile) is no
@@ -253,7 +256,7 @@ export function mountMemoryPanel(
       loaded = false;
       loading = null;
       for (const a of asked) a.wanted = false; // their replies still come, and settle nothing
-      renamedWhileLoading.clear();
+      renamed.clear(); // the fresh first page has the titles as they are
       batches.clear();
       expanded.clear();
       pushedWhileLoading.clear();
@@ -296,10 +299,18 @@ export function mountMemoryPanel(
    /* What came for a page while it was on its way, now that the page set the loaded range: a
       removal everywhere, an update only for a batch within the range (an older one is left to its
       own page). Then the list is trimmed back to what the pages brought. */
+   /* A batch with the latest title heard for its conversation (only one DAWN titles). */
+   const retitle = (b: MemoryBatch): MemoryBatch => {
+      const title = b.conversationId !== null ? renamed.get(b.conversationId) : undefined;
+      return title !== undefined && typeof b.conversationTitle === "string"
+         ? { ...b, conversationTitle: title }
+         : b;
+   };
+
    const replayHeld = (): void => {
       for (const [id, b] of pushedWhileLoading) {
          if (!b) drop(id);
-         else if (nextBefore === null || id >= nextBefore) batches.set(id, b);
+         else if (nextBefore === null || id >= nextBefore) batches.set(id, retitle(b));
       }
       pushedWhileLoading.clear();
       trim();
@@ -696,7 +707,6 @@ export function mountMemoryPanel(
          if (page.error) {
             /* What came for the failed page goes with it; trims held for it run now. */
             pushedWhileLoading.clear();
-            renamedWhileLoading.clear();
             if (first && !loaded) {
                status = "error";
                errorText = page.error;
@@ -714,23 +724,14 @@ export function mountMemoryPanel(
             status = "idle";
             paged = 0;
          }
-         for (const b of page.batches) {
-            const renamed =
-               b.conversationId !== null ? renamedWhileLoading.get(b.conversationId) : undefined;
-            batches.set(
-               b.batchId,
-               renamed !== undefined && typeof b.conversationTitle === "string"
-                  ? { ...b, conversationTitle: renamed }
-                  : b
-            );
-         }
-         renamedWhileLoading.clear();
+         for (const b of page.batches) batches.set(b.batchId, retitle(b));
          paged += page.batches.length;
          nextBefore = page.nextBefore;
          replayHeld();
          render();
       },
-      upsertBatch(batch) {
+      upsertBatch(pushed) {
+         const batch = retitle(pushed);
          if (forThePage(batch.batchId)) {
             pushedWhileLoading.set(batch.batchId, batch);
             return;
@@ -758,12 +759,12 @@ export function mountMemoryPanel(
             batches.set(id, { ...b, conversationTitle: title });
             changed = true;
          }
-         /* And the page on its way, and what's held for it, so neither brings the old title back. */
-         if (loading) renamedWhileLoading.set(conversationId, title);
-         for (const [id, b] of pushedWhileLoading) {
-            if (b && b.conversationId === conversationId && typeof b.conversationTitle === "string")
-               pushedWhileLoading.set(id, { ...b, conversationTitle: title });
-         }
+         /* And whatever comes in later: a page or push built before this rename (see renamed).
+            Bounded: the oldest heard goes first. */
+         renamed.delete(conversationId);
+         renamed.set(conversationId, title);
+         if (renamed.size > RENAMES_KEPT) renamed.delete(renamed.keys().next().value as number);
+         for (const [id, b] of pushedWhileLoading) if (b) pushedWhileLoading.set(id, retitle(b));
          if (changed) renderIfShown();
       },
       actionDone(result: MemoryActionResult) {
@@ -802,7 +803,6 @@ export function mountMemoryPanel(
          loading = null;
          asked = []; // the closed socket answers nothing more
          pushedWhileLoading.clear();
-         renamedWhileLoading.clear();
          busy.clear();
          keepBefore.clear();
          slotBusy = false;
