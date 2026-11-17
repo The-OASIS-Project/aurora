@@ -329,6 +329,23 @@ describe("turn_wait", () => {
       expect(c.named("setTurnWait").at(-1)).toEqual([null]);
    });
 
+   it("a reload of the same conversation (a takeover reclaim) keeps the waiting message and its wait", () => {
+      const c = client();
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "3",
+         waiting: true,
+         holder: "turn"
+      });
+      c.frame("load_conversation_response", { success: true, conversation_id: 7, messages: [] });
+      expect(c.named("loadHistory").at(-1)?.[1]).toBe("3");
+      expect(c.named("setTurnWait").at(-1)?.[0]).toMatchObject({ ref: "3" });
+      /* Another conversation's load lets it go. */
+      c.frame("load_conversation_response", { success: true, conversation_id: 9, messages: [] });
+      expect(c.named("loadHistory").at(-1)?.[1]).toBeUndefined();
+      expect(c.named("setTurnWait").at(-1)).toEqual([null]);
+   });
+
    it("drops the kept wait when the reconnect lands on a fresh session", () => {
       const c = client();
       c.frame("turn_waiting", {

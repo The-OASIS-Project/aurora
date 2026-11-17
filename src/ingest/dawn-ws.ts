@@ -6185,8 +6185,14 @@ export class DawnIngest implements Ingest {
                m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined
          });
       }
-      this.sinks.conversation.loadHistory(items);
-      this.setTurnWait(null); // the held bubble it showed on is gone
+      /* A reload of the conversation our message waits in (a takeover reclaim, a reconnect)
+         keeps that unsaved message, and its wait; any other load lets it go. */
+      const kept = this.keptWait && this.keptWait.conversationId === cid ? this.keptWait : null;
+      this.sinks.conversation.loadHistory(items, kept?.ref);
+      if (kept) {
+         this.setTurnWait(null);
+         this.setTurnWait({ ...kept, stopping: false });
+      } else this.setTurnWait(null);
       for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
       this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
       this.showConversation(cid); // after loadHistory drew the transcript the marks go in

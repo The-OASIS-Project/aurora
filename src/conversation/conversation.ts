@@ -81,7 +81,9 @@ export interface ConversationController {
    toolCall(call: ToolCall): void;
    toolResult(id: string, result: string, error?: boolean): void;
    setAssistantName(name: string): void;
-   loadHistory(items: ConversationItem[]): void;
+   /* `keep`: the ref of our turn still waiting at DAWN (turn_wait): it isn't saved yet, so it
+      comes back after the loaded rows, its draft kept. */
+   loadHistory(items: ConversationItem[], keep?: string): void;
    clear(): void;
    setStatus(status: ActivityStatus | null): void;
    /* Server-authoritative-persistence (Phase 0) correlation. `linkStream` registers the
@@ -1356,10 +1358,10 @@ export function mountConversation(
 
    /* Replace the transcript with a loaded conversation, then show it briefly so
       there is somewhere to start; it recedes on its own after the idle interval. */
-   const loadHistory = (items: ConversationItem[]): void => {
+   const loadHistory = (items: ConversationItem[], keep?: string): void => {
       pendingVisuals = []; // a visual belongs to the transcript it arrived in
       dropEmailRef(); // switching conversations: never carry an email chip into another one
-      releaseAllTurns();
+      releaseAllTurns(keep);
       clearWait(); // its line, placeholder and timer went with the transcript
       clearRefusal();
       if (raf) {
@@ -1394,6 +1396,12 @@ export function mountConversation(
          }
       } finally {
          bulkLoadingTools = false;
+      }
+      /* Our message still waiting at DAWN isn't in the saved rows: it goes back at the end. */
+      for (const t of held) {
+         scroll.appendChild(t.msg.el);
+         messages.push(t.msg);
+         win.classList.remove("empty");
       }
       if (messages.length > 0) {
          summon();

@@ -141,7 +141,9 @@ export interface ConversationSink {
    /* The configured assistant display name (ai_name), for the reply header. */
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */
-   loadHistory(items: ConversationItem[]): void;
+   /* `keep`: the ref of our turn still waiting at DAWN (turn_wait): it isn't saved yet, so it
+      comes back after the loaded rows, its draft kept. */
+   loadHistory(items: ConversationItem[], keep?: string): void;
    /* Server-authoritative-persistence (Phase 0) cross-viewer correlation. `linkStream`
       registers the just-finalized streamed bubble under (conv, streamId); `adoptId` stamps the
       DB id onto it when the matching `message_appended` arrives (returns true if it was ours),
