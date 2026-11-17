@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { batchSummary, mountMemoryPanel } from "./memory-panel.ts";
+import { mountMemoryPanel } from "./memory-panel.ts";
+import { batchSummary } from "../util/memory-text.ts";
 import type { MemoryBatch, MemoryBatchOp } from "../ingest/ingest.ts";
 import { closeDialog } from "../menu/dialog.ts";
 
@@ -283,6 +284,27 @@ describe("the Learned list", () => {
       button("Cancel")!.click();
       expect(document.activeElement?.textContent).toBe("Undo all");
       expect(el.contains(document.activeElement)).toBe(true);
+   });
+
+   it("a mark clicked: the panel comes up with that batch open, older than its pages or not", () => {
+      const { panel, el, calls } = mounted();
+      panel.setAvailable(true); // hidden: nothing read yet
+      panel.focusBatch(batch(3, [op(1)]));
+      expect(panel.isVisible()).toBe(true);
+      expect(calls).toEqual(["list:first"]);
+      panel.setPage({
+         before: null,
+         batches: [batch(30, [op(2)])],
+         nextBefore: 30,
+         error: null,
+         request: 1
+      });
+      const shown = [...el.querySelectorAll<HTMLElement>(".memory-batch")];
+      expect(shown).toHaveLength(2); // 30, and 3 though it's behind Show older
+      const asked = shown[1];
+      expect(asked.classList.contains("open")).toBe(true);
+      expect(asked.classList.contains("memory-batch-lit")).toBe(true);
+      expect(document.activeElement?.closest(".memory-batch")).toBe(asked);
    });
 
    it("keeps a push that lands while the page is on its way", () => {

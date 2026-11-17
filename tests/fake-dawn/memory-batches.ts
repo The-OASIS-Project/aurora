@@ -109,8 +109,8 @@ export class MemoryBatchStore {
       ): Batch => ({
          batch_id,
          conversation_id: conversationId,
-         from_message_id: 10,
-         after_message_id: 14,
+         from_message_id: 1,
+         after_message_id: 2, // the seeded conversation's reply (conversations.ts)
          created_at: now - agoSec,
          path: "agent",
          status: statusOf(ops),

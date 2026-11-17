@@ -90,7 +90,8 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     `conversation_learned` count, or from the picker's per-row Forget), plus the **Memory
     panel's Learned list** (`src/memory/`, `memory_batches`: the read `list_memory_batches`, and
     `undo_memory_batch` / `keep_memory_op` / `delete_memory_fact` on what memory learned per
-    batch, only the action DAWN marks on each change; a batch's conversation title opens it),
+    batch, only the action DAWN marks on each change; a batch's conversation title opens it; the
+    conversation on screen shows each of its batches as a quiet chip that opens it in the panel),
     plus **phone calls**
     (`phone_action` answer / reject / hangup on the user's own phone from the call card, and the
     `phone_status` read on connect; DAWN allows only the modem owner; the call audio stays on the

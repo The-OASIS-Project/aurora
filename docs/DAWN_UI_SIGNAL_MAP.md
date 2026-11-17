@@ -1134,8 +1134,14 @@ per batch"; batches exist only with `[memory] consolidator = "agent"`). The Memo
 (`src/memory/memory-panel.ts`, default-off, offered only with the flag) lists them newest first.
 
 - **Reads:** `list_memory_batches {before_batch_id?, limit}` (keyset pages; Aurora asks 20) only
-  while the panel is shown; a fresh first page on each connect. The per-conversation form
-  (`conversation_id`) is for conversation markers, not drawn yet.
+  while the panel is shown; a fresh first page on each connect.
+- **Conversation marks:** the conversation on screen reads its own batches
+  (`list_memory_batches {conversation_id}`, up to 5 pages) when it opens (and on reconnect) and
+  follows pushes for it (`src/ingest/memory-marks.ts`). Each batch is a quiet chip after the
+  newest message on screen at or below `after_message_id` (`0` / absent: the list only; messages
+  not on screen: not drawn). A batch just pushed waits up to 3 s for its reply's message id, so it
+  doesn't land above the reply. A chip opens that batch in the Memory panel (shown, opened and
+  lit, even when older than the pages read).
 - **Push:** `memory_batch` replaces a batch by id; `{batch_id, removed:true}` drops it. A push
   for what a page on its way will hold waits for that page; the rest apply at once. Hiding the
   panel lets go of the list, and the shown list keeps at most what the pages brought.

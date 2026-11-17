@@ -588,3 +588,29 @@ describe("opening a conversation that's gone", () => {
       expect(c.ing.convId).toBe(11);
    });
 });
+
+describe("a reconnect while an opened conversation hasn't loaded", () => {
+   it("loads it in full instead of re-anchoring to it under another transcript", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7); // A's transcript is on screen
+      c.ing.convId = 7;
+      c.ing.loadConversation(9); // B opened; the link drops before its reply
+      c.sent.length = 0;
+      c.frame("session", { authenticated: true, reconnected: true });
+      const types = c.sent.map((m) => m.type);
+      expect(types).toContain("load_conversation");
+      expect(types).not.toContain("set_active_conversation");
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 9
+      });
+   });
+
+   it("re-anchors lightly when the conversation on screen is the active one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.sent.length = 0;
+      c.frame("session", { authenticated: true, reconnected: true });
+      expect(c.sent.map((m) => m.type)).not.toContain("load_conversation");
+   });
+});

@@ -101,6 +101,7 @@ import {
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
 import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
+import { MemoryMarks } from "./memory-marks.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 
@@ -222,7 +223,8 @@ type MemoryReq =
    | { kind: "list"; id: number; before: number | null }
    | { kind: "undo"; batchId: number; opId: number | null }
    | { kind: "keep"; batchId: number; opId: number }
-   | { kind: "forget"; factId: number };
+   | { kind: "forget"; factId: number }
+   | { kind: "marks"; conversationId: number };
 
 /* A Learned-list page (DAWN allows up to 50). */
 const MEMORY_BATCH_PAGE = 20;
@@ -1280,6 +1282,14 @@ export class DawnIngest implements Ingest {
       answer, and settles it as failed. */
    private memoryReqs = new Map<string, MemoryReq>();
    private memoryReqSeq = 0;
+   /* The conversation whose transcript is drawn (0: a fresh chat). The active id can run ahead of
+      it (an open still loading); a reconnect then must load it in full, not just re-anchor. */
+   private drawnConvId = 0;
+   /* What memory learned from the conversation on screen, drawn as marks in it. */
+   private marks = new MemoryMarks(
+      (conversationId, before) => this.listConversationBatches(conversationId, before),
+      (m) => this.sinks.conversation.setMemoryMarks(m)
+   );
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
@@ -1669,6 +1679,7 @@ export class DawnIngest implements Ingest {
          this.pendingFactForgets.clear();
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
+         this.marks.linkDown();
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -1804,6 +1815,7 @@ export class DawnIngest implements Ingest {
          this.pendingFactForgets.clear(); // their replies can't come now
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
+         this.marks.linkDown();
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -2266,7 +2278,10 @@ export class DawnIngest implements Ingest {
                FALSE - it restores the server context AND re-renders the transcript (loadHistory)
                so the display catches up to the latest turns, not stuck on a stale view. */
             if (this.convId > 0) {
-               if (this.reclaiming) {
+               /* A conversation opened but not yet drawn when the link dropped (the active id ran
+                  ahead of the transcript) loads in full too: a re-anchor would point the session
+                  at it while another conversation stays on screen. */
+               if (this.reclaiming || this.convId !== this.drawnConvId) {
                   this.reclaiming = false;
                   this.send({
                      type: "load_conversation",
@@ -2314,7 +2329,10 @@ export class DawnIngest implements Ingest {
             /* The Learned list exists only on a DAWN that records batches; on each connect what
                changed while away comes from a fresh first page. */
             this.sinks.memoryBatches.setAvailable(this.hasFeature("memory_batches"));
-            if (this.hasFeature("memory_batches")) this.sinks.memoryBatches.linkUp();
+            if (this.hasFeature("memory_batches")) {
+               this.sinks.memoryBatches.linkUp();
+               this.marks.refresh();
+            }
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -2685,12 +2703,14 @@ export class DawnIngest implements Ingest {
             if ((p as { success?: boolean }).success === false) {
                this.settleTurnOnSwitch();
                this.convId = 0;
+               this.showConversation(0);
                localStorage.removeItem(CONV_KEY);
                this.sinks.conversationList.setActive(0);
                break;
             }
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
             this.convId = cid;
+            this.showConversation(cid);
             localStorage.setItem(CONV_KEY, String(cid));
             this.sinks.conversationList.setActive(cid);
             this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
@@ -2752,9 +2772,15 @@ export class DawnIngest implements Ingest {
 
          case "list_memory_batches_response": {
             const asked = this.memoryReplied(p);
-            /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
-               the conversation markers, which this client doesn't draw yet. */
-            if (p.conversation_id != null) break;
+            /* The per-conversation form (conversation_id echoed) is the marks'; the other is the
+               Learned list's page. */
+            if (p.conversation_id != null) {
+               this.marks.page({
+                  conversationId: rowId(p.conversation_id) ?? 0,
+                  ...parseMemoryBatchPage(p)
+               });
+               break;
+            }
             const page = parseMemoryBatchPage(p);
             if (asked?.kind === "list") page.request = asked.id;
             this.sinks.memoryBatches.setPage(page);
@@ -2766,10 +2792,14 @@ export class DawnIngest implements Ingest {
             const removedId = p.removed === true ? rowId(p.batch_id) : null;
             if (removedId !== null) {
                this.sinks.memoryBatches.removeBatch(removedId);
+               this.marks.remove(removedId);
                break;
             }
             const batch = parseMemoryBatch(p);
-            if (batch) this.sinks.memoryBatches.upsertBatch(batch);
+            if (batch) {
+               this.sinks.memoryBatches.upsertBatch(batch);
+               this.marks.push(batch);
+            }
             break;
          }
 
@@ -2922,6 +2952,7 @@ export class DawnIngest implements Ingest {
             if (this.pendingDeleteId > 0 && this.pendingDeleteId === this.convId) {
                this.settleTurnOnSwitch(); // its live turn (if any) is now foreign; don't strand the visuals
                this.convId = 0;
+               this.showConversation(0);
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.sinks.conversation.clear();
                this.sinks.context.clear();
@@ -2999,6 +3030,7 @@ export class DawnIngest implements Ingest {
                ends, rather than gating it as foreign and stranding the reactor mid-reply. */
             if (this.convId > 0) this.resetTurnConv = this.convId;
             this.convId = 0;
+            this.showConversation(0);
             this.setActiveTitle(""); // fresh chat -> HUD shows "New conversation"
             localStorage.removeItem(CONV_KEY); // context was reset; the next message opens a fresh one
             this.sinks.conversationList.setActive(0);
@@ -3044,6 +3076,7 @@ export class DawnIngest implements Ingest {
             );
             this.pendingNewConvTitle = "";
             this.convId = Number(np.conversation_id ?? 0);
+            this.showConversation(this.convId);
             if (this.convId <= 0 && !serverInitiated) this.settlePrivateCreate(false);
             if (this.convId > 0) {
                localStorage.setItem(CONV_KEY, String(this.convId)); // resume this on the next reload
@@ -4273,6 +4306,7 @@ export class DawnIngest implements Ingest {
          for the panel. Sent after clear_session, so no conversation is active to stamp it on. */
       this.send({ type: "set_session_llm", payload: { type: "reset" } });
       this.convId = 0;
+      this.showConversation(0);
       localStorage.removeItem(CONV_KEY); // fresh chat: nothing to resume until a message opens one
       /* Finalize any in-flight streamed bubble before wiping (both the menu New Chat and the
          picker "+ New" arrive here). */
@@ -4468,6 +4502,23 @@ export class DawnIngest implements Ingest {
       return sent ? id : 0;
    }
 
+   /* The transcript on screen is now this conversation's: its memory marks follow it. */
+   private showConversation(id: number): void {
+      this.drawnConvId = id;
+      this.marks.show(id);
+   }
+
+   /* A page of one conversation's batches, for the marks drawn in it (memory-marks.ts). */
+   private listConversationBatches(conversationId: number, before: number | null): boolean {
+      if (!this.hasFeature("memory_batches") || conversationId <= 0) return false;
+      const payload: Record<string, number> = {
+         conversation_id: conversationId,
+         limit: MEMORY_BATCH_PAGE
+      };
+      if (before !== null && before > 0) payload.before_batch_id = before;
+      return this.sendMemory("list_memory_batches", payload, { kind: "marks", conversationId });
+   }
+
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
       if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
       const payload: Record<string, number> = { batch_id: batchId };
@@ -4538,6 +4589,10 @@ export class DawnIngest implements Ingest {
          typeof p.message === "string" && p.message
             ? p.message
             : "DAWN couldn't do this right now. Try again in a moment.";
+      if (pending.kind === "marks") {
+         this.marks.failed(pending.conversationId);
+         return true;
+      }
       if (pending.kind === "list") {
          this.sinks.memoryBatches.setPage({
             before: pending.before,
@@ -5615,6 +5670,7 @@ export class DawnIngest implements Ingest {
             this.resumingStored = false;
             this.settleTurnOnSwitch();
             this.convId = 0;
+            this.showConversation(0);
             localStorage.removeItem(CONV_KEY);
             this.sinks.conversationList.setActive(0);
             return;
@@ -5626,6 +5682,7 @@ export class DawnIngest implements Ingest {
             this.reanchoring = false;
             this.settleTurnOnSwitch();
             this.convId = 0;
+            this.showConversation(0);
             localStorage.removeItem(CONV_KEY);
             this.sinks.conversationList.setActive(0);
             return;
@@ -5653,6 +5710,7 @@ export class DawnIngest implements Ingest {
             it needlessly. Reconcile the cheap server-authoritative bits only. */
          this.reanchoring = false;
          this.convId = cid;
+         this.showConversation(cid);
          localStorage.setItem(CONV_KEY, String(cid));
          this.sinks.conversationList.setActive(cid);
          this.isPrivate = Boolean((p as { is_private?: boolean }).is_private);
@@ -5731,6 +5789,7 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.loadHistory(items);
       for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
       this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
+      this.showConversation(cid); // after loadHistory drew the transcript the marks go in
       this.resumingStored = false; // a successful load ends any in-flight resume
       localStorage.setItem(CONV_KEY, String(cid)); // remember it for the next reload
       this.sinks.conversationList.setActive(cid);
