@@ -217,6 +217,10 @@ function providerLabel(p: LlmProvider): string {
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
+/* Why a load_conversation went out: an open the user made, the boot resume, a reconnect's
+   restore of the conversation on screen (no redraw), or a reload that redraws it (a reclaim). */
+type LoadPurpose = "user" | "resume" | "reanchor" | "reload";
+
 /* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
 type MemoryReq =
    | { kind: "list"; id: number; before: number | null }
@@ -1269,7 +1273,13 @@ export class DawnIngest implements Ingest {
       order): each sets the session's LLM to that conversation's settings when DAWN handles it.
       One the user opened records the conversation that was open before (`back`): a refused load
       (the conversation deleted meanwhile) returns to it, as DAWN's session never left it. */
-   private convLoadsOwed: Array<{ id: number; back?: number; req?: string }> = [];
+   private convLoadsOwed: Array<{
+      id: number;
+      back?: number;
+      req?: string;
+      /* Why it was sent, so a refused one can be sent again the same way (see loadRetry). */
+      purpose?: LoadPurpose;
+   }> = [];
    /* With request_refs (DAWN #116) each get_config, set_session_llm and load_conversation carries
       a `req` (the flags arrive with the config frame, so a connection's first requests don't):
       a reply that names one settles that request, and an error that names one is its refusal
@@ -1281,8 +1291,9 @@ export class DawnIngest implements Ingest {
    /* A model change was refused and the selection shown may never have run: read the session's
       selection until a read is answered (see onPong). */
    private llmNeedsRead = false;
-   /* A boot resume DAWN refused while it couldn't check the login: tried again once it can. */
-   private resumeRetry = 0;
+   /* A resume, re-anchor or reload DAWN refused while it couldn't check the login: sent again,
+      the same way, once DAWN answers a ping. */
+   private loadRetry: { id: number; purpose: LoadPurpose } | null = null;
    /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
       by send). */
    private loadBack: number | undefined;
@@ -1675,7 +1686,7 @@ export class DawnIngest implements Ingest {
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
          this.convLoadsOwed = []; // nor an older load
-         this.resumeRetry = 0; // the new connection's own resume or re-anchor takes over
+         this.loadRetry = null; // the new connection's own resume or re-anchor takes over
          this.loadedSyncDeferred = false;
          /* Nor the Learned list's requests on an older socket. Its close normally said so, but a
             socket that opened before the old one's close arrived (a fast reconnect, a reclaim)
@@ -1970,14 +1981,14 @@ export class DawnIngest implements Ingest {
       window.clearTimeout(this.pongTimer);
       /* DAWN checks logins again: the read of the selection a refused change left owed. */
       if (this.llmNeedsRead && !this.configAsks.some((a) => !a.listsOnly)) this.askConfig();
-      /* And the resume it refused, as a resume (one that's really gone then falls back quietly). */
-      if (this.resumeRetry > 0) {
-         const id = this.resumeRetry;
-         this.resumeRetry = 0;
-         if (this.convId === id) {
-            this.resumingStored = true;
-            this.send({ type: "load_conversation", payload: { conversation_id: id } });
-         }
+      /* And a load it refused, sent again as it was: a resume as a resume (one that's really gone
+         then falls back quietly), a reconnect's restore without redrawing, a reload redrawn. */
+      const retry = this.loadRetry;
+      this.loadRetry = null;
+      if (retry && this.convId === retry.id) {
+         if (retry.purpose === "resume") this.resumingStored = true;
+         if (retry.purpose === "reanchor") this.reanchoring = true;
+         this.send({ type: "load_conversation", payload: { conversation_id: retry.id } });
       }
       /* Only re-assert "connected" if we had told the UI the link went stale; a healthy
          heartbeat stays quiet so the chip does not churn every 10s. */
@@ -2482,7 +2493,7 @@ export class DawnIngest implements Ingest {
                listsOnly: typeof p.req === "string"
             };
             const appliesSelection = !ask.listsOnly && ask.rev === this.llmRev;
-            if (!ask.listsOnly) this.llmNeedsRead = false; // the session's selection, as it is
+            if (appliesSelection) this.llmNeedsRead = false; // the session's selection, as it is
             if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
@@ -2697,12 +2708,16 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "load_conversation_response":
-            this.onConversationLoaded(p, this.takeOwed(this.convLoadsOwed, p));
+         case "load_conversation_response": {
+            const load = this.takeOwed(this.convLoadsOwed, p);
+            /* A reply naming a request this connection doesn't owe (none should) opens nothing. */
+            if (!load && typeof p.req === "string") break;
+            this.onConversationLoaded(p, load);
             /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
                it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
             this.syncLoadedLocalModel();
             break;
+         }
 
          case "set_active_conversation_response": {
             /* The lightweight reconnect re-anchor's reply (no history replay). Any response
@@ -5816,7 +5831,7 @@ export class DawnIngest implements Ingest {
                conversation isn't gone, so it stays the one to resume (a failed load would drop
                it). Its transcript isn't drawn yet, so the next connect loads it in full; a turn
                meanwhile names it and runs there. */
-            if (this.resumingStored) this.resumeRetry = entry.id; // its transcript isn't drawn yet
+            this.loadRetry = { id: entry.id, purpose: entry.purpose ?? "reload" };
             this.resumingStored = false;
             this.reanchoring = false;
          }
@@ -6661,7 +6676,15 @@ export class DawnIngest implements Ingest {
          const id = Number(
             (msg as { payload?: { conversation_id?: unknown } }).payload?.conversation_id
          );
-         this.convLoadsOwed.push({ id, back: this.loadBack, req });
+         const purpose: LoadPurpose =
+            this.loadBack !== undefined
+               ? "user"
+               : this.resumingStored
+                 ? "resume"
+                 : this.reanchoring
+                   ? "reanchor"
+                   : "reload";
+         this.convLoadsOwed.push({ id, back: this.loadBack, req, purpose });
       }
       this.ws.send(JSON.stringify(msg));
       return true;

@@ -688,6 +688,53 @@ describe("with request_refs, model requests are settled by the request they name
       expect(c.sent.at(-1)?.type).toBe("get_config"); // the selection is read all the same
    });
 
+   it("an older read answered meanwhile doesn't end the wait for the selection", () => {
+      const c = refs();
+      c.ing.askConfig(); // llm-1, an older read still on its way
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-2
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-3" }); // its read
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" },
+         req: "llm-1"
+      }); // from before the change: applies nothing
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("a load reply naming a request this connection doesn't owe opens nothing", () => {
+      const c = refs();
+      c.ing.convId = 7;
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 99,
+         messages: [],
+         req: "llm-41"
+      });
+      expect(c.ing.convId).toBe(7);
+   });
+
+   it("a refused reconnect restore or reload is sent again the same way once DAWN answers", () => {
+      for (const purpose of ["reanchor", "reload"] as const) {
+         const c = refs();
+         c.ing.convId = 42;
+         if (purpose === "reanchor") c.ing.reanchoring = true;
+         c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+         c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+         expect(c.ing.reanchoring).toBe(false);
+         c.sent.length = 0;
+         c.ing.pendingPingSeq = 5;
+         c.frame("pong", { seq: 5 });
+         expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+            conversation_id: 42
+         });
+         expect(c.ing.reanchoring).toBe(purpose === "reanchor"); // a restore doesn't redraw
+      }
+   });
+
    it("a reply settles the request it names, not the oldest", () => {
       const c = refs();
       c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
