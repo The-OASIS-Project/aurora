@@ -61,6 +61,8 @@ export const INTERACTIVE = new Set([
    "new_conversation",
    "clear_session",
    "set_session_llm",
+   "cancel",
+   "stop_other_reply",
    /* What memory learned per batch (memory-batches.ts): the user's own memory. */
    "list_memory_batches",
    "undo_memory_batch",
@@ -94,6 +96,18 @@ interface Session {
    owner: string | null;
    /* When it was last used (a counter): the fake's stand-in for DAWN's idle clock. */
    active: number;
+   /* The turn running now: its conversation, a way to drop its frames still to come (a Stop),
+      and its end (the next queued turn starts then). */
+   running?: {
+      conv: number;
+      /* Drops the turn's frames still to come, and returns what DAWN had already queued for the
+         socket when the stop came: the reply's next chunk and its "error" end, once it streams. */
+      stop: () => object[];
+      finish: () => void;
+      /* Waiting for another turn on its conversation (turn_wait); its client_ref. */
+      waiting?: boolean;
+      ref?: string;
+   } | null;
 }
 
 /* One socket's own state (webui_internal.h ws_connection_t): its session, the conversation its
@@ -221,6 +235,44 @@ export class FakeDawn {
       default: the smoke test reads the whole transcript. */
    private readonly maxLog: number;
 
+   /* turn_wait (session_turn_wait.c): one turn runs on a conversation at a time. `held` is
+      another session's turn holding a conversation (a test sets it with holdConversation), and
+      the turns waiting behind it. */
+   private readonly turnWait: boolean;
+   private held: {
+      conv: number;
+      holder: string;
+      waiting: Array<{ s: Session; start: () => void; ref?: string }>;
+   } | null = null;
+
+   /* Another session's turn (a background job's, by default) starts on a conversation and holds
+      it until releaseConversation, or until stop_other_reply stops it. */
+   holdConversation(conv: number, holder = "job"): void {
+      this.held = { conv, holder, waiting: [] };
+   }
+
+   /* The holding turn ends: each waiting turn is granted (turn_waiting false) and runs. */
+   releaseConversation(): void {
+      const held = this.held;
+      this.held = null;
+      for (const w of held?.waiting ?? []) {
+         if (w.s.owner !== null) {
+            this.push(
+               {
+                  type: "turn_waiting",
+                  payload: {
+                     conversation_id: held!.conv,
+                     waiting: false,
+                     ...(w.ref ? { client_ref: w.ref } : {})
+                  }
+               },
+               { conn: w.s.owner }
+            );
+         }
+         w.start();
+      }
+   }
+
    constructor(
       scenario: Scenario,
       opts: { maxLog?: number; timing?: TurnTiming; storeLimit?: StoreLimit } = {}
@@ -230,6 +282,7 @@ export class FakeDawn {
       this.maxLog = opts.maxLog ?? Infinity;
       this.timing = opts.timing ?? TURN_TIMING;
       this.appLogins = scenario.features?.includes("app_logins") === true;
+      this.turnWait = scenario.features?.includes("turn_wait") === true;
       this.signedIn = { authenticated: scenario.authenticated, username: scenario.username };
    }
 
@@ -632,7 +685,7 @@ export class FakeDawn {
 
    /* Runs `fn` after `ms`; a fault in it is a violation, never a throw out of a timer (which
       would stop a dev server). */
-   private later(ms: number, fn: () => void): void {
+   private later(ms: number, fn: () => void): ReturnType<typeof setTimeout> {
       const t = setTimeout(() => {
          this.timers.delete(t);
          try {
@@ -642,6 +695,7 @@ export class FakeDawn {
          }
       }, ms);
       this.timers.add(t);
+      return t;
    }
 
    /* The requests that change the session (INTERACTIVE). */
@@ -683,6 +737,78 @@ export class FakeDawn {
             return this.setSessionLlm(payload, s, c);
          case "text":
             return this.textTurn(payload, c);
+         /* webui_message_dispatch.c handle_cancel_message: the session's turn is told to stop and
+            an untagged idle answers at once, ahead of what the turn had already queued (its next
+            chunk, and its stream's "error" end); the turn's worker then ends on its own, unsaved,
+            with a conversation-tagged idle (webui_text_processing.c, the cancel exit), and the next
+            queued turn starts. */
+         case "cancel": {
+            const run = s.running;
+            /* A waiting turn stops waiting: unsent, nothing saved, then idle (session_turn_wait.c). */
+            if (run?.waiting) {
+               run.stop();
+               const ack = { type: "state", payload: { state: "idle" } };
+               const unsent = {
+                  type: "turn_unsent",
+                  payload: {
+                     conversation_id: run.conv,
+                     text_saved: false,
+                     ...(run.ref ? { client_ref: run.ref } : {})
+                  }
+               };
+               const idle = {
+                  type: "state",
+                  payload: { state: "idle", conversation_id: run.conv }
+               };
+               /* The next queued turn starts after these went out, as in DAWN. */
+               this.later(0, () => run.finish());
+               return [ack, unsent, idle];
+            }
+            if (run) {
+               const leftovers = run.stop();
+               s.running = null; // a second cancel finds nothing to stop
+               this.later(5, () => {
+                  if (s.owner !== null) {
+                     for (const f of leftovers) this.push(f, { conn: s.owner });
+                     this.push(
+                        {
+                           type: "state",
+                           payload: {
+                              state: "idle",
+                              ...(run.conv > 0 ? { conversation_id: run.conv } : {})
+                           }
+                        },
+                        { conn: s.owner }
+                     );
+                  }
+                  run.finish();
+               });
+            }
+            return [{ type: "state", payload: { state: "idle" } }];
+         }
+         /* webui_message_dispatch.c: stop the turn holding the conversation this session's turn
+            waits for. The reply comes once the stop is asked for; the grant follows when it ends. */
+         case "stop_other_reply": {
+            const conv = Number(payload.conversation_id ?? 0);
+            if (!this.held || this.held.conv !== conv) {
+               return [
+                  {
+                     type: "stop_other_reply_response",
+                     payload: { conversation_id: conv, success: false, error: "NOT_RUNNING" }
+                  }
+               ];
+            }
+            const held = this.held;
+            this.later(20, () => {
+               if (this.held === held) this.releaseConversation(); // not a later hold
+            });
+            return [
+               {
+                  type: "stop_other_reply_response",
+                  payload: { conversation_id: conv, success: true }
+               }
+            ];
+         }
          case "list_memory_batches":
             return [this.memory.list(payload)];
          /* The changed batch goes to every tab of the user first, then the reply to the asker. */
@@ -758,7 +884,58 @@ export class FakeDawn {
          s.queue.push({ ...payload, text, conversation_id: c.conversation });
          return [];
       }
-      return this.runTurn({ ...payload, text, conversation_id: c.conversation }, s, true);
+      return this.startTurn({ ...payload, text, conversation_id: c.conversation }, s, true);
+   }
+
+   /* A turn starts, or waits while another session's turn holds its conversation (turn_wait):
+      turn_waiting and a thinking state with what it waits for go out, and it runs once granted. */
+   private startTurn(payload: Record<string, unknown>, s: Session, answering: boolean): object[] {
+      const conv = Number(payload.conversation_id);
+      const held = this.held;
+      if (!this.turnWait || !held || held.conv !== conv) return this.runTurn(payload, s, answering);
+      const ref = typeof payload.client_ref === "string" ? payload.client_ref : undefined;
+      const waiter = { s, ref, start: () => this.runTurn(payload, s, false) };
+      held.waiting.push(waiter);
+      s.busy = true;
+      const finish = (): void => {
+         s.busy = false;
+         s.running = null;
+         const next = s.queue.shift();
+         if (next) this.startTurn(next, s, false);
+      };
+      s.running = {
+         conv,
+         ref,
+         waiting: true,
+         stop: () => {
+            held.waiting = held.waiting.filter((w) => w !== waiter);
+            return []; // nothing of it was sent
+         },
+         finish
+      };
+      const frames = [
+         {
+            type: "turn_waiting",
+            payload: {
+               conversation_id: conv,
+               waiting: true,
+               holder: held.holder,
+               stop_after_ms: 5000,
+               ...(ref ? { client_ref: ref } : {})
+            }
+         },
+         {
+            type: "state",
+            payload: {
+               state: "thinking",
+               conversation_id: conv,
+               detail: "Finishing the reply already in progress…"
+            }
+         }
+      ];
+      if (answering) return frames;
+      for (const f of frames) if (s.owner !== null) this.push(f, { conn: s.owner });
+      return [];
    }
 
    /* Runs a turn (turns.ts): its frames at time 0 go out at once (returned when the turn is the
@@ -789,10 +966,38 @@ export class FakeDawn {
       s.busy = true;
       const last = frames.reduce((max, f) => Math.max(max, f.at), 0);
       /* The turn is over: the next queued turn starts. */
+      const pending: Array<ReturnType<typeof setTimeout>> = [];
+      let sentUpTo = -1; // the last group sent (by its time)
       const finish = (): void => {
          s.busy = false;
+         s.running = null;
          const next = s.queue.shift();
-         if (next) this.runTurn(next, s, false);
+         if (next) this.startTurn(next, s, false);
+      };
+      s.running = {
+         conv,
+         stop: () => {
+            for (const t of pending) {
+               clearTimeout(t);
+               this.timers.delete(t);
+            }
+            const start = frames.find(
+               (f) => f.at <= sentUpTo && (f.frame as { type: string }).type === "stream_start"
+            );
+            if (!start) return [];
+            const sid = (start.frame as { payload: { stream_id: number } }).payload.stream_id;
+            const next = frames.find(
+               (f) => f.at > sentUpTo && (f.frame as { type: string }).type === "stream_delta"
+            );
+            return [
+               ...(next ? [next.frame] : []),
+               {
+                  type: "stream_end",
+                  payload: { stream_id: sid, conversation_id: conv, reason: "error" }
+               }
+            ];
+         },
+         finish
       };
       const now: object[] = [];
       /* The sender is whichever connection owns the session when a frame goes out (a reload's
@@ -809,6 +1014,7 @@ export class FakeDawn {
       for (const f of frames) byTime.set(f.at, [...(byTime.get(f.at) ?? []), f]);
       for (const [at, group] of byTime) {
          const send = (): void => {
+            sentUpTo = at;
             if (at === last && reply) store.add(conv, reply);
             try {
                for (const f of group) deliver(f.frame, f.to, at);
@@ -817,7 +1023,7 @@ export class FakeDawn {
             }
          };
          if (at === 0) send();
-         else this.later(at, send);
+         else pending.push(this.later(at, send));
       }
       return now;
    }

@@ -1099,3 +1099,63 @@
    text-decoration: line-through;
    text-decoration-color: color-mix(in srgb, var(--text-faint) 60%, transparent);
 }
+
+/* While this session's turn runs the send hint reads STOP (Esc does the same). */
+.composer-hint.composer-stop {
+   color: var(--accent);
+}
+.composer-hint.composer-stop:hover {
+   color: var(--accent-glow);
+}
+/* A reply the user stopped: the text so far stays, with a quiet note (DAWN keeps no stopped reply). */
+.convo-stopped {
+   margin-top: 0.3rem;
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.14em;
+   text-transform: uppercase;
+   color: var(--text-faint);
+}
+
+/* A turn of ours waiting for another on the conversation: a quiet line under its bubble, and
+   after a moment the offer to stop the other reply. */
+.convo-wait {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: baseline;
+   gap: 0.4rem 0.8rem;
+   margin-top: 0.35rem;
+   font-size: var(--fs-label);
+   color: var(--text-faint);
+}
+.convo-wait-text {
+   font-style: italic;
+}
+.convo-wait-stop {
+   font: inherit;
+   font-family: var(--font-mono);
+   letter-spacing: 0.1em;
+   color: var(--accent);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+   border-radius: 2px;
+   padding: 0.1rem 0.5rem;
+   cursor: pointer;
+}
+.convo-wait-stop:hover:not(:disabled) {
+   border-color: var(--accent);
+}
+.convo-wait-stop:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}
+.convo-wait-stop:disabled {
+   color: var(--text-faint);
+   border-color: color-mix(in srgb, var(--text) 20%, transparent);
+   cursor: default;
+}
+/* A voice turn's place while it waits (its words come when it starts). */
+.convo-voice-pending .convo-body {
+   font-style: italic;
+   color: var(--text-faint);
+}

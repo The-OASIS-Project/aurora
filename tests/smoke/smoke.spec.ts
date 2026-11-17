@@ -280,3 +280,79 @@ test("a second tab takes the session over; the first can take it back", async ({
    await expect(takeover(second)).toBeVisible();
    await expectSignedInShell(page, false);
 });
+
+test("Stop ends the reply where it is; the next message runs normally", async ({ page, dawn }) => {
+   test.setTimeout(90_000);
+   const fake = await dawn.boot(SCENARIOS.signedIn);
+   await expectSignedInShell(page, false);
+   const composer = page.locator("#composer-input");
+   const hint = page.locator(".composer-hint");
+   await composer.fill("Tell me a long story");
+   await composer.press("Enter");
+   const reply = page.locator(".convo-msg.assistant").last();
+   await expect(reply.locator(".convo-body")).toContainText("This is the", { timeout: 30_000 });
+   await expect(hint).toHaveText("STOP");
+   await hint.click();
+   await expect(reply.locator(".convo-stopped")).toHaveText("Stopped");
+   await expect(hint).toHaveText("ENTER");
+   /* Nothing more streams into it, and DAWN keeps the question but no reply. */
+   const cut = await reply.locator(".convo-body").innerText();
+   await expect.poll(() => fake.requests.filter((r) => r === "cancel").length).toBe(1);
+   await page.waitForTimeout(800);
+   expect(await reply.locator(".convo-body").innerText()).toBe(cut);
+   expect(cut).not.toContain("conversation picker");
+   expect(fake.store.get(CONVERSATION_ID)!.messages.at(-1)?.role).toBe("user");
+   /* The next message streams and is saved as usual. */
+   await composer.fill("And now?");
+   await composer.press("Enter");
+   const next = page.locator(".convo-msg.assistant .convo-body").last();
+   await expect(next.locator("blockquote")).toHaveText("And now?", { timeout: 30_000 });
+   await expect(next).toContainText("conversation picker", { timeout: 30_000 });
+   await expect(hint).toHaveText("ENTER");
+});
+
+test("a message sent while another turn holds the conversation waits, and can stop that one", async ({
+   page,
+   dawn
+}) => {
+   test.setTimeout(90_000);
+   const fake = await dawn.boot(SCENARIOS.signedIn);
+   await expectSignedInShell(page, false);
+   fake.holdConversation(CONVERSATION_ID);
+   const composer = page.locator("#composer-input");
+   await composer.fill("Are you free yet?");
+   await composer.press("Enter");
+   const held = page.locator(".convo-msg.user").last();
+   const wait = held.locator(".convo-wait");
+   await expect(wait).toContainText("Sends when the background job's turn finishes");
+   const stop = wait.getByRole("button", { name: "Stop the other reply" });
+   await expect(stop).toBeVisible({ timeout: 10_000 });
+   await stop.click();
+   await expect(wait).toHaveCount(0);
+   const reply = page.locator(".convo-msg.assistant .convo-body").last();
+   await expect(reply.locator("blockquote")).toHaveText("Are you free yet?", { timeout: 30_000 });
+   expect(fake.requests).toContain("stop_other_reply");
+});
+
+test("Esc on a waiting message takes it back into the composer", async ({ page, dawn }) => {
+   test.setTimeout(90_000);
+   const fake = await dawn.boot(SCENARIOS.signedIn);
+   await expectSignedInShell(page, false);
+   fake.holdConversation(CONVERSATION_ID, "turn");
+   const bubbles = page.locator(".convo-msg");
+   const composer = page.locator("#composer-input");
+   const before = await bubbles.count();
+   await composer.fill("Never mind this one");
+   await composer.press("Enter");
+   await expect(page.locator(".convo-wait")).toContainText(
+      "Sends when the reply in progress finishes"
+   );
+   await composer.press("Escape");
+   await expect(composer).toHaveValue("Never mind this one");
+   await expect(bubbles).toHaveCount(before);
+   await expect(page.locator(".composer-note")).toContainText("wasn't sent");
+   await expect(page.locator(".composer-hint")).toHaveText("ENTER");
+   expect(fake.store.get(CONVERSATION_ID)!.messages.map((m) => m.content)).not.toContain(
+      "Never mind this one"
+   );
+});

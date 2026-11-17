@@ -277,8 +277,8 @@ and what can't be taken back gets a named confirm, at least wherever the WebUI h
   `_entity`, from the Context panel). The destructive ones (`delete_conversation`,
   `watch_remove`, `delete_memory_*`) are confirm-gated.
 - **Not wired yet (parity gaps):** `set_config` / `set_secrets` / `restart`, user management
-  (`create_user`, `delete_user`, ...), the SAGE **global** attention flag, `job_action`, and
-  `cancel` (interrupt a generation).
+  (`create_user`, `delete_user`, ...), the SAGE **global** attention flag, and `job_action`.
+  (`cancel` and `stop_other_reply` are wired: §9.18.)
 
 **`set_tts_enabled`** is a per-connection preference - "don't synthesize voice for MY
 socket" - that touches no global state. It matters beyond a local audio drop: while `tts_enabled` is true DAWN
@@ -1176,6 +1176,37 @@ the flag). An error naming one is its refusal: a refused open goes back to the c
 screen, a refused model change re-reads the session's selection (the panel showed a choice that
 didn't happen), a refused read stops being waited for. Without the flag, everything stays matched
 in order.
+
+### 9.18 Stop, and a turn waiting for another (`cancel`, `turn_wait`) - consumed 2026-11-17
+
+**Stop (`cancel`).** While this session's own turn runs (it saw `thinking`; a tab that only hears
+another tab's fanned `speaking` gets no Stop), the composer's ENTER reads STOP, and Esc in the
+composer does the same; Enter still sends (DAWN queues it). DAWN acks at once with an UNTAGGED
+`state idle` written ahead of what the turn had queued, so the ack ends nothing: the turn's own end
+is its worker's conversation-TAGGED idle (`webui_text_processing.c`, the cancel exit; untagged when
+the stop came before a fresh chat's conversation existed, so the second idle ends it too). Until
+then Aurora drops the stopped turn's text, tool steps, states and speech. The reply stays on screen,
+sealed with a quiet "Stopped" (DAWN keeps the question and no reply); a reply DAWN finished as the
+Stop landed is saved after all, and its `message_appended` redraws the bubble whole and drops the
+note. A Stop after the text has finished stops only the speech, and DAWN keeps the reply. Providers
+treat the abort as no error, so there is nothing to swallow.
+
+**turn_wait (DAWN #121, flag `turn_wait`).** A turn sent while another turn (another app of the
+user, a background job, a messaging channel) runs on the same conversation waits for it:
+`turn_waiting {conversation_id, client_ref?, waiting:true, holder, stop_after_ms}`, with a `state
+thinking` + `detail` for older clients. Aurora shows a line under the held bubble ("Sends when the
+reply in progress finishes…", or "…the background job's turn finishes…", DAWN's WebUI wording), and after
+`stop_after_ms` a "Stop the other reply" button that sends `stop_other_reply {conversation_id}`, no
+confirm (DAWN's WebUI has none: nothing is deleted, the other turn keeps its question and finished
+tool steps). `stop_other_reply_response` failing says "That reply already finished." (`NOT_RUNNING`)
+or "Couldn't stop the other reply."; on success the grant follows. The other turn's
+`message_appended` rows go ABOVE the held bubble. `waiting:false` clears the line, and the turn's
+normal frames follow. Stop on a waiting turn sends `cancel`; `turn_unsent {client_ref?}` then
+returns a typed turn's words to the composer (merged ahead of any draft, via the held-turn
+restore) and says it wasn't sent; a voice turn (no `client_ref`) shows a "Voice message"
+placeholder bubble while it waits and is just said to be unsent. `turn_waiting` isn't re-sent after
+a reconnect, so a link loss or conversation switch clears the line. Only for the conversation on
+screen.
 
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added

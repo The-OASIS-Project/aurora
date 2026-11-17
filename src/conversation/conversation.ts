@@ -20,6 +20,7 @@ import type {
    ConversationItem,
    MemoryBatch,
    MemoryMark,
+   TurnWait,
    OutDocument,
    OutImage,
    ToolCall,
@@ -60,6 +61,12 @@ export interface ConversationController {
    /* Reflect the link: offline dims the send control and says so in the placeholder. */
    setLinked(linked: boolean): void;
    setThinking(thinking: boolean): void;
+   /* This session's turn is running: the send control reads STOP (Esc does the same). */
+   setTurnActive(active: boolean): void;
+   /* Seal the reply being streamed where it is, marked stopped. */
+   markStopped(): void;
+   /* A turn of ours waiting for another turn on the conversation (null: no longer). */
+   setTurnWait(wait: TurnWait | null): void;
    setSpeaking(speaking: boolean): void;
    startReply(): void;
    appendDelta(delta: string): void;
@@ -122,6 +129,10 @@ export interface ConversationOptions {
          fromVisual?: boolean;
       }
    ) => void;
+   /* Stop this session's reply (the STOP control, or Esc in the composer). */
+   onCancel?: () => void;
+   /* Stop the other turn ours waits for (turn_wait). */
+   onStopOther?: () => void;
    /* Whether DAWN refuses confirms in a turn marked from_visual (`visual_prompt_guard`). Absent/false
       -> a visual's prompt is not sent at all (never as an ordinary turn) and onVisualPromptBlocked says why. */
    visualPrompts?: () => boolean;
@@ -183,6 +194,8 @@ interface Msg {
    visual?: boolean; // a rendered visual's prompt, not the person's words (kept out of recall)
 }
 
+/* How long after the send control turns into STOP a click on it is ignored (it was meant for ENTER). */
+const STOP_ARM_MS = 400;
 const IDLE_MS = 6000; // pointer off the window + settled -> recede
 const LONG_IDLE_MS = 45000; // no activity at all -> recede even if hovered/focused
 const HEIGHT_KEY = "dawn.hero.convoHeight"; // persisted window height cap, as a viewport fraction
@@ -745,7 +758,15 @@ export function mountConversation(
       return c;
    };
 
-   const appendMsg = (role: "user" | "assistant", rawText: string, email?: EmailRef): Msg => {
+   /* The bubble of our turn waiting for another (turn_wait): the other turn's messages go above
+      it, as they come before it in the conversation. */
+   let waitAnchor: Msg | null = null;
+   const appendMsg = (
+      role: "user" | "assistant",
+      rawText: string,
+      email?: EmailRef,
+      aboveWait = false
+   ): Msg => {
       closeToolGroup(); // a text turn ends the current tool run; the next tools open a fresh group
       win.classList.remove("empty");
       const el = document.createElement("div");
@@ -771,9 +792,15 @@ export function mountConversation(
       } else text = fillAssistantBody(body, parseAttachments(rawText, role));
 
       el.append(roleEl, body);
-      scroll.appendChild(el);
       const msg: Msg = { role, el, roleEl, body, text };
-      messages.push(msg);
+      const at = aboveWait && waitAnchor ? messages.indexOf(waitAnchor) : -1;
+      if (at >= 0 && waitAnchor) {
+         scroll.insertBefore(el, waitAnchor.el);
+         messages.splice(at, 0, msg);
+      } else {
+         scroll.appendChild(el);
+         messages.push(msg);
+      }
       scrollToEnd();
       return msg;
    };
@@ -1014,6 +1041,46 @@ export function mountConversation(
       input.placeholder = linked ? onlinePlaceholder : "Not connected to DAWN";
    };
 
+   /* While this session's turn runs the send control reads STOP (Enter still sends: DAWN queues
+      the message behind it). */
+   let turnActive = false;
+   let stopShownAt = 0;
+   const setTurnActive = (on: boolean): void => {
+      if (on === turnActive) return;
+      turnActive = on;
+      if (on) stopShownAt = performance.now();
+      if (!sendHint) return;
+      sendHint.textContent = on ? "STOP" : "ENTER";
+      sendHint.setAttribute("aria-label", on ? "Stop the reply" : "Send message");
+      sendHint.title = on ? "Stop the reply (Esc)" : "";
+      sendHint.classList.toggle("composer-stop", on);
+   };
+   const stopReply = (): void => {
+      if (turnActive) opts.onCancel?.();
+   };
+   const onHintClick = (e: MouseEvent): void => {
+      if (!turnActive) return;
+      e.preventDefault(); // not a submit while it reads STOP
+      /* A click meant for ENTER as the control turned into STOP under the pointer stops nothing. */
+      if (performance.now() - stopShownAt < STOP_ARM_MS) return;
+      stopReply();
+   };
+   /* Seal the reply where it stopped, with a quiet note. DAWN keeps no stopped reply; one that
+      finished as the Stop landed is saved, and its adoption shows it whole and drops the note. */
+   const markStopped = (): void => {
+      const msg = streaming;
+      endReply();
+      /* Stopped before any text came: a reply line of its own, so the stop still shows (and the
+         one a late save would adopt onto). */
+      const target = msg ?? appendMsg("assistant", "");
+      if (!msg) lastFinalized = target;
+      const note = document.createElement("div");
+      note.className = "convo-stopped";
+      note.textContent = "Stopped";
+      target.el.appendChild(note);
+      scrollToEnd(true);
+   };
+
    const setThinking = (t: boolean): void => {
       thinking = t;
       win.classList.toggle("thinking", t);
@@ -1131,6 +1198,15 @@ export function mountConversation(
       const i = adoptOrder.indexOf(key);
       if (i >= 0) adoptOrder.splice(i, 1);
       stampId(msg, messageId);
+      /* DAWN saved it after all (the Stop landed as it finished): not a stopped reply, and the
+         bubble was cut where the Stop was, so it is drawn from the saved reply. */
+      const stoppedNote = msg.el.querySelector(".convo-stopped");
+      if (stoppedNote) {
+         stoppedNote.remove();
+         if (savedText)
+            msg.text = fillAssistantBody(msg.body, parseAttachments(savedText, "assistant"));
+         return true;
+      }
       /* The saved reply is the truth, so the bubble is redrawn from it as a reload would draw it
          when the streamed one is missing something: a tab that took the session over mid-reply (a
          reload) streamed only its end, or missed a visual, or the saved row carries images the
@@ -1170,14 +1246,14 @@ export function mountConversation(
    }): void => {
       if (item.messageId > 0 && renderedIds.has(item.messageId)) return; // already in the transcript
       if (item.role === "assistant" && hasVisual(item.text)) pendingVisuals = []; // that saved reply carries them
-      const msg = appendMsg(item.role, item.text, item.email);
+      const msg = appendMsg(item.role, item.text, item.email, true);
       stampId(msg, item.messageId);
       summon();
    };
 
    const showReply = (text: string, messageId = 0): void => {
       streaming = null;
-      const msg = appendMsg("assistant", takePendingVisuals() + text);
+      const msg = appendMsg("assistant", takePendingVisuals() + text, undefined, true);
       /* Stamp the DB id so the fanned message_appended for this same row dedups against this
          bubble (DAWN persists the reply; the client only renders it). */
       if (messageId > 0) stampId(msg, messageId);
@@ -1190,7 +1266,7 @@ export function mountConversation(
       upstream, so this only carries spoken input. */
    const showUser = (text: string, messageId = 0, email?: EmailRef): void => {
       pendingVisuals = []; // a new (voice or other-viewer) turn: same rule as a typed one
-      const msg = appendMsg("user", text, email);
+      const msg = appendMsg("user", text, email, true);
       if (messageId > 0) stampId(msg, messageId); // Phase-0: dedup the user fan-out echo
       summon();
    };
@@ -1271,6 +1347,7 @@ export function mountConversation(
       chip.classList.remove("on");
       dropEmailRef(); // an email chip belongs to the conversation it was added for
       releaseAllTurns();
+      clearWait(); // its line, placeholder and timer went with the transcript
       clearRefusal();
    };
 
@@ -1280,6 +1357,7 @@ export function mountConversation(
       pendingVisuals = []; // a visual belongs to the transcript it arrived in
       dropEmailRef(); // switching conversations: never carry an email chip into another one
       releaseAllTurns();
+      clearWait(); // its line, placeholder and timer went with the transcript
       clearRefusal();
       if (raf) {
          cancelAnimationFrame(raf);
@@ -1367,6 +1445,85 @@ export function mountConversation(
       visual?: boolean; // a rendered visual's prompt: never restored into the person's draft
    }
    let held: SentTurn[] = [];
+
+   /* A turn of ours waiting for another on the conversation (turn_wait): a quiet line under its
+      bubble says what it waits for, and after a moment offers to stop the other reply (no
+      confirm, as in DAWN's WebUI: the other reply stops, nothing is deleted). A voice turn has no
+      bubble yet (its words come when it starts), so it gets a placeholder one. */
+   let waitLine: HTMLElement | null = null;
+   let waitVoice: Msg | null = null;
+   let waitTimer = 0;
+   let waitKey = "";
+   const dropMsg = (m: Msg): void => {
+      m.el.remove();
+      const i = messages.indexOf(m);
+      if (i >= 0) messages.splice(i, 1);
+      if (messages.length === 0) win.classList.add("empty");
+   };
+   const clearWait = (): void => {
+      window.clearTimeout(waitTimer);
+      waitTimer = 0;
+      waitLine?.remove();
+      waitLine = null;
+      if (waitVoice) dropMsg(waitVoice);
+      waitVoice = null;
+      waitAnchor = null;
+      waitKey = "";
+   };
+   const setTurnWait = (w: TurnWait | null): void => {
+      if (!w) {
+         clearWait();
+         return;
+      }
+      const key = `${w.ref ?? ""}`;
+      if (waitLine && key === waitKey) {
+         /* The same wait: only the stop's progress changes. */
+         const btn = waitLine.querySelector<HTMLButtonElement>(".convo-wait-stop");
+         if (btn) {
+            btn.disabled = w.stopping;
+            btn.textContent = w.stopping ? "Stopping the other reply…" : "Stop the other reply";
+         }
+         return;
+      }
+      clearWait();
+      let anchor: Msg | undefined;
+      if (w.ref !== undefined) {
+         anchor = held.find((t) => t.ref === w.ref)?.msg;
+         if (!anchor) return; // not a turn this view sent (or no longer shown)
+      } else {
+         waitVoice = appendMsg("user", "");
+         waitVoice.body.textContent = "Voice message";
+         waitVoice.el.classList.add("convo-voice-pending");
+         anchor = waitVoice;
+      }
+      waitKey = key;
+      waitAnchor = anchor;
+      const line = document.createElement("div");
+      line.className = "convo-wait";
+      line.setAttribute("role", "status");
+      const text = document.createElement("span");
+      text.className = "convo-wait-text";
+      text.textContent =
+         w.holder === "job"
+            ? "Sends when the background job's turn finishes…"
+            : "Sends when the reply in progress finishes…";
+      line.appendChild(text);
+      anchor.el.appendChild(line);
+      waitLine = line;
+      const offerStop = (): void => {
+         if (waitLine !== line) return;
+         const btn = document.createElement("button");
+         btn.type = "button";
+         btn.className = "convo-wait-stop";
+         btn.textContent = w.stopping ? "Stopping the other reply…" : "Stop the other reply";
+         btn.disabled = w.stopping;
+         btn.addEventListener("click", () => opts.onStopOther?.());
+         line.appendChild(btn);
+      };
+      if (w.stopAfterMs <= 0) offerStop();
+      else waitTimer = window.setTimeout(offerStop, w.stopAfterMs);
+      scrollToEnd(true);
+   };
 
    /* "Message not sent: <why>" above the composer, until the user edits, sends, or dismisses it. */
    let refusalNote: HTMLElement | null = null;
@@ -1809,6 +1966,11 @@ export function mountConversation(
       or move its selection). ArrowUp/ArrowDown recall this conversation's user turns. */
    const onKeyDown = (e: KeyboardEvent): void => {
       if (e.defaultPrevented || e.isComposing) return; // picker owns the key, or mid-IME
+      if (e.key === "Escape" && turnActive) {
+         e.preventDefault();
+         stopReply();
+         return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
          e.preventDefault();
          form.requestSubmit();
@@ -1882,6 +2044,7 @@ export function mountConversation(
    };
 
    form.addEventListener("submit", onSubmit);
+   sendHint?.addEventListener("click", onHintClick);
    input.addEventListener("input", onInput);
    input.addEventListener("focus", engage);
    input.addEventListener("blur", disengage);
@@ -1935,6 +2098,9 @@ export function mountConversation(
 
    return {
       setLinked,
+      setTurnActive,
+      markStopped,
+      setTurnWait,
       setThinking,
       setSpeaking,
       startReply,
@@ -2046,6 +2212,8 @@ export function mountConversation(
          window.clearTimeout(longTimer);
          if (raf) cancelAnimationFrame(raf);
          form.removeEventListener("submit", onSubmit);
+         sendHint?.removeEventListener("click", onHintClick);
+         window.clearTimeout(waitTimer);
          input.removeEventListener("input", onInput);
          input.removeEventListener("keydown", onKeyDown);
          input.removeEventListener("focus", engage);

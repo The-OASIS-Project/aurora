@@ -775,6 +775,8 @@ const login = mountLogin(stage, {
    to it. Focus also recedes the ambient field + dims the chrome (S3.3). */
 const conversation = mountConversation(stage, {
    onSubmit: (text, attachments) => ingest.submit(text, attachments),
+   onCancel: () => ingest.cancelTurn(),
+   onStopOther: () => ingest.stopOtherReply(),
    /* An offline Enter keeps the draft and says why, instead of clearing it into the void. */
    canSubmit: () => dawn.canSendTurn(),
    onSubmitBlocked: () => dawn.notifyUser("Not connected to DAWN - message not sent."),

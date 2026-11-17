@@ -92,7 +92,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     `undo_memory_batch` / `keep_memory_op` / `delete_memory_fact` on what memory learned per
     batch, only the action DAWN marks on each change; a batch's conversation title opens it; the
     conversation on screen shows each of its batches as a quiet chip that opens it in the panel),
-    plus **phone calls**
+    plus **Stop** (`cancel`, this session's own turn only: the composer's STOP or Esc) and
+    **`stop_other_reply`** (turn_wait: stop another turn our waiting message waits for, no confirm,
+    as in DAWN's WebUI), plus **phone calls**
     (`phone_action` answer / reject / hangup on the user's own phone from the call card, and the
     `phone_status` read on connect; DAWN allows only the modem owner; the call audio stays on the
     daemon's hardware), plus the **Mail panel** (`src/email/`, DAWN's `email_client` verbs: the
