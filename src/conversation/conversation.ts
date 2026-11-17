@@ -561,9 +561,16 @@ export function mountConversation(
 
    /* --- attachments (inline images + document chips) ----------------------- */
 
-   const revokeObjectUrls = (): void => {
-      for (const u of objectUrls) URL.revokeObjectURL(u);
+   /* `keep`: bubbles that stay on screen (a message still waiting, put back after a reload),
+      whose images keep their URLs. */
+   const revokeObjectUrls = (keep: HTMLElement[] = []): void => {
+      const kept = new Set(
+         keep.flatMap((el) => [...el.querySelectorAll("img")].map((img) => img.src))
+      );
+      for (const u of objectUrls) if (!kept.has(u)) URL.revokeObjectURL(u);
+      const left = objectUrls.filter((u) => kept.has(u));
       objectUrls.length = 0;
+      objectUrls.push(...left);
    };
    const closeOverlay = (): void => {
       if (!overlay) return;
@@ -1370,7 +1377,8 @@ export function mountConversation(
       }
       streaming = null;
       closeOverlay();
-      revokeObjectUrls(); // the outgoing transcript's image URLs are about to be dropped
+      /* The outgoing transcript's image URLs are about to be dropped, but not a kept message's. */
+      revokeObjectUrls(held.map((t) => t.msg.el));
       scroll.replaceChildren();
       closeToolGroup(); // the group DOM was just wiped; drop the dangling ref
       messages.length = 0;
