@@ -309,8 +309,10 @@ export function mountMemoryPanel(
 
    const replayHeld = (): void => {
       for (const [id, b] of pushedWhileLoading) {
+         /* Within the loaded range, or a batch shown because it was asked for (focusBatch). */
+         const shown = nextBefore === null || id >= nextBefore || pinned.has(id);
          if (!b) drop(id);
-         else if (nextBefore === null || id >= nextBefore) batches.set(id, retitle(b));
+         else if (shown) batches.set(id, retitle(b));
       }
       pushedWhileLoading.clear();
       trim();
@@ -711,7 +713,13 @@ export function mountMemoryPanel(
          loading = null;
          const first = page.before === null;
          if (page.error) {
-            /* What came for the failed page goes with it; trims held for it run now. */
+            /* What came for the failed page goes with it, except updates to a batch shown because
+               it was asked for (its own state); trims held for it run now. */
+            for (const [id, b] of pushedWhileLoading) {
+               if (!pinned.has(id)) continue;
+               if (b) batches.set(id, retitle(b));
+               else drop(id);
+            }
             pushedWhileLoading.clear();
             if (first && !loaded) {
                status = "error";
@@ -740,6 +748,8 @@ export function mountMemoryPanel(
       },
       upsertBatch(pushed) {
          const batch = retitle(pushed);
+         /* The batch a mark asked for, if it's still on its way to the list: its newest state. */
+         if (wanted?.batchId === batch.batchId) wanted = batch;
          if (forThePage(batch.batchId)) {
             pushedWhileLoading.set(batch.batchId, batch);
             return;
@@ -753,6 +763,7 @@ export function mountMemoryPanel(
          }
       },
       removeBatch(batchId) {
+         if (wanted?.batchId === batchId) wanted = null; // gone: nothing to show
          if (forThePage(batchId)) pushedWhileLoading.set(batchId, null);
          if (!batches.has(batchId)) return;
          drop(batchId);

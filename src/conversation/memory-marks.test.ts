@@ -153,6 +153,24 @@ describe("memory marks in the conversation", () => {
       expect(order()).toEqual(["u10", "a11", "m2", "u14", "a15", "m3"]);
    });
 
+   it("a just-recorded batch whose messages aren't on screen isn't drawn after its wait", () => {
+      vi.useFakeTimers();
+      const view = mount();
+      view.loadHistory(history.slice(0, 2)); // messages 10 and 11
+      view.setMemoryMarks([{ batch: batch(6, 5), live: true }]); // read up to 5: not loaded
+      vi.advanceTimersByTime(3500);
+      expect(order()).toEqual(["u10", "a11"]);
+   });
+
+   it("in a fresh chat with no ids yet, a just-recorded batch goes at the end after its wait", () => {
+      vi.useFakeTimers();
+      const view = mount();
+      view.showUser("hi");
+      view.setMemoryMarks([{ batch: batch(6, 5), live: true }]);
+      vi.advanceTimersByTime(3500);
+      expect(order()).toEqual(["u?", "m6"]);
+   });
+
    it("go with the transcript", () => {
       const view = mount();
       view.loadHistory(history);

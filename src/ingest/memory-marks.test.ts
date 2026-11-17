@@ -26,7 +26,7 @@ function tracker(sent = true) {
    const asked: Array<[number, number | null]> = [];
    let drawn: MemoryMark[] = [];
    const marks = new MemoryMarks(
-      (c, before) => (asked.push([c, before]), sent),
+      (c, before) => (asked.push([c, before]), sent ? asked.length : 0),
       (m) => (drawn = m)
    );
    const ids = (): Array<[number, boolean]> => drawn.map((m) => [m.batch.batchId, m.live]);
@@ -94,6 +94,26 @@ describe("the marks for the conversation on screen", () => {
       t.marks.show(8); // opened another before the first page came
       t.page({ conversationId: 7, batches: [batch(5)] });
       expect(t.ids()).toEqual([]);
+   });
+
+   it("a second reading (a reconnect) doesn't run beside the first: its pages alone chain", () => {
+      const t = tracker();
+      t.marks.show(7); // request 1
+      t.marks.refresh(); // request 2: the first reading's pages now change nothing
+      t.page({ batches: [batch(100)], nextBefore: 100, request: 1 });
+      expect(t.asked).toHaveLength(2); // the old reading asked no further page
+      for (let r = 2; r < 7; r++)
+         t.page({ batches: [batch(100 - r)], nextBefore: 100 - r, request: r });
+      expect(t.asked).toHaveLength(6); // the new one read its five pages
+   });
+
+   it("a refused page lets the pushes of the conversation it was for be drawn", () => {
+      const t = tracker();
+      t.marks.show(7); // request 1, still on its way
+      t.marks.show(8); // request 2
+      t.marks.failed(2);
+      t.marks.push(batch(9, 8));
+      expect(t.ids()).toEqual([[9, true]]);
    });
 
    it("a new chat clears the marks", () => {

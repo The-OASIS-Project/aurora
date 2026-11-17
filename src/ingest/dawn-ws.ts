@@ -224,7 +224,7 @@ type MemoryReq =
    | { kind: "undo"; batchId: number; opId: number | null }
    | { kind: "keep"; batchId: number; opId: number }
    | { kind: "forget"; factId: number }
-   | { kind: "marks"; conversationId: number };
+   | { kind: "marks"; id: number; conversationId: number };
 
 /* A Learned-list page (DAWN allows up to 50). */
 const MEMORY_BATCH_PAGE = 20;
@@ -2777,7 +2777,8 @@ export class DawnIngest implements Ingest {
             if (p.conversation_id != null) {
                this.marks.page({
                   conversationId: rowId(p.conversation_id) ?? 0,
-                  ...parseMemoryBatchPage(p)
+                  ...parseMemoryBatchPage(p),
+                  ...(asked?.kind === "marks" ? { request: asked.id } : {})
                });
                break;
             }
@@ -4509,14 +4510,20 @@ export class DawnIngest implements Ingest {
    }
 
    /* A page of one conversation's batches, for the marks drawn in it (memory-marks.ts). */
-   private listConversationBatches(conversationId: number, before: number | null): boolean {
-      if (!this.hasFeature("memory_batches") || conversationId <= 0) return false;
+   private listConversationBatches(conversationId: number, before: number | null): number {
+      if (!this.hasFeature("memory_batches") || conversationId <= 0) return 0;
       const payload: Record<string, number> = {
          conversation_id: conversationId,
          limit: MEMORY_BATCH_PAGE
       };
       if (before !== null && before > 0) payload.before_batch_id = before;
-      return this.sendMemory("list_memory_batches", payload, { kind: "marks", conversationId });
+      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
+      const sent = this.sendMemory("list_memory_batches", payload, {
+         kind: "marks",
+         id,
+         conversationId
+      });
+      return sent ? id : 0;
    }
 
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
@@ -4590,7 +4597,7 @@ export class DawnIngest implements Ingest {
             ? p.message
             : "DAWN couldn't do this right now. Try again in a moment.";
       if (pending.kind === "marks") {
-         this.marks.failed(pending.conversationId);
+         this.marks.failed(pending.id);
          return true;
       }
       if (pending.kind === "list") {

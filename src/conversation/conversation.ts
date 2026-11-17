@@ -439,7 +439,9 @@ export function mountConversation(
                continue;
             }
          }
-         if (!anchor && !live) continue; // its messages aren't on screen
+         /* No message of its own on screen: not drawn, unless nothing on screen has an id yet (a
+            fresh chat whose replies aren't adopted), where the end is where it happened. */
+         if (!anchor && (!live || index.rows.length > 0)) continue;
          /* The same batch keeps its element; a changed one is drawn anew. */
          const had = markEls.get(batch.batchId);
          const mark = had && had.batch === batch ? had : { batch, el: buildMark(batch) };
