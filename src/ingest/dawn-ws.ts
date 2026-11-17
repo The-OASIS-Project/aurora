@@ -4372,7 +4372,12 @@ export class DawnIngest implements Ingest {
          this.settlePrivateCreate(false);
          this.discardNextCreate = true; // its new_conversation_response must not steal the view
       }
-      const back = this.convId;
+      /* The way back is the conversation actually on screen: opened while another opened one is
+         still unanswered (and still the active id), it's that one's way back. */
+      const waiting = [...this.convLoadsOwed]
+         .reverse()
+         .find((l) => l.back !== undefined && l.id === this.convId);
+      const back = waiting ? waiting.back : this.convId;
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       /* Opening another conversation ends a switch to local still waiting for the model list:
