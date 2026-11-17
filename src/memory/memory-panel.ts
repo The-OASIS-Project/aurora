@@ -196,6 +196,10 @@ export function mountMemoryPanel(
       when it lands (newer than the page), dropped with it if it fails. null = removed. */
    const pushedWhileLoading = new Map<number, MemoryBatch | null>();
    let nextBefore: number | null = null;
+   /* Every page asked for on this connection, oldest first (DAWN answers in order). Each reply
+      settles the oldest; one asked before the panel let go of its list (hidden meanwhile) is no
+      longer wanted, and its reply changes nothing. */
+   let asked: Array<{ before: number | null; wanted: boolean }> = [];
    /* How many batches the pages brought: the list keeps at most that many (newest first), so new
       batches pushed over days push the oldest back behind "Show older" rather than piling up. */
    let paged = 0;
@@ -233,6 +237,7 @@ export function mountMemoryPanel(
          return;
       }
       loading = before === undefined ? "first" : "older";
+      asked.push({ before: before ?? null, wanted: true });
       if (before === undefined) status = "idle";
       footNote = "";
       render();
@@ -242,6 +247,7 @@ export function mountMemoryPanel(
    const unload = (): void => {
       loaded = false;
       loading = null;
+      for (const a of asked) a.wanted = false; // their replies still come, and settle nothing
       batches.clear();
       expanded.clear();
       pushedWhileLoading.clear();
@@ -276,8 +282,21 @@ export function mountMemoryPanel(
       }
       const isNew = !batches.has(batch.batchId);
       batches.set(batch.batchId, batch);
-      if (isNew) trim();
+      /* While an older page is on its way, its cursor must hold: trim when it lands. */
+      if (isNew && loading !== "older") trim();
       return isNew;
+   };
+
+   /* What came for a page while it was on its way, now that the page set the loaded range: a
+      removal everywhere, an update only for a batch within the range (an older one is left to its
+      own page). Then the list is trimmed back to what the pages brought. */
+   const replayHeld = (): void => {
+      for (const [id, b] of pushedWhileLoading) {
+         if (!b) drop(id);
+         else if (nextBefore === null || id >= nextBefore) batches.set(id, b);
+      }
+      pushedWhileLoading.clear();
+      trim();
    };
 
    /* A push for what the page on its way will hold: that page's range (the first page holds
@@ -432,6 +451,9 @@ export function mountMemoryPanel(
          conv.textContent = name;
          conv.title = `${name}\nOpen this conversation`; // the whole title when it's cut short
          conv.setAttribute("aria-label", `Open the conversation: ${name}`);
+         /* Opening it moves the session: not while the link is down (it would point turns at a
+            conversation whose transcript never loaded). */
+         conv.disabled = !online;
          conv.addEventListener("click", () => opts.open(convId));
          titleRow.append(conv, when);
          toggle.append(summary);
@@ -655,22 +677,21 @@ export function mountMemoryPanel(
          ensureLoaded();
       },
       setPage(page: MemoryBatchPage) {
-         const was = loading;
+         /* The oldest page asked: this reply's. One no longer wanted (or a reply nothing asked
+            for) changes nothing, and leaves the page that is wanted still loading. */
+         const mine = asked.shift();
+         if (!mine?.wanted || mine.before !== page.before) return;
          loading = null;
-         /* Hidden meanwhile: it's read again when next shown. */
-         if (!shownNow() || !was) {
-            pushedWhileLoading.clear();
-            return;
-         }
          const first = page.before === null;
          if (page.error) {
-            /* What came for the failed page goes with it. */
+            /* What came for the failed page goes with it; trims held for it run now. */
             pushedWhileLoading.clear();
             if (first && !loaded) {
                status = "error";
                errorText = page.error;
             } else {
                footNote = page.error;
+               trim();
             }
             render();
             return;
@@ -685,12 +706,7 @@ export function mountMemoryPanel(
          for (const b of page.batches) batches.set(b.batchId, b);
          paged += page.batches.length;
          nextBefore = page.nextBefore;
-         /* What came meanwhile for this page is newer than it. */
-         for (const [id, b] of pushedWhileLoading) {
-            if (b) batches.set(id, b);
-            else drop(id);
-         }
-         pushedWhileLoading.clear();
+         replayHeld();
          render();
       },
       upsertBatch(batch) {
@@ -720,6 +736,11 @@ export function mountMemoryPanel(
                continue;
             batches.set(id, { ...b, conversationTitle: title });
             changed = true;
+         }
+         /* And what's held for a page, so its replay can't bring the old title back. */
+         for (const [id, b] of pushedWhileLoading) {
+            if (b && b.conversationId === conversationId && typeof b.conversationTitle === "string")
+               pushedWhileLoading.set(id, { ...b, conversationTitle: title });
          }
          if (changed) renderIfShown();
       },
@@ -757,6 +778,7 @@ export function mountMemoryPanel(
          online = false;
          if (loading === "first" || !loaded) status = "offline";
          loading = null;
+         asked = []; // the closed socket answers nothing more
          pushedWhileLoading.clear();
          busy.clear();
          keepBefore.clear();

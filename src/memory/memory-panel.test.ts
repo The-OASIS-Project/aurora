@@ -342,6 +342,79 @@ describe("the Learned list", () => {
       expect(el.querySelector(".memory-op .memory-tag")?.textContent).toBe("Undone");
    });
 
+   it("a conversation title waits for the link before it opens anything", () => {
+      const { panel, el, calls } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      panel.setPage({
+         before: null,
+         batches: [batch(5, [op(1)], { conversationTitle: "Trip plans" })],
+         nextBefore: null,
+         error: null
+      });
+      panel.linkDown();
+      const title = el.querySelector<HTMLButtonElement>(".memory-batch-conv")!;
+      expect(title.disabled).toBe(true);
+      title.click();
+      expect(calls.filter((c) => c.startsWith("open"))).toEqual([]);
+   });
+
+   it("a batch pushed while an older page loads doesn't strand the page's boundary", () => {
+      const { panel, el, button, calls } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      const range = (from: number, n: number) =>
+         Array.from({ length: n }, (_, i) => batch(from - i, [op(from - i)]));
+      panel.setPage({ before: null, batches: range(100, 20), nextBefore: 81, error: null });
+      button("Show older")!.click(); // asks for what's older than 81
+      panel.upsertBatch(batch(101, [op(500)])); // shown at once, but nothing evicted yet
+      panel.setPage({ before: 81, batches: range(80, 20), nextBefore: 61, error: null });
+      const ids = [...el.querySelectorAll(".memory-batch")].length;
+      expect(ids).toBe(40); // 101..62: the oldest (61) went back behind Show older
+      button("Show older")!.click();
+      expect(calls.at(-1)).toBe("list:62"); // and the next page starts right at it
+   });
+
+   it("a reply to a page asked before the panel was hidden doesn't settle the new one", () => {
+      const { panel, el, button } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      panel.setPage({ before: null, batches: [batch(30, [op(1)])], nextBefore: 30, error: null });
+      button("Show older")!.click();
+      panel.setVisible(false);
+      panel.setVisible(true); // a fresh first page is asked for
+      panel.setPage({ before: 30, batches: [batch(29, [op(2)])], nextBefore: null, error: null });
+      expect(el.textContent).toContain("Loading…"); // the stale older page changed nothing
+      panel.setPage({ before: null, batches: [batch(31, [op(3)])], nextBefore: null, error: null });
+      expect(el.querySelectorAll(".memory-batch")).toHaveLength(1);
+   });
+
+   it("a push held for an older page is kept only within what that page brought", () => {
+      const { panel, el, button } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      panel.setPage({ before: null, batches: [batch(40, [op(1)])], nextBefore: 30, error: null });
+      button("Show older")!.click();
+      panel.upsertBatch(batch(10, [op(2)])); // older than the page will reach
+      panel.setPage({ before: 30, batches: [batch(29, [op(3)])], nextBefore: 21, error: null });
+      expect(el.querySelectorAll(".memory-batch")).toHaveLength(2); // 40 and 29, not 10
+   });
+
+   it("a rename reaches a push held for a page, so the old title can't come back", () => {
+      const { panel, el } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true); // the first page is on its way
+      panel.upsertBatch(batch(5, [op(1)], { conversationTitle: "Trip plans" }));
+      panel.renameConversation(7, "Summer trip");
+      panel.setPage({
+         before: null,
+         batches: [batch(5, [op(1)], { conversationTitle: "Trip plans" })],
+         nextBefore: null,
+         error: null
+      });
+      expect(el.querySelector(".memory-batch-conv")?.textContent).toBe("Summer trip");
+   });
+
    it("hiding lets go of the list; showing reads it fresh", () => {
       const { panel, el, calls } = mounted();
       panel.setAvailable(true);
