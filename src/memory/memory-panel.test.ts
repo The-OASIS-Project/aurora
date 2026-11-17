@@ -499,6 +499,25 @@ describe("the Learned list", () => {
       expect(button("Show older")).toBeDefined(); // batch 81 waits behind it again
    });
 
+   it("a late Undo reply from before a reconnect doesn't end a newer Keep", () => {
+      const { panel, el, open } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      const page = batch(5, [op(1), op(2, { op: "dropped", action: "keep" })]);
+      panel.setPage({ before: null, batches: [page], nextBefore: null, error: null, request: 1 });
+      open();
+      el.querySelector<HTMLButtonElement>(".action-undo")!.click();
+      panel.linkDown();
+      panel.linkUp();
+      panel.setPage({ before: null, batches: [page], nextBefore: null, error: null, request: 2 });
+      open();
+      el.querySelector<HTMLButtonElement>(".action-keep")!.click();
+      /* DAWN's worker answers the old Undo on the new connection. */
+      panel.actionDone({ kind: "undo", batchId: 5, opId: 1, ok: true });
+      const keep = el.querySelector<HTMLButtonElement>(".action-keep")!;
+      expect([keep.textContent, keep.disabled]).toEqual(["Keeping…", true]);
+   });
+
    it("points out the row a Keep stored", () => {
       const { panel, el, open } = mounted();
       panel.setAvailable(true);

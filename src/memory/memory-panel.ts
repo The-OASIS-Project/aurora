@@ -771,13 +771,18 @@ export function mountMemoryPanel(
          if (result.kind === "forget") {
             busy.delete(forgetKey(result.factId));
          } else {
-            /* DAWN runs one Undo or Keep per user at a time, and so does this panel: whatever the
-               reply names, it ends the one that was running. */
-            for (const k of [...busy]) if (!k.startsWith("forget:")) busy.delete(k);
-            slotBusy = false;
+            /* A reply ends the action it names: a late one (an Undo started before a reconnect,
+               answered after it) can't end a newer action. One that names nothing usable (DAWN
+               sent no ids) ends the one running, as DAWN runs one per user at a time. */
             const key = busyKey(result.kind, result.batchId, result.opId);
+            const named = result.batchId > 0 && (result.kind === "undo" || result.opId > 0);
+            for (const k of [...busy]) {
+               if (k.startsWith("forget:")) continue;
+               if (named ? k === key : k.startsWith(`${result.kind}:`)) busy.delete(k);
+            }
+            slotBusy = [...busy].some((k) => !k.startsWith("forget:"));
             const before = keepBefore.get(key);
-            keepBefore.clear();
+            keepBefore.delete(key);
             /* Point out the row a Keep stored: one that's new in the batch since the click. */
             if (result.kind === "keep" && result.ok && result.factId !== null && before) {
                const kept = batches
