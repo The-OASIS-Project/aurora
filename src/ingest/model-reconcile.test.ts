@@ -569,6 +569,16 @@ describe("opening a conversation that's gone", () => {
       expect(c.ing.convId).toBe(7);
    });
 
+   it("opened twice, the first opens and the second is refused: it stays on that one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.loadConversation(9); // a double-click
+      c.frame("load_conversation_response", { success: true, conversation_id: 9, messages: [] });
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(9);
+   });
+
    it("leaves a view that moved on since alone", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.ing.convId = 7;

@@ -5637,6 +5637,9 @@ export class DawnIngest implements Ingest {
          return;
       }
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      /* It's on screen now: the way back for any opened load still unanswered (the same one
+         opened twice, say, the second refused). */
+      for (const l of this.convLoadsOwed) if (l.back !== undefined) l.back = cid;
       if (this.reanchoring) {
          /* Reconnect re-anchor: DAWN's per-connection active conversation is now
             restored, so the next turn (typed or voice) is tagged correctly. Do NOT
