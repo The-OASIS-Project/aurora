@@ -814,11 +814,27 @@ describe("with request_refs, model requests are settled by the request they name
       c.sent.length = 0;
       c.ing.pendingPingSeq = 5;
       c.frame("pong", { seq: 5 });
-      const types = c.sent.map((m) => m.type).filter((t) => t !== "get_config");
-      expect(types).toEqual(["load_conversation", "set_session_llm"]);
-      expect(c.sent.find((m) => m.type === "set_session_llm")?.payload).toMatchObject({
-         model: "claude-opus-5-5"
+      const load = c.sent.find((m) => m.type === "load_conversation");
+      expect(load?.payload).toMatchObject({ conversation_id: 42 });
+      expect(c.sent.map((m) => m.type)).not.toContain("set_session_llm"); // not before the load
+      /* The load restores the conversation's own model; then the choice goes, on it. */
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 42,
+         messages: [],
+         llm_settings: { llm_type: "cloud", cloud_provider: "claude", model: "claude-sonnet-5-5" },
+         req: load?.payload?.req
       });
+      const write = c.sent.find((m) => m.type === "set_session_llm");
+      expect(write?.payload).toMatchObject({ model: "claude-opus-5-5" });
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-opus-5-5",
+         req: write?.payload?.req
+      });
+      expect(c.ing.llm.model).toBe("claude-opus-5-5"); // the panel shows what DAWN runs
    });
 
    it("an open refused while a refused resume waits puts the resume back", () => {

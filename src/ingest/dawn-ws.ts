@@ -1286,6 +1286,8 @@ export class DawnIngest implements Ingest {
       restore?: boolean;
       /* A refused load this open set aside (retrySetAside): refused too, it's put back. */
       retry?: { id: number; purpose: LoadPurpose };
+      /* A model change to send once this load's reply has been applied (choiceAfterRetry). */
+      then?: Record<string, unknown>;
    }> = [];
    /* With request_refs (DAWN #116) each get_config, set_session_llm and load_conversation carries
       a `req` (the flags arrive with the config frame, so a connection's first requests don't):
@@ -1308,6 +1310,8 @@ export class DawnIngest implements Ingest {
    /* The refused load an open of the user's set aside (taken by send onto the open's entry): if
       the open is refused too, it waits to resend again. */
    private retrySetAside: { id: number; purpose: LoadPurpose } | null = null;
+   /* The choice the load being sent carries (taken by send). */
+   private loadThen: Record<string, unknown> | null = null;
    /* The load being sent replays an open a link loss interrupted: refused, it returns to the
       conversation on screen AND restores that one's server context (the new session may not hold
       it). Set by the session handler, taken by send. */
@@ -2026,9 +2030,11 @@ export class DawnIngest implements Ingest {
       if (retry && this.convId === retry.id) {
          if (retry.purpose === "resume") this.resumingStored = true;
          if (retry.purpose === "reanchor") this.reanchoring = true;
+         /* The user's choice made meanwhile goes once this load's reply has applied the
+            conversation's own settings (so its echo is the current one), on the conversation. */
+         this.loadThen = choice;
          this.send({ type: "load_conversation", payload: { conversation_id: retry.id } });
-         /* The user's choice made meanwhile, now that a conversation holds it. */
-         if (choice) this.send({ type: "set_session_llm", payload: choice });
+         this.loadThen = null;
       }
       /* Only re-assert "connected" if we had told the UI the link went stale; a healthy
          heartbeat stays quiet so the chip does not churn every 10s. */
@@ -2767,6 +2773,8 @@ export class DawnIngest implements Ingest {
             /* A reply naming a request this connection doesn't owe (none should) opens nothing. */
             if (!load && typeof p.req === "string") break;
             this.onConversationLoaded(p, load);
+            /* A choice the user made while this load waited to resend: now, after it. */
+            if (load?.then) this.send({ type: "set_session_llm", payload: load.then });
             /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
                it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
             this.syncLoadedLocalModel();
@@ -5978,6 +5986,7 @@ export class DawnIngest implements Ingest {
                it). Its transcript isn't drawn yet, so the next connect loads it in full; a turn
                meanwhile names it and runs there. */
             this.loadRetry = { id: entry.id, purpose: entry.purpose ?? "reload" };
+            if (entry.then) this.choiceAfterRetry = entry.then; // for the next retry
             this.resumingStored = false;
             this.reanchoring = false;
          }
@@ -6843,7 +6852,8 @@ export class DawnIngest implements Ingest {
             req,
             purpose,
             restore: this.loadRestores || undefined,
-            retry: purpose === "user" ? (this.retrySetAside ?? undefined) : undefined
+            retry: purpose === "user" ? (this.retrySetAside ?? undefined) : undefined,
+            then: this.loadThen ?? undefined
          });
          if (purpose === "user") this.retrySetAside = null;
       }
