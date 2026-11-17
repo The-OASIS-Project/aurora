@@ -424,6 +424,21 @@ describe("the Learned list", () => {
       expect(el.querySelectorAll(".memory-batch")).toHaveLength(0);
    });
 
+   it("a rename that overtakes the page on its way still wins over the page's older title", () => {
+      const { panel, el } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true); // the first page is on its way
+      panel.renameConversation(7, "Summer trip"); // the notice overtakes the queued page
+      panel.setPage({
+         before: null,
+         batches: [batch(5, [op(1)], { conversationTitle: "Trip plans" })],
+         nextBefore: null,
+         error: null,
+         request: 1
+      });
+      expect(el.querySelector(".memory-batch-conv")?.textContent).toBe("Summer trip");
+   });
+
    it("a push held for an older page is kept only within what that page brought", () => {
       const { panel, el, button } = mounted();
       panel.setAvailable(true);

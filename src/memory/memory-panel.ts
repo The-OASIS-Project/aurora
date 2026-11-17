@@ -196,6 +196,9 @@ export function mountMemoryPanel(
    /* Pushes that came while a page was on its way, for what that page will hold: applied over it
       when it lands (newer than the page), dropped with it if it fails. null = removed. */
    const pushedWhileLoading = new Map<number, MemoryBatch | null>();
+   /* Renames that came while a page was on its way, by conversation: DAWN sends the notice at
+      once but queues the page, so a page built before the rename can land after it. */
+   const renamedWhileLoading = new Map<number, string>();
    let nextBefore: number | null = null;
    /* Every page asked for on this connection, oldest first (DAWN answers in order). Each reply
       settles the oldest; one asked before the panel let go of its list (hidden meanwhile) is no
@@ -250,6 +253,7 @@ export function mountMemoryPanel(
       loaded = false;
       loading = null;
       for (const a of asked) a.wanted = false; // their replies still come, and settle nothing
+      renamedWhileLoading.clear();
       batches.clear();
       expanded.clear();
       pushedWhileLoading.clear();
@@ -692,6 +696,7 @@ export function mountMemoryPanel(
          if (page.error) {
             /* What came for the failed page goes with it; trims held for it run now. */
             pushedWhileLoading.clear();
+            renamedWhileLoading.clear();
             if (first && !loaded) {
                status = "error";
                errorText = page.error;
@@ -709,7 +714,17 @@ export function mountMemoryPanel(
             status = "idle";
             paged = 0;
          }
-         for (const b of page.batches) batches.set(b.batchId, b);
+         for (const b of page.batches) {
+            const renamed =
+               b.conversationId !== null ? renamedWhileLoading.get(b.conversationId) : undefined;
+            batches.set(
+               b.batchId,
+               renamed !== undefined && typeof b.conversationTitle === "string"
+                  ? { ...b, conversationTitle: renamed }
+                  : b
+            );
+         }
+         renamedWhileLoading.clear();
          paged += page.batches.length;
          nextBefore = page.nextBefore;
          replayHeld();
@@ -743,7 +758,8 @@ export function mountMemoryPanel(
             batches.set(id, { ...b, conversationTitle: title });
             changed = true;
          }
-         /* And what's held for a page, so its replay can't bring the old title back. */
+         /* And the page on its way, and what's held for it, so neither brings the old title back. */
+         if (loading) renamedWhileLoading.set(conversationId, title);
          for (const [id, b] of pushedWhileLoading) {
             if (b && b.conversationId === conversationId && typeof b.conversationTitle === "string")
                pushedWhileLoading.set(id, { ...b, conversationTitle: title });
@@ -786,6 +802,7 @@ export function mountMemoryPanel(
          loading = null;
          asked = []; // the closed socket answers nothing more
          pushedWhileLoading.clear();
+         renamedWhileLoading.clear();
          busy.clear();
          keepBefore.clear();
          slotBusy = false;
