@@ -804,6 +804,40 @@ describe("with request_refs, model requests are settled by the request they name
       expect(c.ing.reanchoring).toBe(true);
    });
 
+   it("a model chosen while a refused resume waits is sent again after the resume", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // no conversation attached yet
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      const types = c.sent.map((m) => m.type).filter((t) => t !== "get_config");
+      expect(types).toEqual(["load_conversation", "set_session_llm"]);
+      expect(c.sent.find((m) => m.type === "set_session_llm")?.payload).toMatchObject({
+         model: "claude-opus-5-5"
+      });
+   });
+
+   it("an open refused while a refused resume waits puts the resume back", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.loadConversation(9); // llm-2
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(42);
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 42
+      });
+   });
+
    it("a reply settles the request it names, not the oldest", () => {
       const c = refs();
       c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1

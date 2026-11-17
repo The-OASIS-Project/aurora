@@ -1284,6 +1284,8 @@ export class DawnIngest implements Ingest {
       /* Refused, going back must also restore that conversation's server context (a reconnect's
          replay of an interrupted open; see loadRestores). */
       restore?: boolean;
+      /* A refused load this open set aside (retrySetAside): refused too, it's put back. */
+      retry?: { id: number; purpose: LoadPurpose };
    }> = [];
    /* With request_refs (DAWN #116) each get_config, set_session_llm and load_conversation carries
       a `req` (the flags arrive with the config frame, so a connection's first requests don't):
@@ -1299,6 +1301,13 @@ export class DawnIngest implements Ingest {
    /* A resume, re-anchor or reload DAWN refused while it couldn't check the login: sent again,
       the same way, once DAWN answers a ping. */
    private loadRetry: { id: number; purpose: LoadPurpose } | null = null;
+   /* A model change the user made while a refused load waits to resend: with no conversation
+      attached DAWN doesn't save it, and the load would put the conversation's own model back, so
+      it goes again right after that load (DAWN answers in order). */
+   private choiceAfterRetry: Record<string, unknown> | null = null;
+   /* The refused load an open of the user's set aside (taken by send onto the open's entry): if
+      the open is refused too, it waits to resend again. */
+   private retrySetAside: { id: number; purpose: LoadPurpose } | null = null;
    /* The load being sent replays an open a link loss interrupted: refused, it returns to the
       conversation on screen AND restores that one's server context (the new session may not hold
       it). Set by the session handler, taken by send. */
@@ -2012,10 +2021,14 @@ export class DawnIngest implements Ingest {
          then falls back quietly), a reconnect's restore without redrawing, a reload redrawn. */
       const retry = this.loadRetry;
       this.loadRetry = null;
+      const choice = this.choiceAfterRetry;
+      this.choiceAfterRetry = null;
       if (retry && this.convId === retry.id) {
          if (retry.purpose === "resume") this.resumingStored = true;
          if (retry.purpose === "reanchor") this.reanchoring = true;
          this.send({ type: "load_conversation", payload: { conversation_id: retry.id } });
+         /* The user's choice made meanwhile, now that a conversation holds it. */
+         if (choice) this.send({ type: "set_session_llm", payload: choice });
       }
       /* Only re-assert "connected" if we had told the UI the link went stale; a healthy
          heartbeat stays quiet so the chip does not churn every 10s. */
@@ -4469,7 +4482,10 @@ export class DawnIngest implements Ingest {
 
    loadConversation(id: number): void {
       if (id <= 0) return;
-      this.loadRetry = null; // an open of the user's supersedes a refused load still to resend
+      /* An open of the user's supersedes a refused load still to resend, but keeps it aside: refused
+         too, the open goes back to that conversation, which still needs its load. */
+      this.retrySetAside = this.loadRetry;
+      this.loadRetry = null;
       /* Finalize any in-flight streamed bubble before switching id. Set convId optimistically so
          a text sent before the response is tagged to the right conversation (M2);
          load_conversation_response confirms it. */
@@ -5736,7 +5752,12 @@ export class DawnIngest implements Ingest {
    /* load_conversation_response: the conversation opened (or why it couldn't). */
    private onConversationLoaded(
       p: Record<string, unknown>,
-      load?: { id: number; back?: number; restore?: boolean }
+      load?: {
+         id: number;
+         back?: number;
+         restore?: boolean;
+         retry?: { id: number; purpose: LoadPurpose };
+      }
    ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
@@ -5909,10 +5930,17 @@ export class DawnIngest implements Ingest {
       DAWN's session never left, unless the view has moved on since. A reconnect's replay also
       rebuilds that conversation's server context (a fresh session holds none), without redrawing
       it; or goes to a fresh chat when none was on screen. */
-   private returnFromOpen(load: { id: number; back?: number; restore?: boolean }): void {
+   private returnFromOpen(load: {
+      id: number;
+      back?: number;
+      restore?: boolean;
+      retry?: { id: number; purpose: LoadPurpose };
+   }): void {
       if (load.back !== undefined && this.convId === load.id) {
          this.convId = load.back;
          this.sinks.conversationList.setActive(load.back);
+         /* Back to a conversation whose own refused load was set aside: it still needs it. */
+         if (load.retry && load.retry.id === load.back) this.loadRetry = load.retry;
          if (load.restore) {
             if (load.back > 0) {
                this.reanchoring = true;
@@ -6792,6 +6820,10 @@ export class DawnIngest implements Ingest {
          const fields = (msg as { payload?: Record<string, unknown> }).payload ?? {};
          const chosen = fields.type !== "reset" && fields.from_restore !== true;
          this.llmWritesOwed.push({ rev: this.llmRev, req, chosen }); // see llmWritesOwed
+         if (chosen && this.loadRetry) {
+            const { req: _req, ...choice } = fields;
+            this.choiceAfterRetry = choice;
+         }
       }
       if (type === "load_conversation") {
          const id = Number(
@@ -6810,8 +6842,10 @@ export class DawnIngest implements Ingest {
             back: this.loadBack,
             req,
             purpose,
-            restore: this.loadRestores || undefined
+            restore: this.loadRestores || undefined,
+            retry: purpose === "user" ? (this.retrySetAside ?? undefined) : undefined
          });
+         if (purpose === "user") this.retrySetAside = null;
       }
       this.ws.send(JSON.stringify(msg));
       return true;
