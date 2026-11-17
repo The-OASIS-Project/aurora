@@ -739,6 +739,89 @@ export interface MemoryForgetSink {
    ): void;
 }
 
+/* What memory learned in one consolidation of a conversation (a batch: DAWN's memory_batch,
+   with `memory_batches`). Every string is DAWN's record of the user's memory, some of it
+   written by the model (a `reason` with reasonBy "model"), so a view binds it all via
+   textContent. Enum fields stay plain strings: DAWN adds kinds, and an unknown one must still
+   render. */
+export interface MemoryBatchOp {
+   opId: number;
+   /* added · reinforced · merged · replaced · closed · linked · pref_set · dropped · deferred ·
+      suggested_forget */
+   op: string;
+   /* applied · proposed · undone · stale · kept · consumed · expired */
+   status: string;
+   outside: boolean;
+   /* web · email · research · messaging · document · calendar · mcp · other (null: none) */
+   outsideFrom: string | null;
+   factId: number | null;
+   /* The item when recorded; null for a candidate dropped because the user forgot it. */
+   text: string | null;
+   targetText: string | null;
+   /* current · superseded · gone (null: the op has no counterpart) */
+   targetStatus: string | null;
+   /* On the kept fact's row: what this batch merged into it. */
+   sources: Array<{ factId: number | null; text: string | null }>;
+   reason: string | null;
+   reasonBy: "model" | "dawn" | null;
+   /* What DAWN lets the user do with the op (server-computed): draw only that button. */
+   action: "undo" | "keep" | "forget" | null;
+}
+
+export interface MemoryBatch {
+   batchId: number;
+   /* The conversation whose messages hold afterMessageId (null: none). */
+   conversationId: number | null;
+   /* Its title as DAWN has it now: undefined from a DAWN that doesn't send one, null when there's
+      none to show (no conversation, or it's gone). */
+   conversationTitle?: string | null;
+   afterMessageId: number;
+   createdAt: number; // epoch seconds
+   /* applied · partial · undone */
+   status: string;
+   outside: boolean;
+   outsideFrom: string | null;
+   counts: Record<string, number>;
+   ops: MemoryBatchOp[];
+}
+
+/* One page of the Learned list (list_memory_batches, newest first). */
+export interface MemoryBatchPage {
+   /* The page's cursor as asked (null: the first page). */
+   before: number | null;
+   batches: MemoryBatch[];
+   /* Where the next page starts (null: no more). */
+   nextBefore: number | null;
+   error: string | null;
+}
+
+/* The end of an Undo, Keep or Forget (each runs on a DAWN worker and can take seconds). `ok`
+   false = nothing (or not everything) was done; the ingest has already said why. For a Keep,
+   `factId` is the fact it stored (the new row to point out). */
+export type MemoryActionResult =
+   | { kind: "undo"; batchId: number; opId: number | null; ok: boolean }
+   | { kind: "keep"; batchId: number; opId: number; ok: boolean; factId: number | null }
+   | { kind: "forget"; factId: number; ok: boolean };
+
+/* The Memory panel's Learned list. */
+export interface MemoryBatchesSink {
+   /* This DAWN records batches (memory_batches), learned on every connect. */
+   setAvailable(on: boolean): void;
+   /* A page asked for with Ingest.listMemoryBatches. */
+   setPage(page: MemoryBatchPage): void;
+   /* A batch recorded or changed (an undo, a keep, a forgotten fact): replace it by id. */
+   upsertBatch(batch: MemoryBatch): void;
+   /* A forget removed the batch (its conversation's memories forgotten). */
+   removeBatch(batchId: number): void;
+   /* A conversation's title changed: the batches it heads show the new one. */
+   renameConversation(conversationId: number, title: string): void;
+   actionDone(result: MemoryActionResult): void;
+   /* The socket dropped: a page or action in flight won't be answered. */
+   linkDown(): void;
+   /* A new connection: what changed meanwhile comes from a fresh first page. */
+   linkUp(): void;
+}
+
 /* The sinks ingest fans out to. */
 export interface IngestSinks {
    store: Store;
@@ -756,6 +839,7 @@ export interface IngestSinks {
    notifications: NotificationsSink;
    conversationList: ConversationListSink;
    memoryForget: MemoryForgetSink;
+   memoryBatches: MemoryBatchesSink;
 }
 
 /* One document on an outgoing turn, for a DAWN taking `document_attachments` (it builds the
@@ -920,6 +1004,16 @@ export interface Ingest {
       it behind a named confirm reached from a deliberate gesture, never a frame handler.
       Progress + the result surface as a notice (the reply can take ~2 min). */
    forgetConversationMemories(id: number): void;
+   /* --- The Memory panel's Learned list (memory_batches). The read pages newest first from
+      `before` (absent: the newest). The writes are the user's own memory, each from a button:
+      undo one op, or every op of a batch (opId null; the caller confirms that one); keep a
+      candidate memory set aside; forget a fact memory suggested forgetting (DESTRUCTIVE: the
+      caller confirms it). Each answers through MemoryBatchesSink.actionDone. All return false
+      when nothing was sent (not connected, or this DAWN doesn't record batches). */
+   listMemoryBatches(before?: number): boolean;
+   undoMemoryBatch(batchId: number, opId: number | null): boolean;
+   keepMemoryOp(batchId: number, opId: number): boolean;
+   forgetMemoryFact(factId: number): boolean;
    /* --- Library (document + notes viewer). Reads: doc_library_list (list/search/paginate)
       plus an original-file fetch and the full-text get; the two edit writes are below
       (updateNote / updateDocText). --- refreshLibrary re-lists the first page; searchLibrary

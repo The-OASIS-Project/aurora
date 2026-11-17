@@ -94,6 +94,19 @@ export class StubIngest implements Ingest {
    noticeAction(_id: string, _action: string, _value?: string): void {}
    deleteMemory(_itemId: string): void {}
    forgetConversationMemories(_id: number): void {}
+   /* No memory batches behind the stub (it never advertises memory_batches). */
+   listMemoryBatches(_before?: number): boolean {
+      return false;
+   }
+   undoMemoryBatch(_batchId: number, _opId: number | null): boolean {
+      return false;
+   }
+   keepMemoryOp(_batchId: number, _opId: number): boolean {
+      return false;
+   }
+   forgetMemoryFact(_factId: number): boolean {
+      return false;
+   }
 
    /* No music engine behind the stub. */
    musicControl(_action: string, _params?: Record<string, unknown>): void {}

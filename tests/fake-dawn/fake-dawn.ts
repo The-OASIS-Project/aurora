@@ -14,6 +14,7 @@ import {
    type StoreLimit
 } from "./conversations.ts";
 import {
+   CONVERSATION_ID,
    MODEL,
    VALID_EFFORTS,
    VALID_MODES,
@@ -27,6 +28,7 @@ import {
    type Scenario
 } from "./scenarios.ts";
 import { cannedReply, turnFrames, type TurnTiming } from "./turns.ts";
+import { MemoryBatchStore } from "./memory-batches.ts";
 
 /* Requests DAWN answers that the fake models (the client's core boot verbs, plus the heartbeat). */
 export const ANSWERED = new Set([
@@ -58,7 +60,12 @@ export const INTERACTIVE = new Set([
    "text",
    "new_conversation",
    "clear_session",
-   "set_session_llm"
+   "set_session_llm",
+   /* What memory learned per batch (memory-batches.ts): the user's own memory. */
+   "list_memory_batches",
+   "undo_memory_batch",
+   "keep_memory_op",
+   "delete_memory_fact"
 ]);
 
 /* Who a pushed frame goes to: one connection, or every connection but one. */
@@ -199,6 +206,7 @@ export class FakeDawn {
       connections of a login that ended are remembered until they close, so a frame racing the
       logout is dropped rather than starting anything. */
    private readonly stores = new Map<string, ConversationStore>();
+   private readonly memories = new Map<string, MemoryBatchStore>();
    private readonly storeLimit: StoreLimit | undefined;
    private readonly sessions = new Map<string, Session>();
    private readonly conns = new Map<string, Connection>();
@@ -240,6 +248,17 @@ export class FakeDawn {
       this.stores.set(user, st);
       remember(this.stores, MAX_USERS);
       return st;
+   }
+
+   /* The signed-in user's memory batches, kept like their conversations. */
+   get memory(): MemoryBatchStore {
+      const user = this.signedIn.username;
+      let m = this.memories.get(user);
+      if (m) this.memories.delete(user);
+      else m = new MemoryBatchStore(CONVERSATION_ID, (id) => this.store.get(id)?.title ?? null);
+      this.memories.set(user, m);
+      remember(this.memories, MAX_USERS);
+      return m;
    }
 
    /* The scenario as it stands now (who is signed in may have changed since it started). */
@@ -664,6 +683,22 @@ export class FakeDawn {
             return this.setSessionLlm(payload, s, c);
          case "text":
             return this.textTurn(payload, c);
+         case "list_memory_batches":
+            return [this.memory.list(payload)];
+         /* The changed batch goes to every tab of the user first, then the reply to the asker. */
+         case "undo_memory_batch":
+         case "keep_memory_op":
+         case "delete_memory_fact": {
+            const m = this.memory;
+            const { pushed, reply } =
+               type === "undo_memory_batch"
+                  ? m.undo(payload)
+                  : type === "keep_memory_op"
+                    ? m.keep(payload)
+                    : m.forget(payload);
+            for (const f of pushed) this.push(f, { except: conn });
+            return [...pushed, reply];
+         }
          default:
             throw new Error(`fake DAWN: no handler for ${type}`);
       }

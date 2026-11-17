@@ -100,6 +100,7 @@ import {
 } from "../model/model.ts";
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
+import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 
@@ -216,6 +217,9 @@ function providerLabel(p: LlmProvider): string {
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
+/* A Learned-list page (DAWN allows up to 50). */
+const MEMORY_BATCH_PAGE = 20;
+
 /* Context-panel memory delete: item_id prefix -> the user-scoped delete verb + its id field
    (verified in dawn/src/webui/webui_memory.c + memory_focus_adapters.c). Only these prefixes
    have an id-based delete; relation/document_chunk/calendar_occ and preferences do not. Paired
@@ -1257,6 +1261,8 @@ export class DawnIngest implements Ingest {
    /* load_conversation requests still waiting for their reply: each sets the session's LLM to
       that conversation's settings when DAWN handles it. */
    private convLoadsOwed = 0;
+   /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
+   private pendingFactForgets = new Set<number>();
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
@@ -1772,6 +1778,8 @@ export class DawnIngest implements Ingest {
          this.alarmChime.stopLoop();
          this.ringingAlarms.clear();
          this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
+         this.pendingFactForgets.clear(); // their replies can't come now
+         this.sinks.memoryBatches.linkDown();
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -2279,6 +2287,10 @@ export class DawnIngest implements Ingest {
                break;
             }
             this.email.setServerSupport(this.hasFeature("email_client"));
+            /* The Learned list exists only on a DAWN that records batches; on each connect what
+               changed while away comes from a fresh first page. */
+            this.sinks.memoryBatches.setAvailable(this.hasFeature("memory_batches"));
+            if (this.hasFeature("memory_batches")) this.sinks.memoryBatches.linkUp();
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -2664,11 +2676,12 @@ export class DawnIngest implements Ingest {
          }
 
          case "rename_conversation_response":
-            /* No conversation_id echo, and no conversation_renamed push on a manual
-               rename: the panel already patched optimistically. Reconcile on failure by
+            /* No conversation_id echo: the panel already patched optimistically. An older DAWN
+               sends no conversation_renamed for it (DAWN #120 does, before or after this reply,
+               carrying the stored title, so the order doesn't matter). Reconcile on failure by
                refetching the server's truth; on success a debounced refresh closes the window
                where a list refetch already in flight (from a concurrent remote change) would
-               otherwise land after and revert the optimistic patch (a rename emits no frame). */
+               otherwise land after and revert the optimistic patch. */
             if ((p as { success?: boolean }).success === false) this.requestConversations();
             else this.scheduleListRefresh();
             break;
@@ -2685,6 +2698,12 @@ export class DawnIngest implements Ingest {
          case "delete_memory_fact_response":
          case "delete_memory_entity_response":
          case "delete_memory_summary_response": {
+            /* A Forget from the Learned list (the reply names its fact): the panel's own. */
+            const forgotId = type === "delete_memory_fact_response" ? rowId(p.fact_id) : null;
+            if (forgotId !== null && this.pendingFactForgets.delete(forgotId)) {
+               this.onMemoryForgotten(forgotId, p);
+               break;
+            }
             /* The Context panel confirm-gated + optimistically removed the row. On success
                there is nothing to do; a genuine failure surfaces a notice. "Not found" means
                it was already gone (a re-click, or deleted elsewhere), so treat it as success -
@@ -2706,6 +2725,33 @@ export class DawnIngest implements Ingest {
             }
             break;
          }
+
+         case "list_memory_batches_response":
+            /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
+               the conversation markers, which this client doesn't draw yet. */
+            if (p.conversation_id != null) break;
+            this.sinks.memoryBatches.setPage(parseMemoryBatchPage(p));
+            break;
+
+         case "memory_batch": {
+            /* Recorded, changed by an undo / keep / forgotten fact, or removed by a forget. */
+            const removedId = p.removed === true ? rowId(p.batch_id) : null;
+            if (removedId !== null) {
+               this.sinks.memoryBatches.removeBatch(removedId);
+               break;
+            }
+            const batch = parseMemoryBatch(p);
+            if (batch) this.sinks.memoryBatches.upsertBatch(batch);
+            break;
+         }
+
+         case "undo_memory_batch_response":
+            this.onMemoryUndone(p);
+            break;
+
+         case "keep_memory_op_response":
+            this.onMemoryKept(p);
+            break;
 
          case "set_private_response": {
             /* The conversation's privacy is persisted; a private flip also privated its
@@ -2862,13 +2908,15 @@ export class DawnIngest implements Ingest {
          }
 
          case "conversation_renamed": {
-            /* Server auto-title (NOT a manual rename): live-patch the row title. */
+            /* A title changed: DAWN's own auto-title, and (DAWN #120) any rename, from any client,
+               this one's included. Live-patch the row title. */
             const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
             const t =
                typeof (p as { title?: string }).title === "string"
                   ? (p as { title: string }).title
                   : "";
             if (cid) this.sinks.conversationList.markRenamed(cid, t);
+            if (cid) this.sinks.memoryBatches.renameConversation(cid, t);
             if (cid === this.convId) this.setActiveTitle(t); // keep the HUD readout current
             break;
          }
@@ -4338,6 +4386,9 @@ export class DawnIngest implements Ingest {
    renameConversation(id: number, title: string): void {
       if (id > 0 && title.trim()) {
          this.send({ type: "rename_conversation", payload: { conversation_id: id, title } });
+         /* The Learned list follows renames from conversation_renamed alone: only a DAWN that
+            titles its batches (#120) shows one, and that DAWN sends the frame for every rename
+            (a refused one sends none, so nothing wrong is shown). */
       }
    }
 
@@ -4353,6 +4404,100 @@ export class DawnIngest implements Ingest {
    setPinned(id: number, pinned: boolean): void {
       if (id > 0)
          this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
+   }
+
+   /* --- The Learned list (memory_batches). The writes come only from the panel's buttons (Undo
+      all and Forget behind their named confirms there). Undo and Keep run on a DAWN worker and
+      answer when it ends; DAWN pushes the changed batch first, so the list redraws from that
+      and the reply only says how it went. */
+   listMemoryBatches(before?: number): boolean {
+      if (!this.hasFeature("memory_batches")) return false;
+      const payload: Record<string, number> = { limit: MEMORY_BATCH_PAGE };
+      if (before !== undefined && before > 0) payload.before_batch_id = before;
+      return this.send({ type: "list_memory_batches", payload });
+   }
+
+   undoMemoryBatch(batchId: number, opId: number | null): boolean {
+      if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
+      const payload: Record<string, number> = { batch_id: batchId };
+      if (opId !== null && opId > 0) payload.op_id = opId;
+      return this.send({ type: "undo_memory_batch", payload });
+   }
+
+   keepMemoryOp(batchId: number, opId: number): boolean {
+      if (!this.hasFeature("memory_batches") || batchId <= 0 || opId <= 0) return false;
+      return this.send({ type: "keep_memory_op", payload: { batch_id: batchId, op_id: opId } });
+   }
+
+   /* The forget DAWN suggested (an op's action "forget"): the ordinary delete_memory_fact, which
+      records the forget and pushes the batch without that row. */
+   forgetMemoryFact(factId: number): boolean {
+      if (!this.hasFeature("memory_batches") || factId <= 0) return false;
+      if (!this.send({ type: "delete_memory_fact", payload: { fact_id: factId } })) return false;
+      this.pendingFactForgets.add(factId);
+      return true;
+   }
+
+   private onMemoryUndone(p: Record<string, unknown>): void {
+      /* One with no usable batch id still ends the undo that was running (the panel's slot). */
+      const batchId = rowId(p.batch_id) ?? 0;
+      const opId = rowId(p.op_id);
+      const undone = Array.isArray(p.undone) ? p.undone.length : 0;
+      const stale = Array.isArray(p.stale) ? p.stale.length : 0;
+      const error = typeof p.error === "string" && p.error ? p.error : "";
+      /* Done: the pushed batch already shows it. Anything else is said once, calmly. */
+      if (p.status === "ok") {
+         if (undone === 0) this.memoryNotice("Nothing left to undo", false);
+      } else if (p.status === "partial") {
+         const them =
+            stale === 1
+               ? "1 item changed since and stayed as it is"
+               : `${stale} items changed since and stayed as they are`;
+         this.memoryNotice(`Undid ${undone}; ${them}.`, false);
+      } else if (p.status === "stale") {
+         this.memoryNotice(error || "This memory changed since; nothing was undone.", false);
+      } else {
+         this.memoryNotice(error || "Couldn't undo this.", true);
+      }
+      this.sinks.memoryBatches.actionDone({
+         kind: "undo",
+         batchId,
+         opId,
+         ok: p.status === "ok"
+      });
+   }
+
+   private onMemoryKept(p: Record<string, unknown>): void {
+      /* One with no usable ids still ends the keep that was running (the panel's slot). */
+      const batchId = rowId(p.batch_id) ?? 0;
+      const opId = rowId(p.op_id) ?? 0;
+      const ok = p.status === "ok" && batchId > 0 && opId > 0;
+      if (p.status !== "ok") {
+         const error = typeof p.error === "string" && p.error ? p.error : "";
+         this.memoryNotice(error || "Couldn't keep this.", true);
+      }
+      this.sinks.memoryBatches.actionDone({
+         kind: "keep",
+         batchId,
+         opId,
+         ok,
+         factId: ok ? rowId(p.fact_id) : null
+      });
+   }
+
+   private onMemoryForgotten(factId: number, p: Record<string, unknown>): void {
+      /* "Not found": already gone (forgotten elsewhere), which is what was asked. */
+      const error = typeof p.error === "string" ? p.error : "";
+      const ok = p.success !== false || /not found/i.test(error);
+      if (!ok) this.memoryNotice(error || "Couldn't forget that memory", true);
+      this.sinks.memoryBatches.actionDone({ kind: "forget", factId, ok });
+   }
+
+   private memoryNotice(text: string, failed: boolean): void {
+      this.spikeNotice("memory-batch", failed ? "attention" : "memory", text, {
+         hold: failed ? 6 : 5,
+         ...(failed ? { tone: "attention" as const } : {})
+      });
    }
 
    /* Forget what a conversation (and its continuations) taught memory. DESTRUCTIVE: reached

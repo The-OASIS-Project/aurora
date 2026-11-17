@@ -87,7 +87,11 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     (`delete_memory_fact` / `_preference` / `_summary` / `_entity` - user-scoped, the user's own
     memory, from the Context panel), plus **`forget_conversation_memories`** (everything one
     conversation and its continuations taught memory: offered after `set_private` from DAWN's
-    `conversation_learned` count, or from the picker's per-row Forget), plus **phone calls**
+    `conversation_learned` count, or from the picker's per-row Forget), plus the **Memory
+    panel's Learned list** (`src/memory/`, `memory_batches`: the read `list_memory_batches`, and
+    `undo_memory_batch` / `keep_memory_op` / `delete_memory_fact` on what memory learned per
+    batch, only the action DAWN marks on each change; a batch's conversation title opens it),
+    plus **phone calls**
     (`phone_action` answer / reject / hangup on the user's own phone from the call card, and the
     `phone_status` read on connect; DAWN allows only the modem owner; the call audio stays on the
     daemon's hardware), plus the **Mail panel** (`src/email/`, DAWN's `email_client` verbs: the
@@ -101,7 +105,8 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     WebUI-only, a parity gap).
   - **Confirm-gated today:** `delete_conversation` (cascade-deletes the conversation's images +
     child background jobs and refuses on a running job), `watch_remove`, `delete_memory_*`,
-    `forget_conversation_memories`. Rename/pin/enable flips are benign metadata, no gate.
+    `forget_conversation_memories`, and the Learned list's Undo all and Forget (a single Undo or
+    Keep is not, as in DAWN's WebUI). Rename/pin/enable flips are benign metadata, no gate.
 - **Three-space indentation. No em dashes in prose.**
 - **Views are user-arrangeable, not glued to a corner.** The standalone interactive views
   (music player, calendar, HA board) and the notification cards (`src/notify/`) are
@@ -169,7 +174,8 @@ spawning new tabs.
 `ingest -> state -> choreography -> render`, downward dependencies only. `Ingest`
 (`src/ingest/`) is the single DAWN boundary; it feeds the four seam sinks (store, reactor,
 conversation, telemetry) plus the self-owned view sinks (music, calendar, ha, watches,
-stocks, watchlist, library, context, notifications, conversation list, memory forget). `DawnIngest` is the real WebSocket client and
+stocks, watchlist, library, context, notifications, conversation list, memory forget, memory
+batches). `DawnIngest` is the real WebSocket client and
 `StubIngest` is fake data that no longer matches `main.ts` (being replaced by the protocol-level
 fake DAWN in `tests/fake-dawn/`, which the smoke test uses; docs/FAKE_DAWN_PLAN.md). The `Store` holds importance;
 `spike()` / `tick()` are the spike-then-recede, and the choreographer maps importance to
