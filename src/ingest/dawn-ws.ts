@@ -218,6 +218,10 @@ function providerLabel(p: LlmProvider): string {
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
+/* Why a load_conversation went out: an open the user made, the boot resume, a reconnect's
+   restore of the conversation on screen (no redraw), or a reload that redraws it (a reclaim). */
+type LoadPurpose = "user" | "resume" | "reanchor" | "reload";
+
 /* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
 type MemoryReq =
    | { kind: "list"; id: number; before: number | null }
@@ -1261,17 +1265,53 @@ export class DawnIngest implements Ingest {
       opening) never touches the selection: either way it updates only the lists and
       availability. */
    private llmRev = 0;
-   private configAsks: Array<{ rev: number; listsOnly: boolean }> = [];
+   private configAsks: Array<{ rev: number; listsOnly: boolean; req?: string }> = [];
    /* The revision each set_session_llm sent created, oldest first (replies come in order). A
       reply may change the selection, its reasoning or a pending switch only while its write's
       revision is still current: a later write, a conversation load, DAWN's tool switching the
       model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
-   private llmWritesOwed: number[] = [];
+   private llmWritesOwed: Array<{ rev: number; req?: string; chosen?: boolean }> = [];
    /* load_conversation requests still waiting for their reply, oldest first (DAWN answers in
       order): each sets the session's LLM to that conversation's settings when DAWN handles it.
       One the user opened records the conversation that was open before (`back`): a refused load
       (the conversation deleted meanwhile) returns to it, as DAWN's session never left it. */
-   private convLoadsOwed: Array<{ id: number; back?: number; restore?: boolean }> = [];
+   private convLoadsOwed: Array<{
+      id: number;
+      back?: number;
+      req?: string;
+      /* Why it was sent, so a refused one can be sent again the same way (see loadRetry). */
+      purpose?: LoadPurpose;
+      /* Refused, going back must also restore that conversation's server context (a reconnect's
+         replay of an interrupted open; see loadRestores). */
+      restore?: boolean;
+      /* A refused load this open set aside (retrySetAside): refused too, it's put back. */
+      retry?: { id: number; purpose: LoadPurpose };
+      /* A model change to send once this load's reply has been applied (choiceAfterRetry). */
+      then?: Record<string, unknown>;
+   }> = [];
+   /* With request_refs (DAWN #116) each get_config, set_session_llm and load_conversation carries
+      a `req` (the flags arrive with the config frame, so a connection's first requests don't):
+      a reply that names one settles that request, and an error that names one is its refusal
+      (settleModelRefusal). One without settles the oldest sent without one (DAWN answers in
+      order). */
+   private llmReqSeq = 0;
+   /* The purpose of the get_config being sent (askConfig; taken by send). */
+   private askListsOnly = false;
+   /* A model change was refused and the selection shown may never have run: read the session's
+      selection until a read is answered (see onPong). */
+   private llmNeedsRead = false;
+   /* A resume, re-anchor or reload DAWN refused while it couldn't check the login: sent again,
+      the same way, once DAWN answers a ping. */
+   private loadRetry: { id: number; purpose: LoadPurpose } | null = null;
+   /* A model change the user made while a refused load waits to resend: with no conversation
+      attached DAWN doesn't save it, and the load would put the conversation's own model back, so
+      it goes again right after that load (DAWN answers in order). */
+   private choiceAfterRetry: Record<string, unknown> | null = null;
+   /* The refused load an open of the user's set aside (taken by send onto the open's entry): if
+      the open is refused too, it waits to resend again. */
+   private retrySetAside: { id: number; purpose: LoadPurpose } | null = null;
+   /* The choice the load being sent carries (taken by send). */
+   private loadThen: Record<string, unknown> | null = null;
    /* The load being sent replays an open a link loss interrupted: refused, it returns to the
       conversation on screen AND restores that one's server context (the new session may not hold
       it). Set by the session handler, taken by send. */
@@ -1676,6 +1716,7 @@ export class DawnIngest implements Ingest {
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
          this.convLoadsOwed = []; // nor an older load
+         this.loadRetry = null; // the new connection's own resume or re-anchor takes over
          this.loadedSyncDeferred = false;
          /* Nor the Learned list's requests on an older socket. Its close normally said so, but a
             socket that opened before the old one's close arrived (a fast reconnect, a reclaim)
@@ -1947,7 +1988,15 @@ export class DawnIngest implements Ingest {
       /* Recent traffic proves life, except while a pong is overdue: other replies can keep flowing
          (DAWN answering SERVICE_UNAVAILABLE, say) without settling the doubt, so probe until a
          pong clears it or a second miss reconnects. */
-      if (this.missedPongs === 0 && performance.now() - this.lastInboundAt < PING_IDLE_MS) return;
+      /* And while a refused load or a refused change's read waits to be sent again: those go out
+         on a pong, and steady traffic (music progress, say) would otherwise never let one come. */
+      const recovering = this.loadRetry !== null || this.llmNeedsRead;
+      if (
+         this.missedPongs === 0 &&
+         !recovering &&
+         performance.now() - this.lastInboundAt < PING_IDLE_MS
+      )
+         return;
       this.sendPing();
    }
 
@@ -1970,6 +2019,23 @@ export class DawnIngest implements Ingest {
       this.missedPongs = 0;
       this.pendingPingSeq = 0;
       window.clearTimeout(this.pongTimer);
+      /* DAWN checks logins again: the read of the selection a refused change left owed. */
+      if (this.llmNeedsRead && !this.configAsks.some((a) => !a.listsOnly)) this.askConfig();
+      /* And a load it refused, sent again as it was: a resume as a resume (one that's really gone
+         then falls back quietly), a reconnect's restore without redrawing, a reload redrawn. */
+      const retry = this.loadRetry;
+      this.loadRetry = null;
+      const choice = this.choiceAfterRetry;
+      this.choiceAfterRetry = null;
+      if (retry && this.convId === retry.id) {
+         if (retry.purpose === "resume") this.resumingStored = true;
+         if (retry.purpose === "reanchor") this.reanchoring = true;
+         /* The user's choice made meanwhile goes once this load's reply has applied the
+            conversation's own settings (so its echo is the current one), on the conversation. */
+         this.loadThen = choice;
+         this.send({ type: "load_conversation", payload: { conversation_id: retry.id } });
+         this.loadThen = null;
+      }
       /* Only re-assert "connected" if we had told the UI the link went stale; a healthy
          heartbeat stays quiet so the chip does not churn every 10s. */
       if (wasSuspect && this.lastStatus === "stale") this.emit("connected");
@@ -2481,8 +2547,13 @@ export class DawnIngest implements Ingest {
             /* A models-only refresh (MODEL panel open) must not touch the current
                selection - that could revert a loaded conversation's provider/model back to
                the session default. Update only the lists (above) + availability (below). */
-            const ask = this.configAsks.shift() ?? { rev: this.llmRev, listsOnly: false };
+            /* A reply naming a request this connection doesn't owe (none should) applies nothing. */
+            const ask = this.takeOwed(this.configAsks, p) ?? {
+               rev: this.llmRev,
+               listsOnly: typeof p.req === "string"
+            };
             const appliesSelection = !ask.listsOnly && ask.rev === this.llmRev;
+            if (appliesSelection) this.llmNeedsRead = false; // the session's selection, as it is
             if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
@@ -2557,7 +2628,9 @@ export class DawnIngest implements Ingest {
                new model + availability set the optimistic local state does not know.
                `reasoning_adjusted` = the fields THIS request set were changed to fit the
                model; DAWN sends no text for it, so Aurora words the notice. */
-            const writeRev = this.llmWritesOwed.shift();
+            const owedWrite = this.takeOwed(this.llmWritesOwed, p);
+            /* One naming a request this connection doesn't owe is never the latest. */
+            const writeRev = owedWrite ? owedWrite.rev : typeof p.req === "string" ? -1 : undefined;
             /* A reply to a write whose revision has passed is older than newer state: it can't
                undo it. One with no write of ours recorded (none owed) can't be older than ours. */
             const latestReply = writeRev === undefined || writeRev === this.llmRev;
@@ -2695,12 +2768,18 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "load_conversation_response":
-            this.onConversationLoaded(p, this.convLoadsOwed.shift());
+         case "load_conversation_response": {
+            const load = this.takeOwed(this.convLoadsOwed, p);
+            /* A reply naming a request this connection doesn't owe (none should) opens nothing. */
+            if (!load && typeof p.req === "string") break;
+            this.onConversationLoaded(p, load);
+            /* A choice the user made while this load waited to resend: now, after it. */
+            if (load?.then) this.send({ type: "set_session_llm", payload: load.then });
             /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
                it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
             this.syncLoadedLocalModel();
             break;
+         }
 
          case "set_active_conversation_response": {
             /* The lightweight reconnect re-anchor's reply (no history replay). Any response
@@ -3148,9 +3227,8 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
-            /* A Learned-list request DAWN refused (it names it by `req`): settled here, never a
-               reactor error. */
-            if (this.settleMemoryRefusal(p)) {
+            /* A request DAWN refused (it names it by `req`): settled here, never a reactor error. */
+            if (this.settleModelRefusal(p) || this.settleMemoryRefusal(p)) {
                /* What the code means for the whole connection still applies. */
                if (code === "UNKNOWN_TYPE") this.onUnknownType(str(p.request_type), str(p.req));
                if (code === "UNAUTHORIZED")
@@ -4412,6 +4490,10 @@ export class DawnIngest implements Ingest {
 
    loadConversation(id: number): void {
       if (id <= 0) return;
+      /* An open of the user's supersedes a refused load still to resend, but keeps it aside: refused
+         too, the open goes back to that conversation, which still needs its load. */
+      this.retrySetAside = this.loadRetry;
+      this.loadRetry = null;
       /* Finalize any in-flight streamed bubble before switching id. Set convId optimistically so
          a text sent before the response is tagged to the right conversation (M2);
          load_conversation_response confirms it. */
@@ -5678,7 +5760,12 @@ export class DawnIngest implements Ingest {
    /* load_conversation_response: the conversation opened (or why it couldn't). */
    private onConversationLoaded(
       p: Record<string, unknown>,
-      load?: { id: number; back?: number; restore?: boolean }
+      load?: {
+         id: number;
+         back?: number;
+         restore?: boolean;
+         retry?: { id: number; purpose: LoadPurpose };
+      }
    ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
@@ -5709,28 +5796,15 @@ export class DawnIngest implements Ingest {
          /* One the user opened (a picker row, a batch's title) whose conversation is gone: back to
             the one still open, which DAWN's session never left, unless something else has moved
             the view since. Turns must not go to a conversation that doesn't exist. */
-         if (load?.back !== undefined && this.convId === load.id) {
-            this.convId = load.back;
-            this.sinks.conversationList.setActive(load.back);
-            if (load.restore) {
-               /* After a reconnect the session may not hold the conversation on screen (a fresh
-                  one has an empty history): rebuild its server context without redrawing it, or
-                  a fresh chat when none was on screen. */
-               if (load.back > 0) {
-                  this.reanchoring = true;
-                  this.send({ type: "load_conversation", payload: { conversation_id: load.back } });
-               } else {
-                  this.showConversation(0);
-                  localStorage.removeItem(CONV_KEY);
-               }
-            }
-         }
-         this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
-            hold: 4
-         });
+         if (load) this.returnFromOpen(load);
+         else
+            this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+               hold: 4
+            });
          return;
       }
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      this.loadRetry = null; // a conversation is loaded: a refused one waiting to resend is moot
       /* It's on screen now: the way back for any opened load still unanswered (the same one
          opened twice, say, the second refused). */
       for (const l of this.convLoadsOwed) {
@@ -5845,6 +5919,111 @@ export class DawnIngest implements Ingest {
       this.notifyLlm();
    }
 
+   /* The owed request a reply settles: the one it names (request_refs), else the oldest sent
+      without a `req` (or, failing that, the oldest). */
+   private takeOwed<T extends { req?: string }>(
+      owed: T[],
+      p: Record<string, unknown>
+   ): T | undefined {
+      const req = typeof p.req === "string" ? p.req : undefined;
+      let at = req !== undefined ? owed.findIndex((e) => e.req === req) : -1;
+      if (req === undefined) {
+         at = owed.findIndex((e) => e.req === undefined);
+         if (at < 0) at = owed.length > 0 ? 0 : -1;
+      }
+      return at < 0 ? undefined : owed.splice(at, 1)[0];
+   }
+
+   /* An open that didn't happen (failed, or refused): back to the conversation on screen, which
+      DAWN's session never left, unless the view has moved on since. A reconnect's replay also
+      rebuilds that conversation's server context (a fresh session holds none), without redrawing
+      it; or goes to a fresh chat when none was on screen. */
+   private returnFromOpen(load: {
+      id: number;
+      back?: number;
+      restore?: boolean;
+      retry?: { id: number; purpose: LoadPurpose };
+   }): void {
+      if (load.back !== undefined && this.convId === load.id) {
+         this.convId = load.back;
+         this.sinks.conversationList.setActive(load.back);
+         /* Back to a conversation whose own refused load was set aside: it still needs it. */
+         if (load.retry && load.retry.id === load.back) this.loadRetry = load.retry;
+         if (load.restore) {
+            if (load.back > 0) {
+               this.reanchoring = true;
+               this.send({ type: "load_conversation", payload: { conversation_id: load.back } });
+            } else {
+               this.showConversation(0);
+               localStorage.removeItem(CONV_KEY);
+            }
+         }
+      }
+      this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+         hold: 4
+      });
+   }
+
+   /* An error naming a model request (request_refs): DAWN refused it and no reply will come.
+      A refused open goes the way a failed one does (back to the conversation on screen); a
+      refused model change leaves the panel showing a choice that never happened, so DAWN's
+      selection is read again; a refused read just stops being waited for. Whether it was one. */
+   private settleModelRefusal(p: Record<string, unknown>): boolean {
+      if (typeof p.req !== "string" || p.severity === "info") return false;
+      const req = p.req;
+      const message = typeof p.message === "string" && p.message ? p.message : "";
+      const load = this.convLoadsOwed.findIndex((e) => e.req === req);
+      if (load >= 0) {
+         const [entry] = this.convLoadsOwed.splice(load, 1);
+         if (entry.purpose === "user") {
+            /* One the user opened: back to the conversation on screen, as a failed open does, but
+               settled from its own entry: the shared resume / re-anchor flags may belong to another
+               load still on its way, whose own reply must keep them. */
+            this.returnFromOpen(entry);
+         } else {
+            /* A resume, re-anchor or reclaim refused while DAWN couldn't check the login: the
+               conversation isn't gone, so it stays the one to resume (a failed load would drop
+               it). Its transcript isn't drawn yet, so the next connect loads it in full; a turn
+               meanwhile names it and runs there. */
+            this.loadRetry = { id: entry.id, purpose: entry.purpose ?? "reload" };
+            if (entry.then) this.choiceAfterRetry = entry.then; // for the next retry
+            this.resumingStored = false;
+            this.reanchoring = false;
+         }
+         this.runDeferredLoadedSync();
+         return true;
+      }
+      const write = this.llmWritesOwed.findIndex((e) => e.req === req);
+      if (write >= 0) {
+         const [entry] = this.llmWritesOwed.splice(write, 1);
+         if (entry.rev === this.llmRev) {
+            this.localPickPending = false;
+            /* What the session runs, since the change didn't happen: read now, and again once DAWN
+               answers a ping if this read is refused too (the same outage). */
+            this.llmNeedsRead = true;
+            this.askConfig();
+            if (entry.chosen !== false) {
+               this.spikeNotice(
+                  "llm-switch-error",
+                  "attention",
+                  message ? `Couldn't change the model: ${message}` : "Couldn't change the model",
+                  { tone: "attention", hold: 9 }
+               );
+            }
+         }
+         this.runDeferredLoadedSync();
+         return true;
+      }
+      const ask = this.configAsks.findIndex((e) => e.req === req);
+      if (ask >= 0) {
+         this.configAsks.splice(ask, 1);
+         this.notifyLlm();
+         this.runDeferredLoadedSync();
+         return true;
+      }
+      return false;
+   }
+
    /* Re-request get_config to refresh the cloud model lists + provider availability after a
       backend config edit. Asked lists-only (configAsks), so the response updates the lists
       only, never the current selection (which would clobber a loaded conversation's provider).
@@ -5855,7 +6034,9 @@ export class DawnIngest implements Ingest {
 
    private askConfig(listsOnly = false): void {
       /* Owed a reply only when it went out (a closed socket drops it; the next one asks again). */
-      if (this.send({ type: "get_config" })) this.configAsks.push({ rev: this.llmRev, listsOnly });
+      this.askListsOnly = listsOnly;
+      this.send({ type: "get_config" });
+      this.askListsOnly = false;
    }
 
    /* Apply an llm_state_update (mode/provider/model + provider availability). */
@@ -6105,7 +6286,10 @@ export class DawnIngest implements Ingest {
       return (
          this.llmWritesOwed.length === 0 &&
          this.convLoadsOwed.length === 0 &&
-         !this.configAsks.some((a) => !a.listsOnly)
+         !this.configAsks.some((a) => !a.listsOnly) &&
+         /* A refused change left the panel showing a choice that may never have run: nothing
+            follows it until a read says what the session runs. */
+         !this.llmNeedsRead
       );
    }
 
@@ -6629,16 +6813,49 @@ export class DawnIngest implements Ingest {
       if (typeof type === "string" && this.unsupportedTypes.has(type)) return false;
       if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState !== WebSocket.OPEN) return false;
-      if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
+      const owed =
+         type === "get_config" || type === "set_session_llm" || type === "load_conversation";
+      const req = owed && this.hasFeature("request_refs") ? `llm-${++this.llmReqSeq}` : undefined;
+      if (req !== undefined) {
+         const payload = (msg as { payload?: Record<string, unknown> }).payload ?? {};
+         msg = { ...msg, payload: { ...payload, req } };
+      }
+      if (type === "get_config") {
+         this.configAsks.push({ rev: this.llmRev, listsOnly: this.askListsOnly, req });
+      }
+      if (type === "set_session_llm") {
+         /* The user's own choice, not New Chat's reset or the llama.cpp follow (see the notice in
+            settleModelRefusal). */
+         const fields = (msg as { payload?: Record<string, unknown> }).payload ?? {};
+         const chosen = fields.type !== "reset" && fields.from_restore !== true;
+         this.llmWritesOwed.push({ rev: this.llmRev, req, chosen }); // see llmWritesOwed
+         if (chosen && this.loadRetry) {
+            const { req: _req, ...choice } = fields;
+            this.choiceAfterRetry = choice;
+         }
+      }
       if (type === "load_conversation") {
          const id = Number(
             (msg as { payload?: { conversation_id?: unknown } }).payload?.conversation_id
          );
+         const purpose: LoadPurpose =
+            this.loadBack !== undefined
+               ? "user"
+               : this.resumingStored
+                 ? "resume"
+                 : this.reanchoring
+                   ? "reanchor"
+                   : "reload";
          this.convLoadsOwed.push({
             id,
             back: this.loadBack,
-            restore: this.loadRestores || undefined
+            req,
+            purpose,
+            restore: this.loadRestores || undefined,
+            retry: purpose === "user" ? (this.retrySetAside ?? undefined) : undefined,
+            then: this.loadThen ?? undefined
          });
+         if (purpose === "user") this.retrySetAside = null;
       }
       this.ws.send(JSON.stringify(msg));
       return true;

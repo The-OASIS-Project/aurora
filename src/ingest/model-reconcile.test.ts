@@ -589,6 +589,287 @@ describe("opening a conversation that's gone", () => {
    });
 });
 
+describe("with request_refs, model requests are settled by the request they name", () => {
+   const refs = () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.serverFeatures = new Set(["request_refs"]);
+      return c;
+   };
+
+   it("tags each with a req", () => {
+      const c = refs();
+      c.ing.askConfig();
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      c.ing.loadConversation(9);
+      const tagged = c.sent
+         .filter((m) => ["get_config", "set_session_llm", "load_conversation"].includes(m.type))
+         .map((m) => [m.type, m.payload?.req]);
+      expect(tagged).toEqual([
+         ["get_config", "llm-1"],
+         ["set_session_llm", "llm-2"],
+         ["load_conversation", "llm-3"]
+      ]);
+   });
+
+   it("a refused model change reads the session's selection again", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      const before = c.sent.length;
+      c.frame("error", {
+         code: "SERVICE_UNAVAILABLE",
+         message: "Couldn't check the login; try again",
+         severity: "error",
+         req: "llm-1"
+      });
+      expect(c.ing.llmWritesOwed).toEqual([]);
+      expect(c.sent.slice(before).map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("a refused open goes back to the conversation on screen", () => {
+      const c = refs();
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.ing.convLoadsOwed).toEqual([]);
+   });
+
+   it("a refused read stops holding the llama.cpp sync", () => {
+      const c = refs();
+      c.ing.askConfig();
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.llm.mode = "local";
+      expect(c.llmWrites()).toEqual([]); // waiting for the read
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "local", model: "loaded.gguf", from_restore: true, req: "llm-2" }
+         }
+      ]);
+   });
+
+   it("a refused resume keeps the conversation, and resumes it once DAWN answers again", () => {
+      const c = refs();
+      localStorage.setItem("dawn.hero.convId", "42");
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(c.ing.convId).toBe(42);
+      expect(localStorage.getItem("dawn.hero.convId")).toBe("42");
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 42
+      });
+      expect(c.ing.resumingStored).toBe(true);
+   });
+
+   it("a refused model change is read again once DAWN answers, if its read was refused too", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" }); // its read
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("New Chat's refused reset isn't announced as the user's model change", () => {
+      const c = refs();
+      const notices: string[] = [];
+      c.ing.spikeNotice = (id: string) => notices.push(id);
+      c.ing.send({ type: "set_session_llm", payload: { type: "reset" } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      expect(notices).not.toContain("llm-switch-error");
+      expect(c.sent.at(-1)?.type).toBe("get_config"); // the selection is read all the same
+   });
+
+   it("an older read answered meanwhile doesn't end the wait for the selection", () => {
+      const c = refs();
+      c.ing.askConfig(); // llm-1, an older read still on its way
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-2
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-3" }); // its read
+      c.frame("get_config_response", {
+         success: true,
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" },
+         req: "llm-1"
+      }); // from before the change: applies nothing
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).toEqual(["get_config"]);
+   });
+
+   it("a load reply naming a request this connection doesn't owe opens nothing", () => {
+      const c = refs();
+      c.ing.convId = 7;
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 99,
+         messages: [],
+         req: "llm-41"
+      });
+      expect(c.ing.convId).toBe(7);
+   });
+
+   it("a refused reconnect restore or reload is sent again the same way once DAWN answers", () => {
+      for (const purpose of ["reanchor", "reload"] as const) {
+         const c = refs();
+         c.ing.convId = 42;
+         if (purpose === "reanchor") c.ing.reanchoring = true;
+         c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+         c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+         expect(c.ing.reanchoring).toBe(false);
+         c.sent.length = 0;
+         c.ing.pendingPingSeq = 5;
+         c.frame("pong", { seq: 5 });
+         expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+            conversation_id: 42
+         });
+         expect(c.ing.reanchoring).toBe(purpose === "reanchor"); // a restore doesn't redraw
+      }
+   });
+
+   it("while a refused load waits to be resent, pings go out despite steady traffic", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.pongSupported = true;
+      c.ing.lastInboundAt = performance.now(); // music progress just arrived
+      c.sent.length = 0;
+      c.ing.heartbeatTick();
+      expect(c.sent.map((m) => m.type)).toEqual(["ping"]);
+   });
+
+   it("an open of the user's supersedes a refused resume still to resend", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.loadConversation(42); // opened from the picker meanwhile
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).not.toContain("load_conversation");
+   });
+
+   it("a refused switch to local isn't sent again as llama.cpp's follow while unread", () => {
+      const c = refs();
+      c.ing.getModelControl().setMode("local"); // llm-1, optimistic local
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" }); // its read
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites().filter((m) => m.payload?.from_restore === true)).toEqual([]);
+   });
+
+   it("a refused open ahead of a resume's reply goes back without ending the resume", () => {
+      const c = refs();
+      localStorage.setItem("dawn.hero.convId", "42");
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.ing.loadConversation(9); // llm-2, opened before the resume answered
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" });
+      expect(c.ing.convId).toBe(42); // back, not cleared
+      expect(localStorage.getItem("dawn.hero.convId")).toBe("42");
+      expect(c.ing.resumingStored).toBe(true); // the resume's own reply still decides
+   });
+
+   it("a reconnect's replay refused by name goes back and restores the one on screen", () => {
+      const c = refs();
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped
+      c.frame("session", { authenticated: true, reconnected: false }); // replays 9, tagged
+      const replay = c.sent.filter((m) => m.type === "load_conversation").at(-1);
+      c.sent.length = 0;
+      c.frame("error", {
+         code: "SERVICE_UNAVAILABLE",
+         severity: "error",
+         req: replay?.payload?.req
+      });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 7
+      });
+      expect(c.ing.reanchoring).toBe(true);
+   });
+
+   it("a model chosen while a refused resume waits is sent again after the resume", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // no conversation attached yet
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      const load = c.sent.find((m) => m.type === "load_conversation");
+      expect(load?.payload).toMatchObject({ conversation_id: 42 });
+      expect(c.sent.map((m) => m.type)).not.toContain("set_session_llm"); // not before the load
+      /* The load restores the conversation's own model; then the choice goes, on it. */
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 42,
+         messages: [],
+         llm_settings: { llm_type: "cloud", cloud_provider: "claude", model: "claude-sonnet-5-5" },
+         req: load?.payload?.req
+      });
+      const write = c.sent.find((m) => m.type === "set_session_llm");
+      expect(write?.payload).toMatchObject({ model: "claude-opus-5-5" });
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-opus-5-5",
+         req: write?.payload?.req
+      });
+      expect(c.ing.llm.model).toBe("claude-opus-5-5"); // the panel shows what DAWN runs
+   });
+
+   it("an open refused while a refused resume waits puts the resume back", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.loadConversation(9); // llm-2
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(42);
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toMatchObject({
+         conversation_id: 42
+      });
+   });
+
+   it("a reply settles the request it names, not the oldest", () => {
+      const c = refs();
+      c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1
+      c.ing.getModelControl().setModel("claude-haiku-5-5"); // llm-2
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-haiku-5-5",
+         req: "llm-2"
+      });
+      expect(c.ing.llmWritesOwed.map((e: { req: string }) => e.req)).toEqual(["llm-1"]);
+      expect(c.ing.llm.model).toBe("claude-haiku-5-5");
+   });
+});
+
 describe("a reconnect while an opened conversation hasn't loaded", () => {
    it("loads it in full instead of re-anchoring to it under another transcript", () => {
       const c = client("cloud", "claude-sonnet-5-5");
