@@ -770,6 +770,19 @@ describe("with request_refs, model requests are settled by the request they name
       expect(c.llmWrites().filter((m) => m.payload?.from_restore === true)).toEqual([]);
    });
 
+   it("a refused open ahead of a resume's reply goes back without ending the resume", () => {
+      const c = refs();
+      localStorage.setItem("dawn.hero.convId", "42");
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.ing.loadConversation(9); // llm-2, opened before the resume answered
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" });
+      expect(c.ing.convId).toBe(42); // back, not cleared
+      expect(localStorage.getItem("dawn.hero.convId")).toBe("42");
+      expect(c.ing.resumingStored).toBe(true); // the resume's own reply still decides
+   });
+
    it("a reply settles the request it names, not the oldest", () => {
       const c = refs();
       c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1

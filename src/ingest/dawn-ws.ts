@@ -5833,9 +5833,17 @@ export class DawnIngest implements Ingest {
       const load = this.convLoadsOwed.findIndex((e) => e.req === req);
       if (load >= 0) {
          const [entry] = this.convLoadsOwed.splice(load, 1);
-         if (entry.back !== undefined) {
-            /* One the user opened: as a failed open (back to the conversation on screen). */
-            this.onConversationLoaded({ success: false, error: message }, entry);
+         if (entry.purpose === "user") {
+            /* One the user opened: back to the conversation on screen, as a failed open does, but
+               settled from its own entry: the shared resume / re-anchor flags may belong to another
+               load still on its way, whose own reply must keep them. */
+            if (entry.back !== undefined && this.convId === entry.id) {
+               this.convId = entry.back;
+               this.sinks.conversationList.setActive(entry.back);
+            }
+            this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
+               hold: 4
+            });
          } else {
             /* A resume, re-anchor or reclaim refused while DAWN couldn't check the login: the
                conversation isn't gone, so it stays the one to resume (a failed load would drop
