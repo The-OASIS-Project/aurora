@@ -1663,6 +1663,12 @@ export class DawnIngest implements Ingest {
          this.llmWritesOwed = []; // nor an older model write
          this.convLoadsOwed = []; // nor an older load
          this.loadedSyncDeferred = false;
+         /* Nor the Learned list's requests on an older socket. Its close normally said so, but a
+            socket that opened before the old one's close arrived (a fast reconnect, a reclaim)
+            skips that cleanup (the stale-socket guard), so say it here too. */
+         this.pendingFactForgets.clear();
+         this.memoryReqs.clear();
+         this.sinks.memoryBatches.linkDown();
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];

@@ -226,6 +226,41 @@ describe("the Learned list over the wire", () => {
       expect((c.calls[0][1] as { request?: number }).request).toBe(1);
    });
 
+   it("a new socket ends the old one's requests, even when the old close was skipped", () => {
+      const c = client(["memory_batches", "request_refs"]);
+      c.ing.undoMemoryBatch(4, 2); // on the old socket, never answered
+      c.ing.forgetMemoryFact(9);
+      const sockets: Array<{ onopen: (() => void) | null }> = [];
+      vi.stubGlobal(
+         "WebSocket",
+         Object.assign(
+            class {
+               static OPEN = 1;
+               readyState = 1;
+               binaryType = "";
+               onopen: (() => void) | null = null;
+               onmessage = null;
+               onclose = null;
+               onerror = null;
+               constructor() {
+                  sockets.push(this);
+               }
+               send(): void {}
+               close(): void {}
+            },
+            { OPEN: 1 }
+         )
+      );
+      vi.stubGlobal("__APP_VERSION__", "test"); // the build defines it; the handshake sends it
+      /* A reclaim: the new socket opens; the old one's close (which would clean up) never acts. */
+      c.ing.openSocket();
+      sockets[0].onopen?.();
+      expect(c.calls.map(([name]) => name)).toContain("linkDown");
+      expect(c.ing.memoryReqs.size).toBe(0);
+      expect(c.ing.pendingFactForgets.size).toBe(0);
+      vi.unstubAllGlobals();
+   });
+
    it("without request_refs nothing is tagged", () => {
       const c = client();
       c.ing.listMemoryBatches();
