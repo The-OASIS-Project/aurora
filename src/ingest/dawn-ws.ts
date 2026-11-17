@@ -1271,7 +1271,11 @@ export class DawnIngest implements Ingest {
       order): each sets the session's LLM to that conversation's settings when DAWN handles it.
       One the user opened records the conversation that was open before (`back`): a refused load
       (the conversation deleted meanwhile) returns to it, as DAWN's session never left it. */
-   private convLoadsOwed: Array<{ id: number; back?: number }> = [];
+   private convLoadsOwed: Array<{ id: number; back?: number; restore?: boolean }> = [];
+   /* The load being sent replays an open a link loss interrupted: refused, it returns to the
+      conversation on screen AND restores that one's server context (the new session may not hold
+      it). Set by the session handler, taken by send. */
+   private loadRestores = false;
    /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
       by send). */
    private loadBack: number | undefined;
@@ -2282,11 +2286,19 @@ export class DawnIngest implements Ingest {
                   ahead of the transcript) loads in full too: a re-anchor would point the session
                   at it while another conversation stays on screen. */
                if (this.reclaiming || this.convId !== this.drawnConvId) {
+                  /* Refused (the conversation gone meanwhile), the replay of an interrupted open
+                     goes back to the one on screen, as the open itself would have. */
+                  if (!this.reclaiming && this.convId !== this.drawnConvId) {
+                     this.loadBack = this.drawnConvId;
+                     this.loadRestores = true;
+                  }
                   this.reclaiming = false;
                   this.send({
                      type: "load_conversation",
                      payload: { conversation_id: this.convId }
                   });
+                  this.loadBack = undefined;
+                  this.loadRestores = false;
                } else {
                   this.reanchoring = true;
                   if ((p as { reconnected?: boolean }).reconnected === false) {
@@ -5666,7 +5678,7 @@ export class DawnIngest implements Ingest {
    /* load_conversation_response: the conversation opened (or why it couldn't). */
    private onConversationLoaded(
       p: Record<string, unknown>,
-      load?: { id: number; back?: number }
+      load?: { id: number; back?: number; restore?: boolean }
    ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
@@ -5700,6 +5712,18 @@ export class DawnIngest implements Ingest {
          if (load?.back !== undefined && this.convId === load.id) {
             this.convId = load.back;
             this.sinks.conversationList.setActive(load.back);
+            if (load.restore) {
+               /* After a reconnect the session may not hold the conversation on screen (a fresh
+                  one has an empty history): rebuild its server context without redrawing it, or
+                  a fresh chat when none was on screen. */
+               if (load.back > 0) {
+                  this.reanchoring = true;
+                  this.send({ type: "load_conversation", payload: { conversation_id: load.back } });
+               } else {
+                  this.showConversation(0);
+                  localStorage.removeItem(CONV_KEY);
+               }
+            }
          }
          this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
             hold: 4
@@ -6606,7 +6630,11 @@ export class DawnIngest implements Ingest {
          const id = Number(
             (msg as { payload?: { conversation_id?: unknown } }).payload?.conversation_id
          );
-         this.convLoadsOwed.push({ id, back: this.loadBack });
+         this.convLoadsOwed.push({
+            id,
+            back: this.loadBack,
+            restore: this.loadRestores || undefined
+         });
       }
       this.ws.send(JSON.stringify(msg));
       return true;

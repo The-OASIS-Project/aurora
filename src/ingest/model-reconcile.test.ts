@@ -605,6 +605,22 @@ describe("a reconnect while an opened conversation hasn't loaded", () => {
       });
    });
 
+   it("refused, the replay goes back to the conversation on screen and restores its context", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.showConversation(7);
+      c.ing.convId = 7;
+      c.ing.loadConversation(9);
+      c.ing.convLoadsOwed = []; // the link dropped: a new socket owes nothing of the old one's
+      c.frame("session", { authenticated: true, reconnected: false }); // a fresh session
+      c.sent.length = 0;
+      c.frame("load_conversation_response", { success: false, error: "Conversation not found" });
+      expect(c.ing.convId).toBe(7);
+      expect(c.sent.find((m) => m.type === "load_conversation")?.payload).toEqual({
+         conversation_id: 7
+      });
+      expect(c.ing.reanchoring).toBe(true); // rebuilt server-side, not redrawn
+   });
+
    it("re-anchors lightly when the conversation on screen is the active one", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.ing.showConversation(7);
