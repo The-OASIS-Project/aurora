@@ -1265,9 +1265,14 @@ export class DawnIngest implements Ingest {
       revision is still current: a later write, a conversation load, DAWN's tool switching the
       model or New Chat (each bumps llmRev) makes it an older reply that would undo newer state. */
    private llmWritesOwed: number[] = [];
-   /* load_conversation requests still waiting for their reply: each sets the session's LLM to
-      that conversation's settings when DAWN handles it. */
-   private convLoadsOwed = 0;
+   /* load_conversation requests still waiting for their reply, oldest first (DAWN answers in
+      order): each sets the session's LLM to that conversation's settings when DAWN handles it.
+      One the user opened records the conversation that was open before (`back`): a refused load
+      (the conversation deleted meanwhile) returns to it, as DAWN's session never left it. */
+   private convLoadsOwed: Array<{ id: number; back?: number }> = [];
+   /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
+      by send). */
+   private loadBack: number | undefined;
    /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
    private pendingFactForgets = new Set<number>();
    /* The Learned list's requests still owed a reply, by the `req` they carry (request_refs): an
@@ -1656,7 +1661,7 @@ export class DawnIngest implements Ingest {
             a generic label. Read-only request; ignored gracefully if refused. */
          this.configAsks = [{ rev: this.llmRev, listsOnly: false }]; // no older ask will be answered
          this.llmWritesOwed = []; // nor an older model write
-         this.convLoadsOwed = 0; // nor an older load
+         this.convLoadsOwed = []; // nor an older load
          this.loadedSyncDeferred = false;
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
@@ -2655,8 +2660,7 @@ export class DawnIngest implements Ingest {
          }
 
          case "load_conversation_response":
-            if (this.convLoadsOwed > 0) this.convLoadsOwed--;
-            this.onConversationLoaded(p);
+            this.onConversationLoaded(p, this.convLoadsOwed.shift());
             /* Opened, the session runs the conversation's stored model; in local mode with llama.cpp
                it follows the loaded one again (on a failure, it ends a sync's wait on this load). */
             this.syncLoadedLocalModel();
@@ -4368,6 +4372,7 @@ export class DawnIngest implements Ingest {
          this.settlePrivateCreate(false);
          this.discardNextCreate = true; // its new_conversation_response must not steal the view
       }
+      const back = this.convId;
       this.convId = id;
       this.sinks.conversationList.setActive(id);
       /* Opening another conversation ends a switch to local still waiting for the model list:
@@ -4375,7 +4380,9 @@ export class DawnIngest implements Ingest {
          own settings are coming, so older config snapshots no longer describe the selection. */
       this.localPickPending = false;
       this.llmRev++;
+      if (id !== back) this.loadBack = back;
       this.send({ type: "load_conversation", payload: { conversation_id: id } });
+      this.loadBack = undefined;
    }
 
    newConversation(opts: { private?: boolean } = {}): Promise<boolean> {
@@ -5584,7 +5591,10 @@ export class DawnIngest implements Ingest {
    }
 
    /* load_conversation_response: the conversation opened (or why it couldn't). */
-   private onConversationLoaded(p: Record<string, unknown>): void {
+   private onConversationLoaded(
+      p: Record<string, unknown>,
+      load?: { id: number; back?: number }
+   ): void {
       /* A failed load (e.g. the conversation was deleted from another client) must
          NOT wipe the surface: guard success and leave state untouched. */
       if ((p as { success?: boolean }).success === false) {
@@ -5608,6 +5618,13 @@ export class DawnIngest implements Ingest {
             localStorage.removeItem(CONV_KEY);
             this.sinks.conversationList.setActive(0);
             return;
+         }
+         /* One the user opened (a picker row, a batch's title) whose conversation is gone: back to
+            the one still open, which DAWN's session never left, unless something else has moved
+            the view since. Turns must not go to a conversation that doesn't exist. */
+         if (load?.back !== undefined && this.convId === load.id) {
+            this.convId = load.back;
+            this.sinks.conversationList.setActive(load.back);
          }
          this.spikeNotice("conv-load", "conversation", "Could not open that conversation", {
             hold: 4
@@ -5979,7 +5996,7 @@ export class DawnIngest implements Ingest {
    private selectionSettled(): boolean {
       return (
          this.llmWritesOwed.length === 0 &&
-         this.convLoadsOwed === 0 &&
+         this.convLoadsOwed.length === 0 &&
          !this.configAsks.some((a) => !a.listsOnly)
       );
    }
@@ -6505,7 +6522,12 @@ export class DawnIngest implements Ingest {
       if (type === "set_session_llm") this.llmRev++; // see llmRev
       if (this.ws?.readyState !== WebSocket.OPEN) return false;
       if (type === "set_session_llm") this.llmWritesOwed.push(this.llmRev); // see llmWritesOwed
-      if (type === "load_conversation") this.convLoadsOwed++;
+      if (type === "load_conversation") {
+         const id = Number(
+            (msg as { payload?: { conversation_id?: unknown } }).payload?.conversation_id
+         );
+         this.convLoadsOwed.push({ id, back: this.loadBack });
+      }
       this.ws.send(JSON.stringify(msg));
       return true;
    }
