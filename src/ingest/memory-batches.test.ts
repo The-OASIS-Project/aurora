@@ -287,6 +287,23 @@ describe("the Learned list over the wire", () => {
       expect(c.calls.map(([name]) => name)).toEqual(["upsertBatch"]);
    });
 
+   it("a typed turn's echo, confirmed, doesn't hide a later turn of the same words", () => {
+      const ids = new Set<number>();
+      const shown: number[] = [];
+      const c = client(["memory_batches", "turn_refs"], {
+         hasMessage: (id: number) => ids.has(id),
+         noteMessageId: (id: number) => ids.add(id),
+         confirmTurn: (_t: string, _r: string, id: number) => ids.add(id), // stamps the bubble
+         showUser: (_t: string, id: number) => shown.push(id),
+         setMemoryMarks: () => {}
+      });
+      c.ing.typedEchoes.push({ text: "lights on", at: performance.now(), ref: "1" });
+      c.frame("transcript", { role: "user", text: "lights on", message_id: 14, client_ref: "1" });
+      /* A spoken turn with the same words a moment later (another viewer's, or the voice path). */
+      c.frame("transcript", { role: "user", text: "lights on", message_id: 20 });
+      expect(shown).toEqual([20]);
+   });
+
    it("without request_refs nothing is tagged", () => {
       const c = client();
       c.ing.listMemoryBatches();

@@ -4116,28 +4116,20 @@ export class DawnIngest implements Ingest {
                appended the typed bubble locally (recorded in typedEchoes), so dedupe that
                and display only what has no local counterpart - i.e. spoken input. */
             if (p.role === "user" && typeof p.text === "string") {
-               /* Confirm our held turn: by its ref when DAWN echoes one (turn_refs), else the oldest held
-                  turn with this text. */
-               if (p.replay !== true) {
-                  const ref =
-                     typeof (p as { client_ref?: unknown }).client_ref === "string"
-                        ? (p as { client_ref: string }).client_ref
-                        : undefined;
-                  if (ref !== undefined || !this.hasFeature("turn_refs"))
-                     this.sinks.conversation.confirmTurn(
-                        p.text,
-                        ref,
-                        Number((p as { message_id?: number }).message_id ?? 0)
-                     );
-               }
-               this.handleIncomingUser(
-                  p.text.trim(),
-                  Number((p as { message_id?: number }).message_id ?? 0),
-                  p.replay === true,
+               const ref =
                   typeof (p as { client_ref?: unknown }).client_ref === "string"
                      ? (p as { client_ref: string }).client_ref
-                     : undefined
-               );
+                     : undefined;
+               const messageId = Number((p as { message_id?: number }).message_id ?? 0);
+               /* First the echo bookkeeping (it consumes our typed echo while the id is still new),
+                  then the held turn's confirm, which gives its bubble the id: the other way round,
+                  the id would already be known and the echo left behind, hiding a later turn of the
+                  same words. */
+               this.handleIncomingUser(p.text.trim(), messageId, p.replay === true, ref);
+               /* Confirm our held turn: by its ref when DAWN echoes one (turn_refs), else the oldest
+                  held turn with this text. */
+               if (p.replay !== true && (ref !== undefined || !this.hasFeature("turn_refs")))
+                  this.sinks.conversation.confirmTurn(p.text, ref, messageId);
                break;
             }
             /* A visual the render_visual tool just drew (DAWN sends the tool's whole result live; the
