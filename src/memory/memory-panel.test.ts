@@ -269,6 +269,21 @@ describe("the Learned list", () => {
       expect(button("Forget")?.disabled).toBe(false);
    });
 
+   it("a confirm cancelled after a redraw gives the keyboard back to the redrawn button", () => {
+      const { panel, el, open, button } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      const page = batch(5, [op(1), op(2)]);
+      panel.setPage({ before: null, batches: [page], nextBefore: null, error: null });
+      open();
+      button("Undo all")!.focus();
+      button("Undo all")!.click();
+      panel.upsertBatch({ ...page }); // a push redraws the list under the dialog
+      button("Cancel")!.click();
+      expect(document.activeElement?.textContent).toBe("Undo all");
+      expect(el.contains(document.activeElement)).toBe(true);
+   });
+
    it("keeps a push that lands while the page is on its way", () => {
       const { panel, el } = mounted();
       panel.setAvailable(true);

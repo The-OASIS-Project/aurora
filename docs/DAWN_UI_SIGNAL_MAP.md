@@ -1144,6 +1144,10 @@ per batch"; batches exist only with `[memory] consolidator = "agent"`). The Memo
   (confirmed; its reply echoes `fact_id`, which routes it back to the panel). Each change shows
   only the `action` DAWN marks on it. Undo and Keep share one per-user slot at DAWN, so one runs
   at a time; their replies come when DAWN's worker ends, after the changed batch's push.
+- **Refusals:** with `request_refs` (DAWN #116) the four requests carry a `req`; an `error` naming
+  one (SERVICE_UNAVAILABLE when DAWN can't check the login, say) is its only answer and settles it
+  as failed (the list stops loading, the buttons come back; nothing is resent). Without the flag a
+  refused request waits for the next connect.
 - **`conversation_title`** (DAWN #120, no flag, presence-detected; <=255 bytes, `""` = untitled,
   null = none): heads the batch and opens its conversation. `conversation_renamed` (since #120
   also sent for every manual rename, possibly before `rename_conversation_response`) patches it.

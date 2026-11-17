@@ -149,6 +149,55 @@ describe("the Learned list over the wire", () => {
       ]);
    });
 
+   it("with request_refs, a refused request is settled as failed; a reply settles it once", () => {
+      const c = client(["memory_batches", "request_refs"]);
+      c.ing.listMemoryBatches();
+      c.ing.undoMemoryBatch(4, 2);
+      c.ing.forgetMemoryFact(9);
+      const reqs = c.sent.map((m) => m.payload?.req);
+      expect(reqs).toEqual(["mem-1", "mem-2", "mem-3"]);
+      /* DAWN couldn't check the login: each request's only answer is an error naming it. */
+      const refuse = (req: unknown) =>
+         c.frame("error", {
+            code: "SERVICE_UNAVAILABLE",
+            message: "Couldn't check the login; try again",
+            severity: "error",
+            req,
+            request_type: "x"
+         });
+      reqs.forEach(refuse);
+      expect(c.calls).toEqual([
+         [
+            "setPage",
+            {
+               before: null,
+               batches: [],
+               nextBefore: null,
+               error: "Couldn't check the login; try again"
+            }
+         ],
+         ["actionDone", { kind: "undo", batchId: 4, opId: 2, ok: false }],
+         ["actionDone", { kind: "forget", factId: 9, ok: false }]
+      ]);
+      /* A request that was answered is done: a later error naming it settles nothing. */
+      c.ing.keepMemoryOp(4, 3);
+      c.frame("keep_memory_op_response", {
+         batch_id: 4,
+         op_id: 3,
+         status: "ok",
+         fact_id: 50,
+         req: "mem-4"
+      });
+      refuse("mem-4");
+      expect(c.calls.filter(([name]) => name === "actionDone")).toHaveLength(3);
+   });
+
+   it("without request_refs nothing is tagged", () => {
+      const c = client();
+      c.ing.listMemoryBatches();
+      expect(c.sent[0].payload).not.toHaveProperty("req");
+   });
+
    it("a keep reports the fact it stored", () => {
       const c = client();
       c.frame("keep_memory_op_response", { batch_id: 4, op_id: 9, status: "ok", fact_id: 88 });

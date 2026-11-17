@@ -217,6 +217,13 @@ function providerLabel(p: LlmProvider): string {
 const TTS_KEY = "dawn.hero.tts"; // persisted TTS on/off
 const ALARM_SOUNDS_KEY = "dawn.hero.alarmSounds"; // persisted "Alarm sounds" (chime/loop) on/off
 const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (this browser)" session keepalive
+/* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
+type MemoryReq =
+   | { kind: "list"; before: number | null }
+   | { kind: "undo"; batchId: number; opId: number | null }
+   | { kind: "keep"; batchId: number; opId: number }
+   | { kind: "forget"; factId: number };
+
 /* A Learned-list page (DAWN allows up to 50). */
 const MEMORY_BATCH_PAGE = 20;
 
@@ -1263,6 +1270,11 @@ export class DawnIngest implements Ingest {
    private convLoadsOwed = 0;
    /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
    private pendingFactForgets = new Set<number>();
+   /* The Learned list's requests still owed a reply, by the `req` they carry (request_refs): an
+      error naming one (SERVICE_UNAVAILABLE when DAWN can't check the login, say) is its only
+      answer, and settles it as failed. */
+   private memoryReqs = new Map<string, MemoryReq>();
+   private memoryReqSeq = 0;
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
    /* When the last error line was shown, to drop DAWN's generic "Failed to get response"
@@ -1779,6 +1791,7 @@ export class DawnIngest implements Ingest {
          this.ringingAlarms.clear();
          this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
          this.pendingFactForgets.clear(); // their replies can't come now
+         this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
          this.stopMetrics();
          this.closeMusicStream();
@@ -2698,6 +2711,7 @@ export class DawnIngest implements Ingest {
          case "delete_memory_fact_response":
          case "delete_memory_entity_response":
          case "delete_memory_summary_response": {
+            this.memoryReplied(p);
             /* A Forget from the Learned list (the reply names its fact): the panel's own. */
             const forgotId = type === "delete_memory_fact_response" ? rowId(p.fact_id) : null;
             if (forgotId !== null && this.pendingFactForgets.delete(forgotId)) {
@@ -2727,6 +2741,7 @@ export class DawnIngest implements Ingest {
          }
 
          case "list_memory_batches_response":
+            this.memoryReplied(p);
             /* The Learned list's page. The per-conversation form (conversation_id echoed) is for
                the conversation markers, which this client doesn't draw yet. */
             if (p.conversation_id != null) break;
@@ -2746,10 +2761,12 @@ export class DawnIngest implements Ingest {
          }
 
          case "undo_memory_batch_response":
+            this.memoryReplied(p);
             this.onMemoryUndone(p);
             break;
 
          case "keep_memory_op_response":
+            this.memoryReplied(p);
             this.onMemoryKept(p);
             break;
 
@@ -3074,6 +3091,12 @@ export class DawnIngest implements Ingest {
                paint the reactor red for an info notice; instead surface it as an
                ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
+            /* A Learned-list request DAWN refused (it names it by `req`): settled here, never a
+               reactor error. */
+            if (this.settleMemoryRefusal(p)) {
+               if (code === "UNKNOWN_TYPE") this.onUnknownType(str(p.request_type), str(p.req));
+               break;
+            }
             /* This DAWN doesn't handle a message type we sent (an older daemon, or a subsystem
                like Home Assistant or the calendar not built in). Never a visible error: fail the
                matching request fast, stop sending that type on this connection, and note it. It
@@ -4414,27 +4437,95 @@ export class DawnIngest implements Ingest {
       if (!this.hasFeature("memory_batches")) return false;
       const payload: Record<string, number> = { limit: MEMORY_BATCH_PAGE };
       if (before !== undefined && before > 0) payload.before_batch_id = before;
-      return this.send({ type: "list_memory_batches", payload });
+      return this.sendMemory("list_memory_batches", payload, {
+         kind: "list",
+         before: payload.before_batch_id ?? null
+      });
    }
 
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
       if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
       const payload: Record<string, number> = { batch_id: batchId };
       if (opId !== null && opId > 0) payload.op_id = opId;
-      return this.send({ type: "undo_memory_batch", payload });
+      return this.sendMemory("undo_memory_batch", payload, {
+         kind: "undo",
+         batchId,
+         opId: payload.op_id ?? null
+      });
    }
 
    keepMemoryOp(batchId: number, opId: number): boolean {
       if (!this.hasFeature("memory_batches") || batchId <= 0 || opId <= 0) return false;
-      return this.send({ type: "keep_memory_op", payload: { batch_id: batchId, op_id: opId } });
+      return this.sendMemory(
+         "keep_memory_op",
+         { batch_id: batchId, op_id: opId },
+         { kind: "keep", batchId, opId }
+      );
    }
 
    /* The forget DAWN suggested (an op's action "forget"): the ordinary delete_memory_fact, which
       records the forget and pushes the batch without that row. */
    forgetMemoryFact(factId: number): boolean {
       if (!this.hasFeature("memory_batches") || factId <= 0) return false;
-      if (!this.send({ type: "delete_memory_fact", payload: { fact_id: factId } })) return false;
+      if (!this.sendMemory("delete_memory_fact", { fact_id: factId }, { kind: "forget", factId }))
+         return false;
       this.pendingFactForgets.add(factId);
+      return true;
+   }
+
+   /* A Learned-list request, tagged with a `req` when DAWN echoes it (request_refs). */
+   private sendMemory(type: string, payload: Record<string, number>, pending: MemoryReq): boolean {
+      const req = this.hasFeature("request_refs") ? `mem-${++this.memoryReqSeq}` : "";
+      if (!this.send({ type, payload: req ? { ...payload, req } : payload })) return false;
+      if (req) this.memoryReqs.set(req, pending);
+      return true;
+   }
+
+   /* A reply settles its request. */
+   private memoryReplied(p: Record<string, unknown>): void {
+      if (typeof p.req === "string") this.memoryReqs.delete(p.req);
+   }
+
+   /* An error naming a Learned-list request (request_refs): DAWN refused it, and no reply will
+      come. Settle it as failed, so the list stops loading and the buttons come back; nothing is
+      sent again (the user retries). Whether it was one. */
+   private settleMemoryRefusal(p: Record<string, unknown>): boolean {
+      const pending = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
+      if (!pending || p.severity === "info") return false;
+      this.memoryReqs.delete(p.req as string);
+      const message =
+         typeof p.message === "string" && p.message
+            ? p.message
+            : "DAWN couldn't do this right now. Try again in a moment.";
+      if (pending.kind === "list") {
+         this.sinks.memoryBatches.setPage({
+            before: pending.before,
+            batches: [],
+            nextBefore: null,
+            error: message
+         });
+         return true;
+      }
+      this.memoryNotice(message, true);
+      if (pending.kind === "forget") {
+         this.pendingFactForgets.delete(pending.factId);
+         this.sinks.memoryBatches.actionDone({ kind: "forget", factId: pending.factId, ok: false });
+      } else if (pending.kind === "keep") {
+         this.sinks.memoryBatches.actionDone({
+            kind: "keep",
+            batchId: pending.batchId,
+            opId: pending.opId,
+            ok: false,
+            factId: null
+         });
+      } else {
+         this.sinks.memoryBatches.actionDone({
+            kind: "undo",
+            batchId: pending.batchId,
+            opId: pending.opId,
+            ok: false
+         });
+      }
       return true;
    }
 

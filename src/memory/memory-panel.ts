@@ -565,9 +565,14 @@ export function mountMemoryPanel(
 
    /* The keyboard back on the control with this key, or the list when it's gone or busy. */
    function restoreFocus(key: string): void {
+      focusTarget(key).focus();
+   }
+
+   /* The control with this key now (a redraw replaces controls), or the list when it's gone or
+      busy. */
+   function focusTarget(key: string): HTMLElement {
       const again = list.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`);
-      if (again && !(again as HTMLButtonElement).disabled) again.focus();
-      else list.focus();
+      return again && !(again as HTMLButtonElement).disabled ? again : list;
    }
 
    /* Refresh the relative times while open ("just now" ages). */
@@ -587,11 +592,8 @@ export function mountMemoryPanel(
    };
 
    /* --- writing (only from the buttons) ------------------------------------- */
-   /* A confirm's action, once its dialog has closed and handed the keyboard back (it returns
-      focus to the button that opened it, which a redraw would have replaced). */
-   function afterDialog(fn: () => void): void {
-      window.setTimeout(fn, 0);
-   }
+   /* A confirm hands the keyboard back by key (returnFocus), however it closes: a push that
+      redrew the list meanwhile replaced the button that opened it. */
 
    function act(
       action: "undo" | "keep" | "forget",
@@ -603,19 +605,18 @@ export function mountMemoryPanel(
          if (!op || !factId || busy.has(forgetKey(factId))) return;
          openDialog({
             title: "Forget this memory?",
+            returnFocus: () => focusTarget(forgetKey(factId)),
             body: `${op.text ? `"${op.text}"` : "This memory"} will be forgotten, and memory won't learn it again. This cannot be undone.`,
             actions: [
                { label: "Keep it", onClick: () => {}, autofocus: true },
                {
                   label: "Forget",
                   danger: true,
-                  onClick: () =>
-                     afterDialog(() => {
-                        if (opts.forget(factId)) busy.add(forgetKey(factId));
-                        else footNote = NOT_SENT;
-                        render();
-                        restoreFocus(forgetKey(factId));
-                     })
+                  onClick: () => {
+                     if (opts.forget(factId)) busy.add(forgetKey(factId));
+                     else footNote = NOT_SENT;
+                     render();
+                  }
                }
             ]
          });
@@ -645,17 +646,14 @@ export function mountMemoryPanel(
          const n = batch.ops.filter((o) => o.action === "undo").length;
          openDialog({
             title: `Undo ${plural(n, "change", "changes")}?`,
+            returnFocus: () => focusTarget(key),
             body: `${batchSummary(batch)}. What changed since stays as it is.`,
             actions: [
                { label: "Cancel", onClick: () => {}, autofocus: true },
                {
                   label: "Undo all",
                   danger: true,
-                  onClick: () =>
-                     afterDialog(() => {
-                        run();
-                        restoreFocus(key);
-                     })
+                  onClick: run
                }
             ]
          });
@@ -677,10 +675,14 @@ export function mountMemoryPanel(
          ensureLoaded();
       },
       setPage(page: MemoryBatchPage) {
-         /* The oldest page asked: this reply's. One no longer wanted (or a reply nothing asked
-            for) changes nothing, and leaves the page that is wanted still loading. */
-         const mine = asked.shift();
-         if (!mine?.wanted || mine.before !== page.before) return;
+         /* The oldest page asked for this cursor: this reply's (replies come in order, but a
+            refusal can come ahead of replies to earlier requests). One no longer wanted (or a
+            reply nothing asked for) changes nothing, and leaves the page that is wanted still
+            loading. */
+         const at = asked.findIndex((a) => a.before === page.before);
+         if (at < 0) return;
+         const [mine] = asked.splice(at, 1);
+         if (!mine.wanted) return;
          loading = null;
          const first = page.before === null;
          if (page.error) {

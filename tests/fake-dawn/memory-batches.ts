@@ -273,6 +273,7 @@ export class MemoryBatchStore {
          const before = b.ops.length;
          b.ops = b.ops.filter((o) => o.fact_id !== factId && o.target_fact_id !== factId);
          if (b.ops.length !== before) {
+            b.counts = countsOf(b.ops);
             b.status = statusOf(b.ops);
             pushed.push(this.frame(b));
          }

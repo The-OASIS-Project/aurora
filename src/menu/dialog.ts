@@ -50,6 +50,10 @@ export interface DialogOptions {
    stillValid?: () => boolean;
    /* Queue identity: a second queued dialog with the same key is dropped as a duplicate. */
    key?: string;
+   /* Where the keyboard goes when the dialog closes, however it closes. For a view that may
+      redraw underneath it (the button that opened it replaced by an equal one): absent, or when
+      it names nothing, the element focused before it opened, if that is still on the page. */
+   returnFocus?: () => HTMLElement | null;
 }
 
 /* The open dialog's own close: it also drops that dialog's keydown listener and restores
@@ -107,7 +111,8 @@ export function openDialog(opts: DialogOptions): void {
       overlay.remove();
       document.removeEventListener("keydown", onKey);
       if (closeOpen === close) closeOpen = null;
-      prevFocus?.focus?.();
+      const back = opts.returnFocus?.() ?? (prevFocus?.isConnected ? prevFocus : null);
+      back?.focus?.();
       /* A queued unprompted dialog opens only once nothing replaced this one. */
       if (!closeOpen && !replacing) drainWaiting();
    };
