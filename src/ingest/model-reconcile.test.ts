@@ -735,6 +735,41 @@ describe("with request_refs, model requests are settled by the request they name
       }
    });
 
+   it("while a refused load waits to be resent, pings go out despite steady traffic", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.pongSupported = true;
+      c.ing.lastInboundAt = performance.now(); // music progress just arrived
+      c.sent.length = 0;
+      c.ing.heartbeatTick();
+      expect(c.sent.map((m) => m.type)).toEqual(["ping"]);
+   });
+
+   it("an open of the user's supersedes a refused resume still to resend", () => {
+      const c = refs();
+      c.ing.convId = 42;
+      c.ing.resumingStored = true;
+      c.ing.send({ type: "load_conversation", payload: { conversation_id: 42 } }); // llm-1
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.ing.loadConversation(42); // opened from the picker meanwhile
+      c.sent.length = 0;
+      c.ing.pendingPingSeq = 5;
+      c.frame("pong", { seq: 5 });
+      expect(c.sent.map((m) => m.type)).not.toContain("load_conversation");
+   });
+
+   it("a refused switch to local isn't sent again as llama.cpp's follow while unread", () => {
+      const c = refs();
+      c.ing.getModelControl().setMode("local"); // llm-1, optimistic local
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
+      c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-2" }); // its read
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites().filter((m) => m.payload?.from_restore === true)).toEqual([]);
+   });
+
    it("a reply settles the request it names, not the oldest", () => {
       const c = refs();
       c.ing.getModelControl().setModel("claude-opus-5-5"); // llm-1

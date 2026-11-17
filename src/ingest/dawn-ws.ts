@@ -1956,7 +1956,15 @@ export class DawnIngest implements Ingest {
       /* Recent traffic proves life, except while a pong is overdue: other replies can keep flowing
          (DAWN answering SERVICE_UNAVAILABLE, say) without settling the doubt, so probe until a
          pong clears it or a second miss reconnects. */
-      if (this.missedPongs === 0 && performance.now() - this.lastInboundAt < PING_IDLE_MS) return;
+      /* And while a refused load or a refused change's read waits to be sent again: those go out
+         on a pong, and steady traffic (music progress, say) would otherwise never let one come. */
+      const recovering = this.loadRetry !== null || this.llmNeedsRead;
+      if (
+         this.missedPongs === 0 &&
+         !recovering &&
+         performance.now() - this.lastInboundAt < PING_IDLE_MS
+      )
+         return;
       this.sendPing();
    }
 
@@ -4415,6 +4423,7 @@ export class DawnIngest implements Ingest {
 
    loadConversation(id: number): void {
       if (id <= 0) return;
+      this.loadRetry = null; // an open of the user's supersedes a refused load still to resend
       /* Finalize any in-flight streamed bubble before switching id. Set convId optimistically so
          a text sent before the response is tagged to the right conversation (M2);
          load_conversation_response confirms it. */
@@ -5689,6 +5698,7 @@ export class DawnIngest implements Ingest {
          return;
       }
       const cid = Number((p as { conversation_id?: number }).conversation_id ?? this.convId);
+      this.loadRetry = null; // a conversation is loaded: a refused one waiting to resend is moot
       /* It's on screen now: the way back for any opened load still unanswered (the same one
          opened twice, say, the second refused). */
       for (const l of this.convLoadsOwed) if (l.back !== undefined) l.back = cid;
@@ -6131,7 +6141,10 @@ export class DawnIngest implements Ingest {
       return (
          this.llmWritesOwed.length === 0 &&
          this.convLoadsOwed.length === 0 &&
-         !this.configAsks.some((a) => !a.listsOnly)
+         !this.configAsks.some((a) => !a.listsOnly) &&
+         /* A refused change left the panel showing a choice that may never have run: nothing
+            follows it until a read says what the session runs. */
+         !this.llmNeedsRead
       );
    }
 
