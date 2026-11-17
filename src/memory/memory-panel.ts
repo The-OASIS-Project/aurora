@@ -29,6 +29,7 @@ import { makeVisibility } from "../render/visibility.ts";
 import { openDialog } from "../menu/dialog.ts";
 import { relativeTime } from "../util/time.ts";
 import { safeTimeZone } from "../util/tz.ts";
+import { batchSummary, outsideText } from "../util/memory-text.ts";
 
 export interface MemoryPanelController extends MemoryBatchesSink {
    setTimezone(tz: string): void;
@@ -36,6 +37,9 @@ export interface MemoryPanelController extends MemoryBatchesSink {
    isAvailable(): boolean;
    isVisible(): boolean;
    setVisible(on: boolean): void;
+   /* Show this batch: the panel comes up with it open and pointed out (a conversation's mark was
+      clicked). One older than the pages read is shown too. */
+   focusBatch(batch: MemoryBatch): void;
    destroy(): void;
 }
 
@@ -102,47 +106,10 @@ const TARGET_LABELS: Record<string, string> = {
    linked: "with"
 };
 
-/* What outside text a batch (or a change from another batch) read. */
-const OUTSIDE_CAUSES: Record<string, string> = {
-   web: "a web page",
-   email: "an email",
-   research: "a research report",
-   messaging: "a message",
-   document: "a document",
-   calendar: "a calendar event",
-   mcp: "another tool's result",
-   other: "another tool's result"
-};
-
 const ACTION_LABELS = { undo: "Undo", keep: "Keep", forget: "Forget" } as const;
 const BUSY_LABELS = { undo: "Undoing…", keep: "Keeping…", forget: "Forgetting…" } as const;
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
-
-/* "3 learned, 2 confirmed, 1 updated" from a batch's counts. */
-export function batchSummary(batch: MemoryBatch): string {
-   const c = batch.counts;
-   const n = (k: string): number => c[k] ?? 0;
-   const parts: string[] = [];
-   const add = (count: number, one: string, many: string): void => {
-      if (count > 0) parts.push(plural(count, one, many));
-   };
-   add(n("added"), "learned", "learned");
-   add(n("reinforced"), "confirmed", "confirmed");
-   add(n("merged") + n("replaced") + n("closed"), "updated", "updated");
-   add(n("linked") + n("proposed"), "link", "links");
-   add(n("pref_set"), "preference", "preferences");
-   add(n("dropped") + n("deferred"), "not kept", "not kept");
-   add(n("suggested_forget"), "to review", "to review");
-   return parts.length > 0 ? parts.join(", ") : "Nothing new";
-}
-
-/* "Read outside text: an email" for a batch or change that read outside text, else "". */
-export function outsideText(item: { outside: boolean; outsideFrom: string | null }): string {
-   if (!item.outside) return "";
-   const cause = item.outsideFrom ? OUTSIDE_CAUSES[item.outsideFrom] : undefined;
-   return `Read outside text${cause ? `: ${cause}` : ""}`;
-}
 
 export function mountMemoryPanel(
    root: HTMLElement,
@@ -257,6 +224,8 @@ export function mountMemoryPanel(
       loading = null;
       for (const a of asked) a.wanted = false; // their replies still come, and settle nothing
       renamed.clear(); // the fresh first page has the titles as they are
+      pinned.clear();
+      wanted = null; // a batch asked for before belongs to that list
       batches.clear();
       expanded.clear();
       pushedWhileLoading.clear();
@@ -267,11 +236,42 @@ export function mountMemoryPanel(
 
    /* Keep the newest `paged` batches; the rest wait behind "Show older" again. */
    const trim = (): void => {
-      if (batches.size <= Math.max(paged, PAGE_FLOOR)) return;
-      const ordered = [...batches.keys()].sort((a, b) => b - a);
+      /* A batch shown because it was asked for (focusBatch) stays, outside the count. */
+      const ordered = [...batches.keys()].filter((id) => !pinned.has(id)).sort((a, b) => b - a);
+      if (ordered.length <= Math.max(paged, PAGE_FLOOR)) return;
       const keep = ordered.slice(0, Math.max(paged, PAGE_FLOOR));
       for (const id of ordered.slice(keep.length)) drop(id);
       nextBefore = keep[keep.length - 1];
+   };
+
+   /* A batch asked for (focusBatch), shown once the list is. */
+   let wanted: MemoryBatch | null = null;
+   /* Batches shown because they were asked for, older than the pages read. */
+   const pinned = new Set<number>();
+   let lit = 0; // the batch pointed out for a moment (until litUntil)
+   let litUntil = 0;
+   let litTimer = 0;
+
+   const applyFocus = (): void => {
+      if (!wanted || !loaded || !shownNow()) return;
+      const b = wanted;
+      wanted = null;
+      if (!batches.has(b.batchId)) {
+         batches.set(b.batchId, retitle(b));
+         pinned.add(b.batchId);
+      }
+      expanded.add(b.batchId);
+      lit = b.batchId;
+      litUntil = Date.now() + HIGHLIGHT_MS;
+      window.clearTimeout(litTimer);
+      litTimer = window.setTimeout(() => {
+         lit = 0;
+         renderIfShown();
+      }, HIGHLIGHT_MS);
+      render();
+      const head = list.querySelector<HTMLElement>(`[data-focus-key="batch:${b.batchId}"]`);
+      head?.scrollIntoView?.({ block: "nearest" });
+      head?.focus();
    };
 
    /* Draw only what's on screen (a hidden panel is rebuilt when it's next shown). */
@@ -309,8 +309,10 @@ export function mountMemoryPanel(
 
    const replayHeld = (): void => {
       for (const [id, b] of pushedWhileLoading) {
+         /* Within the loaded range, or a batch shown because it was asked for (focusBatch). */
+         const shown = nextBefore === null || id >= nextBefore || pinned.has(id);
          if (!b) drop(id);
-         else if (nextBefore === null || id >= nextBefore) batches.set(id, retitle(b));
+         else if (shown) batches.set(id, retitle(b));
       }
       pushedWhileLoading.clear();
       trim();
@@ -324,6 +326,7 @@ export function mountMemoryPanel(
    const drop = (batchId: number): void => {
       batches.delete(batchId);
       expanded.delete(batchId);
+      pinned.delete(batchId);
    };
 
    /* --- rendering --------------------------------------------------------- */
@@ -426,6 +429,11 @@ export function mountMemoryPanel(
       box.className = "memory-batch";
       box.setAttribute("role", "listitem");
       box.dataset.status = batch.status;
+      if (batch.batchId === lit) {
+         box.classList.add("memory-batch-lit");
+         /* A redraw mid-glow carries on from where it was rather than starting over. */
+         box.style.animationDelay = `-${HIGHLIGHT_MS - Math.max(0, litUntil - Date.now())}ms`;
+      }
       const open = expanded.has(batch.batchId);
       if (open) box.classList.add("open");
 
@@ -705,7 +713,13 @@ export function mountMemoryPanel(
          loading = null;
          const first = page.before === null;
          if (page.error) {
-            /* What came for the failed page goes with it; trims held for it run now. */
+            /* What came for the failed page goes with it, except updates to a batch shown because
+               it was asked for (its own state); trims held for it run now. */
+            for (const [id, b] of pushedWhileLoading) {
+               if (!pinned.has(id)) continue;
+               if (b) batches.set(id, retitle(b));
+               else drop(id);
+            }
             pushedWhileLoading.clear();
             if (first && !loaded) {
                status = "error";
@@ -719,6 +733,7 @@ export function mountMemoryPanel(
          }
          if (first) {
             batches.clear();
+            pinned.clear();
             expanded.clear();
             loaded = true;
             status = "idle";
@@ -729,9 +744,12 @@ export function mountMemoryPanel(
          nextBefore = page.nextBefore;
          replayHeld();
          render();
+         applyFocus(); // a batch asked for while the list was on its way
       },
       upsertBatch(pushed) {
          const batch = retitle(pushed);
+         /* The batch a mark asked for, if it's still on its way to the list: its newest state. */
+         if (wanted?.batchId === batch.batchId) wanted = batch;
          if (forThePage(batch.batchId)) {
             pushedWhileLoading.set(batch.batchId, batch);
             return;
@@ -745,6 +763,7 @@ export function mountMemoryPanel(
          }
       },
       removeBatch(batchId) {
+         if (wanted?.batchId === batchId) wanted = null; // gone: nothing to show
          if (forThePage(batchId)) pushedWhileLoading.set(batchId, null);
          if (!batches.has(batchId)) return;
          drop(batchId);
@@ -840,7 +859,15 @@ export function mountMemoryPanel(
          render();
          ensureLoaded();
       },
+      focusBatch(batch) {
+         if (!available) return;
+         wanted = batch;
+         if (!vis.isVisible())
+            controller.setVisible(true); // reads the first page, then focuses
+         else applyFocus();
+      },
       destroy() {
+         window.clearTimeout(litTimer);
          window.clearInterval(clock);
          window.clearTimeout(pulseTimer);
          window.clearTimeout(highlightTimer);

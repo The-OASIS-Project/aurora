@@ -1280,6 +1280,7 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
    it("the client: a session taken back re-anchors lightly, a new one restores in full", () => {
       for (const reconnected of [true, false]) {
          const c = client();
+         c.ing.showConversation(CONVERSATION_ID); // its transcript on screen
          c.ing.convId = CONVERSATION_ID;
          c.frame(
             connectFrames(SCENARIOS.signedIn, {

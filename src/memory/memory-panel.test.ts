@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { batchSummary, mountMemoryPanel } from "./memory-panel.ts";
+import { mountMemoryPanel } from "./memory-panel.ts";
+import { batchSummary } from "../util/memory-text.ts";
 import type { MemoryBatch, MemoryBatchOp } from "../ingest/ingest.ts";
 import { closeDialog } from "../menu/dialog.ts";
 
@@ -283,6 +284,69 @@ describe("the Learned list", () => {
       button("Cancel")!.click();
       expect(document.activeElement?.textContent).toBe("Undo all");
       expect(el.contains(document.activeElement)).toBe(true);
+   });
+
+   it("a mark clicked: the panel comes up with that batch open, older than its pages or not", () => {
+      const { panel, el, calls } = mounted();
+      panel.setAvailable(true); // hidden: nothing read yet
+      panel.focusBatch(batch(3, [op(1)]));
+      expect(panel.isVisible()).toBe(true);
+      expect(calls).toEqual(["list:first"]);
+      panel.setPage({
+         before: null,
+         batches: [batch(30, [op(2)])],
+         nextBefore: 30,
+         error: null,
+         request: 1
+      });
+      const shown = [...el.querySelectorAll<HTMLElement>(".memory-batch")];
+      expect(shown).toHaveLength(2); // 30, and 3 though it's behind Show older
+      const asked = shown[1];
+      expect(asked.classList.contains("open")).toBe(true);
+      expect(asked.classList.contains("memory-batch-lit")).toBe(true);
+      expect(document.activeElement?.closest(".memory-batch")).toBe(asked);
+   });
+
+   it("an asked-for batch older than the pages keeps its updates through an older page", () => {
+      const { panel, el, button } = mounted();
+      panel.setAvailable(true);
+      panel.setVisible(true);
+      panel.setPage({
+         before: null,
+         batches: [batch(30, [op(1)])],
+         nextBefore: 30,
+         error: null,
+         request: 1
+      });
+      panel.focusBatch(batch(3, [op(2)])); // shown, though behind Show older
+      button("Show older")!.click(); // request 2
+      panel.upsertBatch(
+         batch(3, [op(2, { status: "undone", action: null })], { status: "undone" })
+      );
+      panel.setPage({
+         before: 30,
+         batches: [batch(25, [op(3)])],
+         nextBefore: 20,
+         error: null,
+         request: 2
+      });
+      const three = [...el.querySelectorAll<HTMLElement>(".memory-batch")].at(-1)!;
+      expect(three.dataset.status).toBe("undone");
+   });
+
+   it("an asked-for batch follows an update, or its removal, while the list is on its way", () => {
+      const { panel, el } = mounted();
+      panel.setAvailable(true);
+      panel.focusBatch(batch(3, [op(2)])); // the panel opens, its first page on its way
+      panel.removeBatch(3); // forgotten meanwhile
+      panel.setPage({
+         before: null,
+         batches: [batch(30, [op(1)])],
+         nextBefore: 30,
+         error: null,
+         request: 1
+      });
+      expect(el.querySelectorAll(".memory-batch")).toHaveLength(1); // not brought back
    });
 
    it("keeps a push that lands while the page is on its way", () => {

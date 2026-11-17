@@ -86,3 +86,27 @@ test("the Learned list: undo, keep, forget and undo all", async ({ page, dawn })
    await dialog.getByRole("button", { name: "Forget", exact: true }).click();
    await expect(older.locator(".memory-op")).toHaveCount(1);
 });
+
+test("the conversation shows what memory learned from it; a mark opens that batch", async ({
+   page,
+   dawn
+}) => {
+   await dawn.boot(SCENARIOS.signedIn); // the Memory panel hidden
+   await expectSignedInShell(page, false);
+   /* One mark per batch, after the reply each read up to, oldest first. */
+   const marks = page.locator(".convo-scroll > .convo-memory");
+   await expect(marks).toHaveCount(3);
+   await expect(marks.nth(2)).toContainText("2 learned, 1 updated, 1 not kept");
+   expect(
+      await page
+         .locator(".convo-scroll > *")
+         .evaluateAll((els: Element[]) => els.map((e) => e.className.split(" ")[0]))
+   ).toEqual(["convo-msg", "convo-msg", "convo-memory", "convo-memory", "convo-memory"]);
+   /* Clicked: the Memory panel comes up with that batch open and pointed out. */
+   await marks.nth(1).click();
+   const panel = page.locator("#memory");
+   await expect(panel).toBeVisible();
+   const asked = panel.locator(".memory-batch.open");
+   await expect(asked).toHaveCount(1);
+   await expect(asked.locator(".memory-batch-summary")).toHaveText("1 learned, 1 to review");
+});
