@@ -404,6 +404,16 @@ describe("turn_wait", () => {
       c.frame("turn_unsent", { conversation_id: 7, client_ref: "3", text_saved: false });
       expect(c.named("setTurnWait").at(-1)).toEqual([null]);
       expect(c.named("rejectTurn")).toEqual([[{ ref: "3" }, false]]);
+      /* The user asked for it: the words coming back are the answer, no alert. */
+      expect(c.named("noteRefusal")).toHaveLength(0);
+      /* One DAWN drops on its own (a shutdown, the connection gone too long) still says so. */
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "6",
+         waiting: true,
+         holder: "turn"
+      });
+      c.frame("turn_unsent", { conversation_id: 7, client_ref: "6", text_saved: false });
       expect(c.named("noteRefusal")).toHaveLength(1);
       /* Nothing is drained: the next turn's frames show. */
       c.frame("state", { state: "thinking", conversation_id: 7 });

@@ -1393,6 +1393,9 @@ export class DawnIngest implements Ingest {
    private keptWait: (TurnWait & { conversationId: number }) | null = null;
    /* This session's speech still playing after its turn ended: Stop stops it here. */
    private speechTail = false;
+   /* A waiting turn the user took back (Stop / Esc): its turn_unsent comes back quietly, since the
+      user asked for it. The ref, or "" for a voice turn. */
+   private unsentAsked: string | null = null;
    private assistantName = "DAWN"; // config ai_name, for the forget-learned prompt's wording
    /* Busy re-asks of conversation_learned so far, per conversation, and their pending timers. */
    private readonly learnedRetries = new Map<number, number>();
@@ -1899,6 +1902,7 @@ export class DawnIngest implements Ingest {
          this.liveStreamId = 0;
          this.replyEnded = false;
          this.speechTail = false;
+         this.unsentAsked = null;
          this.sinks.conversation.setTurnActive(false);
          this.setTurnWait(null, true); // kept: DAWN still holds the turn
          this.pendingFactForgets.clear(); // their replies can't come now
@@ -2563,14 +2567,18 @@ export class DawnIngest implements Ingest {
             if (ref === undefined && unsentConv !== (this.turnWait?.conversationId ?? this.convId))
                break;
             this.setTurnWait(null);
+            /* Taken back by the user: the words returning are the answer, no alert. */
+            const asked = this.unsentAsked !== null && this.unsentAsked === (ref ?? "");
+            this.unsentAsked = null;
             const returned =
                ref !== undefined ? this.sinks.conversation.rejectTurn({ ref }, false) : null;
             if (returned !== null && ref !== undefined) {
                this.dropTypedEchoRef(ref); // it will never echo
-               this.sinks.conversation.noteRefusal(
-                  "Your message wasn't sent. It's back in the message box."
-               );
-            } else if (ref === undefined) {
+               if (!asked)
+                  this.sinks.conversation.noteRefusal(
+                     "Your message wasn't sent. It's back in the message box."
+                  );
+            } else if (ref === undefined && !asked) {
                this.sinks.conversation.noteRefusal("Your voice message wasn't sent.");
             }
             break;
@@ -5444,7 +5452,10 @@ export class DawnIngest implements Ingest {
       if (this.ws?.readyState !== WebSocket.OPEN || this.stopped) return;
       if (!this.ownTurn && !this.turnWait) return;
       this.send({ type: "cancel" });
-      if (this.turnWait) return; // nothing streamed yet: DAWN answers with turn_unsent
+      if (this.turnWait) {
+         this.unsentAsked = this.turnWait.ref ?? ""; // DAWN answers with turn_unsent
+         return; // nothing streamed yet
+      }
       /* After the reply finished only its speech is left: stop that, and DAWN keeps the reply. */
       const afterReply = this.replyEnded && this.liveStreamId === 0;
       /* Safety net only (DAWN always ends a turn with its tagged idle, even after a long tool):
@@ -5786,6 +5797,7 @@ export class DawnIngest implements Ingest {
       this.ownTurn = false;
       this.liveStreamId = 0;
       this.replyEnded = false;
+      this.unsentAsked = null;
       this.sinks.conversation.setTurnActive(false);
       this.setTurnWait(null);
       /* A typed turn's echo from the conversation just left is now dropped as foreign; don't

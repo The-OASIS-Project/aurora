@@ -350,7 +350,7 @@ test("Esc on a waiting message takes it back into the composer", async ({ page, 
    await composer.press("Escape");
    await expect(composer).toHaveValue("Never mind this one");
    await expect(bubbles).toHaveCount(before);
-   await expect(page.locator(".composer-note")).toContainText("wasn't sent");
+   await expect(page.locator(".composer-note")).toHaveCount(0); // taken back on purpose: no alert
    await expect(page.locator(".composer-hint")).toHaveText("ENTER");
    expect(fake.store.get(CONVERSATION_ID)!.messages.map((m) => m.content)).not.toContain(
       "Never mind this one"
