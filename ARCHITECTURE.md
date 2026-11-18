@@ -136,6 +136,8 @@ persistence for the UI's own conversation, music transport (`music_subscribe` pl
 binary frames for push-to-talk; continuous listening toggles `always_on_enable` /
 `always_on_disable`), the conversation picker's management verbs (`rename_conversation`,
 `set_pinned`, and the confirm-gated `delete_conversation`), the Watches panel's watch verbs,
+Stop (`cancel`, this session's own reply) and `stop_other_reply` (a message waiting for another
+turn on its conversation stops that turn),
 and **memory deletes** (`delete_memory_*`, the user's own memory, from the Context panel; and
 `forget_conversation_memories`, everything one conversation taught, offered after marking it
 private or from the picker).

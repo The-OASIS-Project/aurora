@@ -28,7 +28,8 @@ export const CURRENT_FEATURES = [
    "document_attachments",
    "visual_prompt_guard",
    "login_unavailable",
-   "memory_batches"
+   "memory_batches",
+   "turn_wait"
 ];
 
 export interface Scenario {

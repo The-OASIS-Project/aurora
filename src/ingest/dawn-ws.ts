@@ -58,6 +58,7 @@ import type {
    StockWatchSymbol,
    ConversationItem,
    ToolCall,
+   TurnWait,
    UploadedDoc,
    UploadedImage,
    WatchFields,
@@ -229,6 +230,13 @@ type MemoryReq =
    | { kind: "keep"; batchId: number; opId: number }
    | { kind: "forget"; factId: number }
    | { kind: "marks"; id: number; conversationId: number };
+
+/* How long a stopped turn's leftover frames may be dropped at most (a safety net: DAWN always ends
+   the turn with its tagged idle). */
+const STOP_DRAIN_MAX_MS = 180_000;
+/* When to offer to stop the other reply, if DAWN's turn_waiting doesn't say (stop_after_ms). */
+const TURN_WAIT_STOP_AFTER_MS = 5000;
+const TURN_WAIT_STOP_AFTER_MAX_MS = 600_000;
 
 /* A Learned-list page (DAWN allows up to 50). */
 const MEMORY_BATCH_PAGE = 20;
@@ -1115,7 +1123,13 @@ export class DawnIngest implements Ingest {
          buffered tail included); updateMicMute combines it with DAWN's speaking state so the
          mic stays muted through the whole reply - sentence gaps and tail. No-op outside
          continuous mode, so PTT is unaffected. */
-      onActive: () => this.updateMicMute()
+      onActive: (on: boolean) => {
+         this.updateMicMute();
+         if (!on && this.speechTail) {
+            this.speechTail = false; // the reply's speech has played out
+            if (!this.ownTurn) this.sinks.conversation.setTurnActive(false);
+         }
+      }
    });
    /* Created at construction (not in start) so the player view can bind to it
       before ingest.start() runs. Its AudioContext stays lazy until the first frame. */
@@ -1359,6 +1373,29 @@ export class DawnIngest implements Ingest {
       that turn goes idle (see conversation_reset); 0 = none. */
    private resetTurnConv = 0;
    private lastState = "idle"; // last applied DAWN machine state (settleTurnOnSwitch)
+   /* Stop. DAWN acks a cancel at once (an untagged `idle` written straight to the socket), AHEAD of
+      what the stopped turn had already queued (text, speech, tool steps, states), so the ack ends
+      nothing. The turn's own end is its worker's conversation-tagged `idle` (DAWN's cancel exit),
+      (untagged when the stop came before DAWN created a fresh chat's conversation: then it is the
+      second idle), and DAWN starts no other turn of this session before it, so everything between belongs to the
+      stopped turn and is dropped. `afterReply`: the reply had finished (only its speech was
+      left), so nothing is marked stopped and DAWN keeps the reply. */
+   private stopped: { afterReply: boolean; timer: number; idles: number; conv: number } | null =
+      null;
+   private ownTurn = false; // this session's own turn is running (it saw `thinking`): Stop applies
+   private liveStreamId = 0; // the reply streaming now (stream_start), 0 between replies
+   private replyEnded = false; // this turn's reply finished (terminal stream_end); speech may remain
+   /* This session's turn waiting for another on the same conversation (turn_wait), and that
+      conversation: shown on the held bubble, with the offer to stop the other reply. */
+   private turnWait: (TurnWait & { conversationId: number }) | null = null;
+   /* The same wait kept across a link loss: DAWN keeps the turn waiting but doesn't say so again
+      after a reconnect, so a reconnect to the same session shows it again (and its draft is kept). */
+   private keptWait: (TurnWait & { conversationId: number }) | null = null;
+   /* This session's speech still playing after its turn ended: Stop stops it here. */
+   private speechTail = false;
+   /* A waiting turn the user took back (Stop / Esc): its turn_unsent comes back quietly, since the
+      user asked for it. The ref, or "" for a voice turn. */
+   private unsentAsked: string | null = null;
    private assistantName = "DAWN"; // config ai_name, for the forget-learned prompt's wording
    /* Busy re-asks of conversation_learned so far, per conversation, and their pending timers. */
    private readonly learnedRetries = new Map<number, number>();
@@ -1857,6 +1894,17 @@ export class DawnIngest implements Ingest {
          this.alarmChime.stopLoop();
          this.ringingAlarms.clear();
          this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
+         /* No turn survives the link for this view: Stop goes away until one runs again, and a
+            waiting turn's frames aren't re-sent after a reconnect (DAWN keeps it; its own frames
+            follow when it starts). */
+         this.endStop();
+         this.ownTurn = false;
+         this.liveStreamId = 0;
+         this.replyEnded = false;
+         this.speechTail = false;
+         this.unsentAsked = null;
+         this.sinks.conversation.setTurnActive(false);
+         this.setTurnWait(null, true); // kept: DAWN still holds the turn
          this.pendingFactForgets.clear(); // their replies can't come now
          this.memoryReqs.clear();
          this.sinks.memoryBatches.linkDown();
@@ -2251,7 +2299,17 @@ export class DawnIngest implements Ingest {
                ? (msg as Record<string, unknown>)
                : p;
          /* The llm_state_update smuggled in a transcript is session-wide, not a turn's row. */
-         if (!(type === "transcript" && p.role === "__llm_state__") && this.isForeignConv(src)) {
+         /* The stopped turn's own end is never foreign to the drain waiting for it. */
+         const stoppedEnd =
+            type === "state" &&
+            this.stopped !== null &&
+            this.stopped.conv > 0 &&
+            Number(src.conversation_id ?? 0) === this.stopped.conv;
+         if (
+            !stoppedEnd &&
+            !(type === "transcript" && p.role === "__llm_state__") &&
+            this.isForeignConv(src)
+         ) {
             /* A foreign turn's voice still plays here: DAWN keeps sending the origin a turn's audio
                after it switches away (conn_is_audio_target), so that turn's speaking/idle state
                still drives the echo-mute; only the visuals are skipped. */
@@ -2321,6 +2379,22 @@ export class DawnIngest implements Ingest {
                while a user who never touched keepalive emits nothing and doesn't spam the audit log. */
             if ((p as { reconnected?: boolean }).reconnected === false)
                this.keepaliveServerOn = false;
+            /* A turn that waited when the link went: still waiting in the same session (DAWN sends
+               its frames when it starts), gone with a fresh one (the reload shows what was saved). */
+            if (this.keptWait) {
+               const k = this.keptWait;
+               if (
+                  (p as { reconnected?: boolean }).reconnected === true &&
+                  k.conversationId === this.convId
+               ) {
+                  this.setTurnWait({ ...k, stopping: false });
+                  this.ownTurn = true;
+                  this.sinks.conversation.setTurnActive(true);
+               } else {
+                  this.keptWait = null;
+                  this.sinks.conversation.releaseTurns();
+               }
+            }
             if (this.keepaliveOn !== this.keepaliveServerOn) {
                this.send({
                   type: this.keepaliveOn ? "session_keepalive_enable" : "session_keepalive_disable"
@@ -2444,6 +2518,86 @@ export class DawnIngest implements Ingest {
                version if this server advertises it (feature-detected; older ones omit). */
             if (typeof p.version === "string") this.dawnVersion = p.version;
             break;
+
+         case "turn_waiting": {
+            /* turn_wait: this session's turn waits for another on the same conversation, or now
+               starts (waiting:false; its own frames follow). Only for the conversation on screen. */
+            if (!this.hasFeature("turn_wait")) break;
+            const conv = Number(p.conversation_id ?? 0);
+            if (!conv || conv !== this.convId) break;
+            if (p.waiting === false) {
+               this.setTurnWait(null);
+               break;
+            }
+            const ref = typeof p.client_ref === "string" ? p.client_ref : undefined;
+            /* Bounded: a timer longer than ~24.8 days fires at once in browsers. */
+            const after =
+               typeof p.stop_after_ms === "number" && p.stop_after_ms >= 0
+                  ? Math.min(p.stop_after_ms, TURN_WAIT_STOP_AFTER_MAX_MS)
+                  : TURN_WAIT_STOP_AFTER_MS;
+            /* The same wait said again keeps its state (a stop already asked for, its timer). */
+            if (this.turnWait && this.turnWait.ref === ref && this.turnWait.conversationId === conv)
+               break;
+            this.setTurnWait({
+               conversationId: conv,
+               ref,
+               holder: p.holder === "job" || p.holder === "channel" ? p.holder : "turn",
+               stopAfterMs: after,
+               stopping: false
+            });
+            /* DAWN says this session's turn waits: it is ours to stop, whatever state came before
+               (another app's reply may be speaking here). */
+            if (!this.stopped) {
+               this.ownTurn = true;
+               this.sinks.conversation.setTurnActive(true);
+            }
+            break;
+         }
+
+         case "turn_unsent": {
+            /* turn_wait: the waiting turn stopped before it started (the user's Stop, its
+               connection gone too long, a shutdown); nothing of it was saved. A typed one comes
+               back to the composer, merged ahead of any draft; a voice one is just said so. */
+            if (!this.hasFeature("turn_wait")) break;
+            const ref = typeof p.client_ref === "string" ? p.client_ref : undefined;
+            /* A voice turn's (no ref) is said only for the conversation on screen: one that waited
+               here, or (DAWN #125) one stopped before it ran, waiting or not. A typed one is matched
+               by its ref, which also covers a new chat's (conversation_id 0). */
+            const unsentConv = Number(p.conversation_id ?? 0);
+            if (ref === undefined && unsentConv !== (this.turnWait?.conversationId ?? this.convId))
+               break;
+            this.setTurnWait(null);
+            /* Taken back by the user: the words returning are the answer, no alert. */
+            const asked = this.unsentAsked !== null && this.unsentAsked === (ref ?? "");
+            this.unsentAsked = null;
+            const returned =
+               ref !== undefined ? this.sinks.conversation.rejectTurn({ ref }, false) : null;
+            if (returned !== null && ref !== undefined) {
+               this.dropTypedEchoRef(ref); // it will never echo
+               if (!asked)
+                  this.sinks.conversation.noteRefusal(
+                     "Your message wasn't sent. It's back in the message box."
+                  );
+            } else if (ref === undefined && !asked) {
+               this.sinks.conversation.noteRefusal("Your voice message wasn't sent.");
+            }
+            break;
+         }
+
+         case "stop_other_reply_response": {
+            if (!this.turnWait) break;
+            if (p.success === true) break; // the grant (turn_waiting false) follows when it's ended
+            this.setTurnWait({ ...this.turnWait, stopping: false });
+            this.spikeNotice(
+               "turn-wait-stop",
+               "conversation",
+               p.error === "NOT_RUNNING"
+                  ? "That reply already finished."
+                  : "Couldn't stop the other reply.",
+               { hold: 5 }
+            );
+            break;
+         }
 
          case "pong":
             /* Heartbeat reply (a live, authed session). Confirms the link. */
@@ -3047,6 +3201,7 @@ export class DawnIngest implements Ingest {
                this.showConversation(0);
                localStorage.removeItem(CONV_KEY); // the resumed conversation is gone
                this.sinks.conversation.clear();
+               this.setTurnWait(null); // the held bubble it showed on is gone
                this.sinks.context.clear();
                this.setActiveTitle(""); // fresh chat
                this.sinks.conversationList.setActive(0);
@@ -3116,6 +3271,7 @@ export class DawnIngest implements Ingest {
                NEXT message opens a fresh one (mirrors the old WebUI's startNewChat),
                preserving the previous conversation instead of appending to it. */
             this.sinks.conversation.clear();
+            this.setTurnWait(null); // the held bubble it showed on is gone
             this.sinks.context.clear();
             /* The reset arrives MID-turn (the tool returns and the model still replies), and that
                reply stays tagged with the old conversation. Keep it on screen until the turn
@@ -3212,13 +3368,20 @@ export class DawnIngest implements Ingest {
             this.phone.onFrame(p);
             break;
 
-         case "state":
-            this.applyState(
-               str(p.state, "idle"),
-               typeof p.detail === "string" ? p.detail : undefined,
-               p.tools
-            );
+         case "state": {
+            const st = str(p.state, "idle");
+            if (this.stopped) {
+               /* Draining a stopped turn: DAWN's ack is an UNTAGGED idle written ahead of the
+                  turn's queued frames; the turn's own end is its worker's conversation-TAGGED
+                  idle. Its leftover thinking / speaking in between are ignored. */
+               if (st !== "idle") break;
+               /* A stop before DAWN created a fresh chat's conversation ends untagged: then the
+                  turn's idle is the second one (the ack being the other, in either order). */
+               if (Number(p.conversation_id ?? 0) > 0 || ++this.stopped.idles >= 2) this.endStop();
+            }
+            this.applyState(st, typeof p.detail === "string" ? p.detail : undefined, p.tools);
             break;
+         }
 
          case "error": {
             /* Route on `severity` (§9.1b): info = benign notice, warning/error = a real
@@ -4083,15 +4246,35 @@ export class DawnIngest implements Ingest {
          }
 
          case "stream_start":
+            if (this.dropsStoppedReply()) break; // the stopped reply's late start
+            this.liveStreamId = Number(p.stream_id ?? 0);
+            this.replyEnded = false;
+            this.setTurnWait(null); // our turn runs (a grant lost to a link loss says no more)
             this.sinks.conversation.startReply();
             break;
 
          case "stream_delta": {
+            if (this.dropsStoppedReply()) break; // text still in flight from the reply stopped
             this.sinks.conversation.appendDelta(str(p.delta));
             break;
          }
 
          case "stream_end": {
+            if (this.dropsStoppedReply()) {
+               /* Already sealed as stopped. A terminal end means DAWN finished it after all (the
+                  Stop landed as it finished) and will save it (will_persist; a stopped one ends
+                  "error" and isn't saved): register the stopped bubble so its
+                  message_appended adopts onto it (which shows the whole saved reply). */
+               const conv = Number(p.conversation_id ?? this.convId);
+               if (p.will_persist === true && conv === this.convId) {
+                  this.sinks.conversation.linkStream(
+                     conv,
+                     Number(p.stream_id ?? 0),
+                     this.sessionId
+                  );
+               }
+               break;
+            }
             this.sinks.conversation.endReply();
             /* A tool_iteration end is a mid-turn bubble seal (the tool loop re-issues
                stream_start/end per iteration); only a TERMINAL end carries the final answer. */
@@ -4119,9 +4302,14 @@ export class DawnIngest implements Ingest {
                   hangs in its last state (thinking/speaking). Guard on dawnSpeaking + the live TTS
                   tail so a NORMAL spoken turn keeps its voice animation until DAWN's real state:idle
                   arrives (which handles the TTS-tail timing). */
+               this.replyEnded = true;
+               this.liveStreamId = 0;
                if (!this.dawnSpeaking && !this.tts.isSpeaking()) {
                   this.lastState = "idle";
                   this.resetTurnConv = 0;
+                  /* Nothing to stop now; the turn stays this session's own, so speech that follows
+                     the text (it can start after it) still offers Stop. */
+                  this.sinks.conversation.setTurnActive(false);
                   this.sinks.reactor.setState("idle");
                   this.sinks.conversation.setThinking(false);
                   this.sinks.conversation.setStatus(this.activityFor("idle", undefined, undefined));
@@ -4147,6 +4335,7 @@ export class DawnIngest implements Ingest {
                docs/DAWN_UI_SIGNAL_MAP.md and [[living-tool-pills-plan]]. */
             const conv = Number(p.conversation_id ?? 0);
             if (!conv || conv !== this.convId) break; // not the conversation on screen (or none) -> ignore
+            if (this.dropsStoppedReply()) break; // a step of the reply the user stopped
             /* The inner `payload` is an opaque, redacted JSON string - untrusted. tool_call_id
                rides INSIDE it (same place `tool` does), byte-identical to load_conversation's key
                so live + reload pair on one implementation; omitted when the provider gave none. All
@@ -4208,13 +4397,16 @@ export class DawnIngest implements Ingest {
                   held turn with this text. */
                if (p.replay !== true && (ref !== undefined || !this.hasFeature("turn_refs")))
                   this.sinks.conversation.confirmTurn(p.text, ref, messageId);
+               if (ref !== undefined && this.keptWait?.ref === ref) this.setTurnWait(null); // it started
                break;
             }
             /* A visual the render_visual tool just drew (DAWN sends the tool's whole result live; the
                saved reply carries it too, which is how a reload shows it). Keyed on the role DAWN
                sets for that tool only, never on content. Replays come back with the saved rows. */
             if (p.role === "visual" && typeof p.text === "string") {
-               if (p.replay !== true) this.sinks.conversation.addVisual(p.text);
+               /* A stopped reply's chart isn't saved (DAWN drops it), so it isn't drawn either. */
+               if (p.replay !== true && !this.dropsStoppedReply())
+                  this.sinks.conversation.addVisual(p.text);
                break;
             }
             /* A complete (non-streamed or replayed) assistant message. DAWN persists it itself
@@ -4400,6 +4592,7 @@ export class DawnIngest implements Ingest {
       this.sinks.conversation.endReply();
       this.settleTurnOnSwitch();
       this.sinks.conversation.clear();
+      this.setTurnWait(null); // the held bubble it showed on is gone
       this.sinks.context.clear();
       this.sinks.conversationList.setActive(0);
       this.pendingNewConvTitle = "";
@@ -5048,6 +5241,8 @@ export class DawnIngest implements Ingest {
       const op = bytes[0];
       /* Muted: drop the audio. DAWN applies set_tts_enabled from the next turn, so a reply
          already being spoken when the user mutes keeps sending audio until it ends. */
+      /* Speech DAWN had already queued for a turn the user stopped: never played. */
+      if (this.stopped && (op === BIN_AUDIO_OUT || op === BIN_AUDIO_SEGMENT_END)) return;
       if (op === BIN_AUDIO_OUT) {
          if (this.ttsEnabled) this.tts.queue(bytes.subarray(1));
       } else if (op === BIN_AUDIO_SEGMENT_END) {
@@ -5241,6 +5436,102 @@ export class DawnIngest implements Ingest {
             this.openMusicStream(token);
          }
       }
+   }
+
+   /* Stop this session's turn (DAWN's `cancel`, scoped to this session: other tabs and users are
+      untouched). A reply in progress stays on screen, marked stopped, and its speech stops at
+      once; a turn still waiting for another comes back unsent (turn_unsent). */
+   cancelTurn(): void {
+      /* Only the speech of a finished turn is left: stop it here (DAWN has nothing to cancel). */
+      if (this.speechTail && !this.ownTurn) {
+         this.speechTail = false;
+         this.tts.stop();
+         this.sinks.conversation.setTurnActive(false);
+         return;
+      }
+      if (this.ws?.readyState !== WebSocket.OPEN || this.stopped) return;
+      if (!this.ownTurn && !this.turnWait) return;
+      this.send({ type: "cancel" });
+      if (this.turnWait) {
+         this.unsentAsked = this.turnWait.ref ?? ""; // DAWN answers with turn_unsent
+         return; // nothing streamed yet
+      }
+      /* After the reply finished only its speech is left: stop that, and DAWN keeps the reply. */
+      const afterReply = this.replyEnded && this.liveStreamId === 0;
+      /* Safety net only (DAWN always ends a turn with its tagged idle, even after a long tool):
+         never drop frames forever if that frame were lost. */
+      const timer = window.setTimeout(() => this.endStop(), STOP_DRAIN_MAX_MS);
+      /* The turn's conversation: after a reset tool the view has none, and the turn's own idle
+         (tagged with it) must still reach the drain. */
+      this.stopped = { afterReply, timer, idles: 0, conv: this.convId || this.resetTurnConv };
+      this.sinks.conversation.setTurnActive(false);
+      this.tts.stop();
+      if (!afterReply) this.sinks.conversation.markStopped();
+   }
+
+   /* Stop the turn this session's turn waits for (turn_wait). Its grant (turn_waiting false)
+      follows once that turn has ended. */
+   stopOtherReply(): void {
+      const w = this.turnWait;
+      if (!w || w.stopping || !this.hasFeature("turn_wait")) return;
+      if (!this.send({ type: "stop_other_reply", payload: { conversation_id: w.conversationId } }))
+         return;
+      this.setTurnWait({ ...w, stopping: true });
+   }
+
+   private endStop(): void {
+      if (this.stopped) window.clearTimeout(this.stopped.timer);
+      this.stopped = null;
+   }
+
+   /* A frame of a reply the user stopped (dropped while its turn drains). */
+   private dropsStoppedReply(): boolean {
+      return this.stopped !== null && !this.stopped.afterReply;
+   }
+
+   private setTurnWait(w: (TurnWait & { conversationId: number }) | null, keep = false): void {
+      if (!keep) this.keptWait = w;
+      if (w === null && this.turnWait === null) return;
+      this.turnWait = w;
+      this.sinks.conversation.setTurnWait(
+         w
+            ? { ref: w.ref, holder: w.holder, stopAfterMs: w.stopAfterMs, stopping: w.stopping }
+            : null
+      );
+   }
+
+   /* Stop is offered only for this session's own running turn: a bystander tab sees DAWN speak
+      (the fanned `speaking`) but never its `thinking`, and Stop there would cancel nothing. While
+      a stopped turn's leftovers drain, Stop stays off. */
+   private syncTurnActive(st: string, prev: string): void {
+      if (this.stopped) {
+         this.sinks.conversation.setTurnActive(false);
+         if (st === "idle" || st === "error") this.ownTurn = false;
+         return;
+      }
+      /* This session's turn opens with thinking from rest (a typed turn, or a voice one after
+         listening). One that opens speaking is a job's answer re-engaging the conversation, which
+         may never send its idle (DAWN sends it only with speech on), or another tab's voice: no
+         Stop for either, even when a tool later says thinking. */
+      const opens = prev === "idle" || prev === "listening" || prev === "error";
+      if ((st === "thinking" || st === "summarizing") && (this.ownTurn || opens)) {
+         if (!this.ownTurn) {
+            /* A turn begins: nothing of the last one's reply carries over. */
+            this.replyEnded = false;
+            this.liveStreamId = 0;
+         }
+         this.ownTurn = true;
+      } else if (st === "idle" || st === "error") {
+         /* Its speech can still be playing here (DAWN runs ahead of what's heard). */
+         if (this.ownTurn && st === "idle" && this.tts.isSpeaking()) this.speechTail = true;
+         this.ownTurn = false;
+         this.replyEnded = false;
+         this.liveStreamId = 0;
+      }
+      this.sinks.conversation.setTurnActive(
+         (this.ownTurn && (st === "thinking" || st === "summarizing" || st === "speaking")) ||
+            (this.speechTail && st === "idle")
+      );
    }
 
    /* Reads for the player's queue and library section (answers route to the music sink). */
@@ -5464,6 +5755,7 @@ export class DawnIngest implements Ingest {
 
    /* Apply one DAWN machine state to the reactor, echo-mute and conversation chip. */
    private applyState(st: string, detail?: string, tools?: unknown): void {
+      const prev = this.lastState;
       this.lastState = st;
       if (st === "idle") this.resetTurnConv = 0; // the reset turn (if any) has finished
       /* Drive the continuous echo-mute off DAWN's speaking state: it stays "speaking"
@@ -5473,6 +5765,7 @@ export class DawnIngest implements Ingest {
       this.updateMicMute();
       this.sinks.reactor.setState(toReactorState(st));
       this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
+      this.syncTurnActive(st, prev);
       /* Keep the window upright while DAWN speaks (persists across sentence gaps), so it
          doesn't recede-then-raise between spoken bursts. Self-clears when state leaves
          "speaking" (the next frame passes false -> normal idle recede). */
@@ -5498,6 +5791,15 @@ export class DawnIngest implements Ingest {
       thinking/speaking. Called from every path that switches or unbinds the conversation. */
    private settleTurnOnSwitch(): void {
       this.resetTurnConv = 0;
+      /* The turn (and any stopped reply, or a turn waiting for another) belonged to the
+         conversation just left. */
+      this.endStop();
+      this.ownTurn = false;
+      this.liveStreamId = 0;
+      this.replyEnded = false;
+      this.unsentAsked = null;
+      this.sinks.conversation.setTurnActive(false);
+      this.setTurnWait(null);
       /* A typed turn's echo from the conversation just left is now dropped as foreign; don't
          let its entry absorb a same-text message here. */
       this.typedEchoes.length = 0;
@@ -5895,7 +6197,14 @@ export class DawnIngest implements Ingest {
                m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined
          });
       }
-      this.sinks.conversation.loadHistory(items);
+      /* A reload of the conversation our message waits in (a takeover reclaim, a reconnect)
+         keeps that unsaved message, and its wait; any other load lets it go. */
+      const kept = this.keptWait && this.keptWait.conversationId === cid ? this.keptWait : null;
+      this.sinks.conversation.loadHistory(items, kept?.ref);
+      if (kept) {
+         this.setTurnWait(null);
+         this.setTurnWait({ ...kept, stopping: false });
+      } else this.setTurnWait(null);
       for (const rid of consumedIds) this.sinks.conversation.noteMessageId(rid);
       this.convId = cid; // authoritative confirm of the optimistic set in loadConversation()
       this.showConversation(cid); // after loadHistory drew the transcript the marks go in
@@ -6631,6 +6940,7 @@ export class DawnIngest implements Ingest {
       this.wantConnected = false;
       window.clearTimeout(this.loginWatchTimer);
       this.musicHold.drop(); // nothing left to show it on
+      this.endStop();
       window.clearTimeout(this.wsReconnectTimer); // cancel any pending auto-reconnect
       this.wsFails = 0;
       this.stopMetrics();
@@ -6783,7 +7093,7 @@ export class DawnIngest implements Ingest {
       /* Link down: an unechoed turn's fate can't be learned now; stop holding drafts for them. Not on
          "stale" (one missed heartbeat): the socket is still open and refusals still arrive. */
       if (status !== "connected" && status !== "stale" && this.sinks)
-         this.sinks.conversation.releaseTurns();
+         this.sinks.conversation.releaseTurns(this.keptWait?.ref);
       if (status !== "connected") this.settlePrivateCreate(false); // a pending private create can't complete now
       this.status(status, detail);
    }

@@ -70,6 +70,17 @@ export interface ConversationItem {
    email?: EmailRef; // a user turn that asked about an email (DAWN's row `email_ref`, P1.4)
 }
 
+/* This session's turn waiting for another turn on the same conversation (DAWN's turn_wait):
+   another tab or app's reply, a background job's, or a messaging channel's. `ref` names the held
+   typed turn it is (absent: a voice turn, which has no bubble yet); `stopping`: a stop of the
+   other reply was asked for and the grant hasn't come. */
+export interface TurnWait {
+   ref?: string;
+   holder: "turn" | "job" | "channel";
+   stopAfterMs: number;
+   stopping: boolean;
+}
+
 /* What ingest can push to the conversation console (a passive view). Streaming
    replies arrive as startReply -> appendDelta* -> endReply; a complete message
    (non-streamed or replayed history) arrives as showReply. */
@@ -86,7 +97,7 @@ export interface ConversationSink {
    rejectTurn(which: "image" | "newest" | { ref: string }, reupload: boolean): string | null;
    /* Stop holding every sent turn (the link dropped or the conversation changed: their fate can't
       be learned now). */
-   releaseTurns(): void;
+   releaseTurns(keep?: string): void; // keep: a turn still waiting at DAWN (turn_wait)
    /* A message wasn't sent: say why right above the composer, where the user is looking (a floating
       card would be dimmed by the very focus a restored draft puts on the input). */
    noteRefusal(text: string): void;
@@ -100,6 +111,13 @@ export interface ConversationSink {
    /* What memory learned from the conversation on screen (memory_batches), each after the message
       its batch read up to: the whole set each time. Dropped with the transcript (load, clear). */
    setMemoryMarks(marks: MemoryMark[]): void;
+   /* This session's own turn is running (or speaking): Stop is offered. */
+   setTurnActive(active: boolean): void;
+   /* The user stopped the reply: seal it where it is, marked stopped. */
+   markStopped(): void;
+   /* This session's turn waits for another turn on the conversation (turn_wait), or no longer
+      does (null: it started, or it ended unsent). */
+   setTurnWait(wait: TurnWait | null): void;
    /* A user turn this view didn't draw itself: a voice transcript, or another viewer's typed turn
       (possibly with the email it asked about). This view's own typed turns are drawn on submit. */
    showUser(text: string, messageId?: number, email?: EmailRef): void;
@@ -123,7 +141,9 @@ export interface ConversationSink {
    /* The configured assistant display name (ai_name), for the reply header. */
    setAssistantName(name: string): void;
    /* Replace the transcript with a loaded conversation's history (oldest first). */
-   loadHistory(items: ConversationItem[]): void;
+   /* `keep`: the ref of our turn still waiting at DAWN (turn_wait): it isn't saved yet, so it
+      comes back after the loaded rows, its draft kept. */
+   loadHistory(items: ConversationItem[], keep?: string): void;
    /* Server-authoritative-persistence (Phase 0) cross-viewer correlation. `linkStream`
       registers the just-finalized streamed bubble under (conv, streamId); `adoptId` stamps the
       DB id onto it when the matching `message_appended` arrives (returns true if it was ours),
@@ -899,6 +919,11 @@ export interface OutImage {
  */
 export interface Ingest {
    start(sinks: IngestSinks): void;
+   /* Stop this session's turn (DAWN's `cancel`): the reply in progress, or one still waiting
+      for another turn on the conversation (which then comes back unsent). */
+   cancelTurn(): void;
+   /* Stop the other turn this session's turn waits for (turn_wait's `stop_other_reply`). */
+   stopOtherReply(): void;
    /* User submitted a turn. `attachments.images` (base64) rides the frame for the live LLM
       call; `attachments.imageIds` (from the /api/images upload, order-matched) is MANDATORY
       whenever images are present - the daemon persists it as [IMAGE:id] markers so images

@@ -767,6 +767,74 @@ describe("the fake's interactive requests", () => {
       });
    });
 
+   it("cancel: the ack at once, the stopped turn's own idle after, nothing of its reply saved", () => {
+      vi.useFakeTimers();
+      const { fake, send, to } = interactive(SCENARIOS.signedIn, { firstTokenMs: 10, chunkMs: 50 });
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      send("text", { text: "stop me" });
+      vi.advanceTimersByTime(100);
+      expect(send("cancel")).toEqual([{ type: "state", payload: { state: "idle" } }]);
+      const at = to(mine).length;
+      vi.runAllTimers();
+      /* What DAWN had queued (the next chunk, the stream's "error" end), then the turn's idle. */
+      const after = to(mine).slice(at);
+      expect(after.map((f) => f.type)).toEqual(["stream_delta", "stream_end", "state"]);
+      expect(after[1].payload).toMatchObject({ reason: "error" });
+      expect(after[1].payload.will_persist).toBeUndefined();
+      expect(after[2].payload).toEqual({ state: "idle", conversation_id: CONVERSATION_ID });
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 1); // the question only
+      /* With nothing running, only the ack. */
+      expect(send("cancel")).toEqual([{ type: "state", payload: { state: "idle" } }]);
+   });
+
+   it("turn_wait: a turn waits for another holding the conversation, and stop_other_reply ends that one", () => {
+      vi.useFakeTimers();
+      const { fake, send, to } = interactive();
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      expect(send("stop_other_reply", { conversation_id: CONVERSATION_ID })[0].payload).toEqual({
+         conversation_id: CONVERSATION_ID,
+         success: false,
+         error: "NOT_RUNNING"
+      });
+      fake.holdConversation(CONVERSATION_ID);
+      const waiting = send("text", { text: "after you", client_ref: "4" });
+      expect(waiting.map((f) => f.type)).toEqual(["turn_waiting", "state"]);
+      expect(waiting[0].payload).toEqual({
+         conversation_id: CONVERSATION_ID,
+         waiting: true,
+         holder: "job",
+         stop_after_ms: 5000,
+         client_ref: "4"
+      });
+      expect(send("stop_other_reply", { conversation_id: CONVERSATION_ID })[0].payload).toEqual({
+         conversation_id: CONVERSATION_ID,
+         success: true
+      });
+      vi.runAllTimers();
+      const later = to(mine);
+      expect(later[0]).toMatchObject({
+         type: "turn_waiting",
+         payload: { waiting: false, client_ref: "4" }
+      });
+      expect(later.some((f) => f.type === "stream_end")).toBe(true);
+
+      /* Stopped while it waits: unsent, nothing saved. */
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      fake.holdConversation(CONVERSATION_ID, "turn");
+      send("text", { text: "never mind", client_ref: "5" });
+      const stopped = send("cancel");
+      expect(stopped.map((f) => f.type)).toEqual(["state", "turn_unsent", "state"]);
+      expect(stopped[1].payload).toEqual({
+         conversation_id: CONVERSATION_ID,
+         text_saved: false,
+         client_ref: "5"
+      });
+      fake.releaseConversation();
+      vi.runAllTimers();
+      expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before);
+   });
+
    it("a queued turn runs in the conversation it was sent in, even after the tab moves on", () => {
       vi.useFakeTimers();
       const { fake, send } = interactive();
