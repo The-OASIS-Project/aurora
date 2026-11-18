@@ -270,15 +270,32 @@ describe("turn_wait", () => {
       expect(c.named("setTurnWait").at(-1)).toEqual([null]);
    });
 
-   it("says a voice turn went unsent only for the wait shown here", () => {
+   it("says a voice turn went unsent only for the conversation on screen", () => {
       const c = client();
-      c.frame("turn_unsent", { conversation_id: 7, text_saved: false });
-      expect(c.named("noteRefusal")).toEqual([]);
-      c.frame("turn_waiting", { conversation_id: 7, waiting: true, holder: "turn" });
       c.frame("turn_unsent", { conversation_id: 9, text_saved: false });
       expect(c.named("noteRefusal")).toEqual([]);
+      /* Stopped before it ran, no wait shown (DAWN #125). */
       c.frame("turn_unsent", { conversation_id: 7, text_saved: false });
       expect(c.named("noteRefusal")).toHaveLength(1);
+      c.frame("turn_waiting", { conversation_id: 7, waiting: true, holder: "turn" });
+      c.frame("turn_unsent", { conversation_id: 7, text_saved: false });
+      expect(c.named("noteRefusal")).toHaveLength(2);
+   });
+
+   it("a typed turn stopped before it ran, even after its grant, comes back by its ref", () => {
+      const c = client();
+      c.frame("turn_waiting", {
+         conversation_id: 7,
+         client_ref: "4",
+         waiting: true,
+         holder: "turn"
+      });
+      c.frame("turn_waiting", { conversation_id: 7, client_ref: "4", waiting: false });
+      c.frame("turn_unsent", { conversation_id: 7, client_ref: "4", text_saved: false });
+      expect(c.named("rejectTurn")).toEqual([[{ ref: "4" }, false]]);
+      /* A new chat's names conversation 0: still matched by ref. */
+      c.frame("turn_unsent", { conversation_id: 0, client_ref: "5", text_saved: false });
+      expect(c.named("rejectTurn").at(-1)).toEqual([{ ref: "5" }, false]);
    });
 
    it("bounds the delay before offering to stop the other reply", () => {

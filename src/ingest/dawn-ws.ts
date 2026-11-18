@@ -2556,11 +2556,11 @@ export class DawnIngest implements Ingest {
                back to the composer, merged ahead of any draft; a voice one is just said so. */
             if (!this.hasFeature("turn_wait")) break;
             const ref = typeof p.client_ref === "string" ? p.client_ref : undefined;
-            /* A voice turn's is said only for the wait shown here (a typed one is matched by ref). */
-            if (
-               ref === undefined &&
-               (!this.turnWait || Number(p.conversation_id ?? 0) !== this.turnWait.conversationId)
-            )
+            /* A voice turn's (no ref) is said only for the conversation on screen: one that waited
+               here, or (DAWN #125) one stopped before it ran, waiting or not. A typed one is matched
+               by its ref, which also covers a new chat's (conversation_id 0). */
+            const unsentConv = Number(p.conversation_id ?? 0);
+            if (ref === undefined && unsentConv !== (this.turnWait?.conversationId ?? this.convId))
                break;
             this.setTurnWait(null);
             const returned =

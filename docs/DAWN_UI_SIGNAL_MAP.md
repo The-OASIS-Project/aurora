@@ -1204,7 +1204,12 @@ or "Couldn't stop the other reply."; on success the grant follows. The other tur
 normal frames follow. Stop on a waiting turn sends `cancel`; `turn_unsent {client_ref?}` then
 returns a typed turn's words to the composer (merged ahead of any draft, via the held-turn
 restore) and says it wasn't sent; a voice turn (no `client_ref`) shows a "Voice message"
-placeholder bubble while it waits and is just said to be unsent. `turn_waiting` isn't re-sent after
+placeholder bubble while it waits and is just said to be unsent. DAWN #125 (no new flag) also
+sends `turn_unsent` + `state idle` for a turn stopped before it ran (a `cancel` landing on the next
+queued turn, which `cancel` can't yet be scoped to avoid), possibly after its grant, and with
+`conversation_id` 0 for a new chat's first message: Aurora matches a typed one by its ref, and says
+a voice one (no ref) for the conversation on screen. An older DAWN sends nothing there, so such a
+turn's bubble stays as sent. `turn_waiting` isn't re-sent after
 a reconnect, so a link loss or conversation switch clears the line. Only for the conversation on
 screen.
 
