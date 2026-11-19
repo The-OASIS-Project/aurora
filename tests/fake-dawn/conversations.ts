@@ -8,6 +8,8 @@ export interface FakeMessage {
    role: "user" | "assistant";
    content: string;
    created_at: number;
+   /* A reply the user stopped, saved as far as it got (stopped_replies_saved). */
+   stopped?: boolean;
 }
 
 /* The reasoning a conversation was last set to (the stored picks; DAWN stamps them on the

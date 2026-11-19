@@ -1380,8 +1380,14 @@ export class DawnIngest implements Ingest {
       second idle), and DAWN starts no other turn of this session before it, so everything between belongs to the
       stopped turn and is dropped. `afterReply`: the reply had finished (only its speech was
       left), so nothing is marked stopped and DAWN keeps the reply. */
-   private stopped: { afterReply: boolean; timer: number; idles: number; conv: number } | null =
-      null;
+   private stopped: {
+      afterReply: boolean;
+      timer: number;
+      idles: number;
+      conv: number;
+      /* DAWN said it will save the stopped reply (will_persist): its row comes to redraw it. */
+      saving: boolean;
+   } | null = null;
    private ownTurn = false; // this session's own turn is running (it saw `thinking`): Stop applies
    private liveStreamId = 0; // the reply streaming now (stream_start), 0 between replies
    private replyEnded = false; // this turn's reply finished (terminal stream_end); speech may remain
@@ -2299,9 +2305,10 @@ export class DawnIngest implements Ingest {
                ? (msg as Record<string, unknown>)
                : p;
          /* The llm_state_update smuggled in a transcript is session-wide, not a turn's row. */
-         /* The stopped turn's own end is never foreign to the drain waiting for it. */
+         /* The stopped turn's own end (its stream's end, saying whether it was saved, and its
+            idle) is never foreign to the drain waiting for it. */
          const stoppedEnd =
-            type === "state" &&
+            (type === "state" || type === "stream_end") &&
             this.stopped !== null &&
             this.stopped.conv > 0 &&
             Number(src.conversation_id ?? 0) === this.stopped.conv;
@@ -3377,7 +3384,8 @@ export class DawnIngest implements Ingest {
                if (st !== "idle") break;
                /* A stop before DAWN created a fresh chat's conversation ends untagged: then the
                   turn's idle is the second one (the ack being the other, in either order). */
-               if (Number(p.conversation_id ?? 0) > 0 || ++this.stopped.idles >= 2) this.endStop();
+               if (Number(p.conversation_id ?? 0) > 0 || ++this.stopped.idles >= 2)
+                  this.endStop(true);
             }
             this.applyState(st, typeof p.detail === "string" ? p.detail : undefined, p.tools);
             break;
@@ -4261,17 +4269,22 @@ export class DawnIngest implements Ingest {
 
          case "stream_end": {
             if (this.dropsStoppedReply()) {
-               /* Already sealed as stopped. A terminal end means DAWN finished it after all (the
-                  Stop landed as it finished) and will save it (will_persist; a stopped one ends
-                  "error" and isn't saved): register the stopped bubble so its
-                  message_appended adopts onto it (which shows the whole saved reply). */
+               /* Already sealed as stopped. will_persist: DAWN will save it, as far as it got
+                  (reason "stopped", stopped_replies_saved) or whole (the Stop landed as it
+                  finished); without it nothing is saved. Register the stopped bubble so the row's
+                  message_appended adopts onto it and redraws it from what was saved. */
                const conv = Number(p.conversation_id ?? this.convId);
-               if (p.will_persist === true && conv === this.convId) {
-                  this.sinks.conversation.linkStream(
-                     conv,
-                     Number(p.stream_id ?? 0),
-                     this.sessionId
-                  );
+               if (p.will_persist === true) {
+                  /* Saved even in a conversation a reset tool left (the turn's own). */
+                  if (this.stopped && conv === this.stopped.conv) this.stopped.saving = true;
+                  if (conv === this.convId) {
+                     this.sinks.conversation.linkStream(
+                        conv,
+                        Number(p.stream_id ?? 0),
+                        this.sessionId
+                     );
+                  }
+                  this.scheduleListRefresh(); // the picker's row gained a reply
                }
                break;
             }
@@ -4404,7 +4417,8 @@ export class DawnIngest implements Ingest {
                saved reply carries it too, which is how a reload shows it). Keyed on the role DAWN
                sets for that tool only, never on content. Replays come back with the saved rows. */
             if (p.role === "visual" && typeof p.text === "string") {
-               /* A stopped reply's chart isn't saved (DAWN drops it), so it isn't drawn either. */
+               /* A stopped reply's chart: a saved partial carries it, and its row draws it when it
+                  comes (stopped_replies_saved); otherwise it isn't kept, so it isn't drawn. */
                if (p.replay !== true && !this.dropsStoppedReply())
                   this.sinks.conversation.addVisual(p.text);
                break;
@@ -4461,7 +4475,8 @@ export class DawnIngest implements Ingest {
                   info?.text ?? undefined,
                   typeof (p as { session_id?: unknown }).session_id === "number"
                      ? (p as { session_id: number }).session_id
-                     : undefined
+                     : undefined,
+                  (p as { stopped?: unknown }).stopped === true
                )
             )
                break; // our streamed reply's echo (redrawn if it streamed only in part)
@@ -4486,7 +4501,13 @@ export class DawnIngest implements Ingest {
                break;
             }
             const text = info?.text ?? "";
-            if (text) this.sinks.conversation.renderAppended({ role, text, messageId });
+            if (text)
+               this.sinks.conversation.renderAppended({
+                  role,
+                  text,
+                  messageId,
+                  stopped: (p as { stopped?: unknown }).stopped === true
+               });
             if (info?.tools) for (const c of info.tools) this.sinks.conversation.toolCall(c);
             break;
          }
@@ -5460,10 +5481,16 @@ export class DawnIngest implements Ingest {
       const afterReply = this.replyEnded && this.liveStreamId === 0;
       /* Safety net only (DAWN always ends a turn with its tagged idle, even after a long tool):
          never drop frames forever if that frame were lost. */
-      const timer = window.setTimeout(() => this.endStop(), STOP_DRAIN_MAX_MS);
+      const timer = window.setTimeout(() => this.endStop(true), STOP_DRAIN_MAX_MS);
       /* The turn's conversation: after a reset tool the view has none, and the turn's own idle
          (tagged with it) must still reach the drain. */
-      this.stopped = { afterReply, timer, idles: 0, conv: this.convId || this.resetTurnConv };
+      this.stopped = {
+         afterReply,
+         timer,
+         idles: 0,
+         conv: this.convId || this.resetTurnConv,
+         saving: false
+      };
       this.sinks.conversation.setTurnActive(false);
       this.tts.stop();
       if (!afterReply) this.sinks.conversation.markStopped();
@@ -5479,9 +5506,15 @@ export class DawnIngest implements Ingest {
       this.setTurnWait({ ...w, stopping: true });
    }
 
-   private endStop(): void {
-      if (this.stopped) window.clearTimeout(this.stopped.timer);
+   /* `ended`: the stopped turn ended (not a link loss or a switch away from it). A reply DAWN
+      said nothing of saving (no will_persist: no text yet, a tool was running, or an older DAWN
+      that saves no stopped reply) is then marked not saved, as a reload won't show it. */
+   private endStop(ended = false): void {
+      const s = this.stopped;
+      if (!s) return;
+      window.clearTimeout(s.timer);
       this.stopped = null;
+      if (ended && !s.afterReply && !s.saving) this.sinks.conversation.stoppedUnsaved();
    }
 
    /* A frame of a reply the user stopped (dropped while its turn drains). */
@@ -6194,7 +6227,8 @@ export class DawnIngest implements Ingest {
             tools,
             id,
             email:
-               m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined
+               m.role === "user" ? toEmailRef((m as { email_ref?: unknown }).email_ref) : undefined,
+            stopped: (m as { stopped?: unknown }).stopped === true
          });
       }
       /* A reload of the conversation our message waits in (a takeover reclaim, a reconnect)

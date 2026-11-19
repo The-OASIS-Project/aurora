@@ -29,7 +29,8 @@ export const CURRENT_FEATURES = [
    "visual_prompt_guard",
    "login_unavailable",
    "memory_batches",
-   "turn_wait"
+   "turn_wait",
+   "stopped_replies_saved"
 ];
 
 export interface Scenario {

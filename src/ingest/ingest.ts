@@ -68,6 +68,7 @@ export interface ConversationItem {
    tools?: ToolCall[];
    id?: number; // server DB message id, stamped for message_appended dedup (absent on older servers)
    email?: EmailRef; // a user turn that asked about an email (DAWN's row `email_ref`, P1.4)
+   stopped?: boolean; // a reply the user stopped, saved as far as it got (stopped_replies_saved)
 }
 
 /* This session's turn waiting for another turn on the same conversation (DAWN's turn_wait):
@@ -157,12 +158,18 @@ export interface ConversationSink {
       streamId: number,
       messageId: number,
       savedText?: string,
-      rowSessionId?: number
+      rowSessionId?: number,
+      /* The saved row is a reply the user stopped (stopped_replies_saved): drawn from the row,
+         and marked Stopped. */
+      stopped?: boolean
    ): boolean;
+   /* The reply the user stopped wasn't saved: its Stopped mark says so. */
+   stoppedUnsaved(): void;
    renderAppended(item: {
       role: "user" | "assistant";
       text: string;
       messageId: number;
+      stopped?: boolean;
       email?: EmailRef;
    }): void;
    /* A tool reset the conversation - empty the surface. */

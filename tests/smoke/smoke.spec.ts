@@ -295,13 +295,18 @@ test("Stop ends the reply where it is; the next message runs normally", async ({
    await hint.click();
    await expect(reply.locator(".convo-stopped")).toHaveText("Stopped");
    await expect(hint).toHaveText("ENTER");
-   /* Nothing more streams into it, and DAWN keeps the question but no reply. */
-   const cut = await reply.locator(".convo-body").innerText();
+   /* DAWN keeps the reply as far as it got, marked stopped, and the bubble is drawn from that row
+      and keeps its mark; nothing more streams into it. */
    await expect.poll(() => fake.requests.filter((r) => r === "cancel").length).toBe(1);
+   await expect
+      .poll(() => fake.store.get(CONVERSATION_ID)!.messages.at(-1))
+      .toMatchObject({ role: "assistant", stopped: true });
+   const saved = fake.store.get(CONVERSATION_ID)!.messages.at(-1)!.content;
+   expect(saved).not.toContain("conversation picker");
    await page.waitForTimeout(800);
-   expect(await reply.locator(".convo-body").innerText()).toBe(cut);
+   const cut = await reply.locator(".convo-body").innerText();
    expect(cut).not.toContain("conversation picker");
-   expect(fake.store.get(CONVERSATION_ID)!.messages.at(-1)?.role).toBe("user");
+   await expect(reply.locator(".convo-stopped")).toHaveText("Stopped");
    /* The next message streams and is saved as usual. */
    await composer.fill("And now?");
    await composer.press("Enter");
@@ -309,6 +314,17 @@ test("Stop ends the reply where it is; the next message runs normally", async ({
    await expect(next.locator("blockquote")).toHaveText("And now?", { timeout: 30_000 });
    await expect(next).toContainText("conversation picker", { timeout: 30_000 });
    await expect(hint).toHaveText("ENTER");
+   /* A reload draws the saved stopped reply, marked, and the finished one unmarked. */
+   await page.reload();
+   await expect(page.locator(".convo-msg.assistant .convo-body").last()).toContainText(
+      "conversation picker",
+      { timeout: 30_000 }
+   );
+   await expect(page.locator(".convo-stopped")).toHaveCount(1);
+   await expect(page.locator(".convo-stopped")).toHaveText("Stopped");
+   const marked = page.locator(".convo-msg.assistant:has(.convo-stopped) .convo-body");
+   await expect(marked).toContainText("This is the");
+   await expect(marked).not.toContainText("conversation picker");
 });
 
 test("a message sent while another turn holds the conversation waits, and can stop that one", async ({

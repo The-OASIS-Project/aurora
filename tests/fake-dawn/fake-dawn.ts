@@ -239,6 +239,8 @@ export class FakeDawn {
       another session's turn holding a conversation (a test sets it with holdConversation), and
       the turns waiting behind it. */
    private readonly turnWait: boolean;
+   /* stopped_replies_saved: a reply the user stopped is saved as far as it got. */
+   private readonly savesStopped: boolean;
    private held: {
       conv: number;
       holder: string;
@@ -283,6 +285,7 @@ export class FakeDawn {
       this.timing = opts.timing ?? TURN_TIMING;
       this.appLogins = scenario.features?.includes("app_logins") === true;
       this.turnWait = scenario.features?.includes("turn_wait") === true;
+      this.savesStopped = scenario.features?.includes("stopped_replies_saved") === true;
       this.signedIn = { authenticated: scenario.authenticated, username: scenario.username };
    }
 
@@ -989,13 +992,52 @@ export class FakeDawn {
             const next = frames.find(
                (f) => f.at > sentUpTo && (f.frame as { type: string }).type === "stream_delta"
             );
-            return [
-               ...(next ? [next.frame] : []),
-               {
-                  type: "stream_end",
-                  payload: { stream_id: sid, conversation_id: conv, reason: "error" }
+            if (!this.savesStopped) {
+               return [
+                  ...(next ? [next.frame] : []),
+                  {
+                     type: "stream_end",
+                     payload: { stream_id: sid, conversation_id: conv, reason: "error" }
+                  }
+               ];
+            }
+            /* stopped_replies_saved: what was sent of the reply (the chunk in flight included) is
+               saved as a stopped reply, and its row goes out like a finished one's, marked. */
+            const sent = frames
+               .filter(
+                  (f) =>
+                     (f.at <= sentUpTo || f === next) &&
+                     (f.frame as { type: string }).type === "stream_delta"
+               )
+               .map((f) => (f.frame as { payload: { delta: string } }).payload.delta)
+               .join("");
+            const saving = sent.length > 0 && conv > 0 && reply !== undefined;
+            const end = {
+               type: "stream_end",
+               payload: {
+                  stream_id: sid,
+                  conversation_id: conv,
+                  reason: "stopped",
+                  ...(saving ? { will_persist: true } : {})
                }
-            ];
+            };
+            if (!saving || !reply) return [...(next ? [next.frame] : []), end];
+            const row = { ...reply, content: sent, stopped: true };
+            store.add(conv, row);
+            const appended = {
+               type: "message_appended",
+               payload: {
+                  conversation_id: conv,
+                  message_id: row.id,
+                  role: "assistant",
+                  text: sent,
+                  stream_id: sid,
+                  session_id: s.id,
+                  stopped: true
+               }
+            };
+            this.push(appended, { except: s.owner ?? "" });
+            return [...(next ? [next.frame] : []), end, appended];
          },
          finish
       };
