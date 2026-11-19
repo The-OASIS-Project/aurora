@@ -1399,6 +1399,9 @@ export class DawnIngest implements Ingest {
    private keptWait: (TurnWait & { conversationId: number }) | null = null;
    /* This session's speech still playing after its turn ended: Stop stops it here. */
    private speechTail = false;
+   /* A stopped reply DAWN saves in the conversation a reset tool left: its row may still redraw
+      the bubble on screen. */
+   private stoppedSave: { conv: number; streamId: number } | null = null;
    /* A waiting turn the user took back (Stop / Esc): its turn_unsent comes back quietly, since the
       user asked for it. The ref, or "" for a voice turn. */
    private unsentAsked: string | null = null;
@@ -1909,6 +1912,7 @@ export class DawnIngest implements Ingest {
          this.replyEnded = false;
          this.speechTail = false;
          this.unsentAsked = null;
+         this.stoppedSave = null; // a reload after the reconnect draws the row
          this.sinks.conversation.setTurnActive(false);
          this.setTurnWait(null, true); // kept: DAWN still holds the turn
          this.pendingFactForgets.clear(); // their replies can't come now
@@ -4275,14 +4279,14 @@ export class DawnIngest implements Ingest {
                   message_appended adopts onto it and redraws it from what was saved. */
                const conv = Number(p.conversation_id ?? this.convId);
                if (p.will_persist === true) {
-                  /* Saved even in a conversation a reset tool left (the turn's own). */
-                  if (this.stopped && conv === this.stopped.conv) this.stopped.saving = true;
-                  if (conv === this.convId) {
-                     this.sinks.conversation.linkStream(
-                        conv,
-                        Number(p.stream_id ?? 0),
-                        this.sessionId
-                     );
+                  /* Saved even in a conversation a reset tool left (the turn's own, still on
+                     screen): its row is let in to redraw the bubble (stoppedSave). */
+                  const own = this.stopped !== null && conv === this.stopped.conv;
+                  if (own && this.stopped) this.stopped.saving = true;
+                  if (conv === this.convId || own) {
+                     const streamId = Number(p.stream_id ?? 0);
+                     this.sinks.conversation.linkStream(conv, streamId, this.sessionId);
+                     if (conv !== this.convId) this.stoppedSave = { conv, streamId };
                   }
                   this.scheduleListRefresh(); // the picker's row gained a reply
                }
@@ -4447,6 +4451,25 @@ export class DawnIngest implements Ingest {
             /* A NON-active conversation's message: mark its row unread; it renders on open, and a
                job answer also surfaces via its job_notification toast. */
             if (cid && cid !== this.convId) {
+               /* The stopped reply saved in the conversation a reset tool left: it redraws the
+                  bubble still on screen (only that row, matched by its stream; nothing else of
+                  that conversation is drawn here, and the view stays unbound). */
+               const save = this.stoppedSave;
+               const sid = Number((p as { stream_id?: number }).stream_id ?? 0);
+               if (save && cid === save.conv && sid === save.streamId) {
+                  this.stoppedSave = null;
+                  this.sinks.conversation.adoptId(
+                     cid,
+                     sid,
+                     Number((p as { message_id?: number }).message_id ?? 0),
+                     interpretMessage(String((p as { text?: string }).text ?? ""))?.text ??
+                        undefined,
+                     typeof (p as { session_id?: unknown }).session_id === "number"
+                        ? (p as { session_id: number }).session_id
+                        : undefined,
+                     (p as { stopped?: unknown }).stopped === true
+                  );
+               }
                this.sinks.conversationList.markAppended(cid);
                break;
             }
@@ -5831,6 +5854,7 @@ export class DawnIngest implements Ingest {
       this.liveStreamId = 0;
       this.replyEnded = false;
       this.unsentAsked = null;
+      this.stoppedSave = null;
       this.sinks.conversation.setTurnActive(false);
       this.setTurnWait(null);
       /* A typed turn's echo from the conversation just left is now dropped as foreign; don't

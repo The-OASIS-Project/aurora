@@ -186,8 +186,38 @@ describe("Stop", () => {
          reason: "stopped",
          will_persist: true
       });
+      /* Its row redraws the bubble still on screen, though the view is unbound now. */
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 92,
+         role: "assistant",
+         text: "Done, new chat",
+         stream_id: 3,
+         session_id: c.ing.sessionId,
+         stopped: true
+      });
       c.frame("state", { state: "idle", conversation_id: 7 });
       expect(c.named("stoppedUnsaved")).toEqual([]);
+      expect(c.named("linkStream").at(-1)).toEqual([7, 3, c.ing.sessionId]);
+      expect(c.named("adoptId").at(-1)).toEqual([
+         7,
+         3,
+         92,
+         "Done, new chat",
+         c.ing.sessionId,
+         true
+      ]);
+      expect(c.ing.convId).toBe(0); // not rebound
+      /* Any other row of that conversation isn't drawn here. */
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 93,
+         role: "assistant",
+         text: "later",
+         stream_id: 4
+      });
+      expect(c.named("adoptId")).toHaveLength(1);
+      expect(c.named("renderAppended")).toEqual([]);
    });
 
    it("an older DAWN (no saved stopped replies): a stopped reply is marked not saved", () => {
