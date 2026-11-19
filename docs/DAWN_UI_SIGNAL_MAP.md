@@ -1186,10 +1186,25 @@ composer does the same; Enter still sends (DAWN queues it). DAWN acks at once wi
 is its worker's conversation-TAGGED idle (`webui_text_processing.c`, the cancel exit; untagged when
 the stop came before a fresh chat's conversation existed, so the second idle ends it too). Until
 then Aurora drops the stopped turn's text, tool steps, states and speech. The reply stays on screen,
-sealed with a quiet "Stopped" (DAWN keeps the question and no reply); a reply DAWN finished as the
+sealed with a quiet "Stopped" (without `stopped_replies_saved`, below, DAWN keeps the question and
+no reply); a reply DAWN finished as the
 Stop landed is saved after all, and its `message_appended` redraws the bubble whole and drops the
 note. A Stop after the text has finished stops only the speech, and DAWN keeps the reply. Providers
 treat the abort as no error, so there is nothing to swallow.
+
+**Saved stopped replies (flag `stopped_replies_saved`).** DAWN keeps a reply the user stopped as far
+as it got. The stopped stream ends `reason: "stopped"`, with `will_persist: true` only when a partial
+row will be saved; `stopped` alone means nothing was (no reply text yet, or a tool was running). That
+row's `message_appended` carries `stopped: true` and the saved text, which is the truth: it can
+differ from what was drawn by a few characters either way, so the bubble is redrawn from it and
+keeps its "Stopped" mark. `load_conversation` rows (and another tab's `message_appended`) carry
+`stopped: true` too, so a reload draws the same mark. A reply that had fully arrived before the Stop
+is saved as a normal one, without `stopped`, and loses the mark. The marker is a structured field
+only; DAWN tells the model the reply was cut off when it builds the next request, never in content.
+A stopped reply DAWN said nothing of saving (no `will_persist` by the turn's end, or an older DAWN
+without the flag) reads "Stopped · not saved", since a reload won't show it. Only a Stop the user
+pressed saves a partial; DAWN's own cancels (the always-on timeout, a superseded satellite turn)
+don't.
 
 **turn_wait (DAWN #121, flag `turn_wait`).** A turn sent while another turn (another app of the
 user, a background job, a messaging channel) runs on the same conversation waits for it:

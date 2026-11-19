@@ -98,12 +98,18 @@ export interface ConversationController {
       streamId: number,
       messageId: number,
       savedText?: string,
-      rowSessionId?: number
+      rowSessionId?: number,
+      /* The saved row is a reply the user stopped (stopped_replies_saved): drawn from the row,
+         and marked Stopped. */
+      stopped?: boolean
    ): boolean;
+   /* The reply the user stopped wasn't saved: its Stopped mark says so. */
+   stoppedUnsaved(): void;
    renderAppended(item: {
       role: "user" | "assistant";
       text: string;
       messageId: number;
+      stopped?: boolean;
       email?: EmailRef;
    }): void;
    confirmTurn(text: string, ref?: string, messageId?: number): void;
@@ -1077,8 +1083,26 @@ export function mountConversation(
       if (performance.now() - stopShownAt < STOP_ARM_MS) return;
       stopReply();
    };
-   /* Seal the reply where it stopped, with a quiet note. DAWN keeps no stopped reply; one that
-      finished as the Stop landed is saved, and its adoption shows it whole and drops the note. */
+   /* A reply the user stopped carries a quiet mark under it (outside its body, so a redraw from
+      the saved row keeps it). "not saved": DAWN kept none of it, so a reload won't show it. */
+   const setStoppedMark = (msg: Msg, mark: "saved" | "unsaved" | null): void => {
+      let note = msg.el.querySelector<HTMLElement>(".convo-stopped");
+      if (mark === null) {
+         note?.remove();
+         return;
+      }
+      if (!note) {
+         note = document.createElement("div");
+         note.className = "convo-stopped";
+         msg.el.appendChild(note);
+      }
+      note.textContent = mark === "saved" ? "Stopped" : "Stopped · not saved";
+   };
+   /* The last reply sealed by a Stop, until DAWN says whether it kept it. */
+   let lastStopped: Msg | null = null;
+   /* Seal the reply where it stopped, marked. DAWN saves what it kept (stopped_replies_saved) and
+      sends that row, which redraws it; one that finished as the Stop landed is saved whole and
+      its adoption drops the mark; one DAWN kept nothing of is marked not saved. */
    const markStopped = (): void => {
       const msg = streaming;
       endReply();
@@ -1086,11 +1110,13 @@ export function mountConversation(
          one a late save would adopt onto). */
       const target = msg ?? appendMsg("assistant", "");
       if (!msg) lastFinalized = target;
-      const note = document.createElement("div");
-      note.className = "convo-stopped";
-      note.textContent = "Stopped";
-      target.el.appendChild(note);
+      setStoppedMark(target, "saved");
+      lastStopped = target;
       scrollToEnd(true);
+   };
+   const stoppedUnsaved = (): void => {
+      if (lastStopped && messages.includes(lastStopped)) setStoppedMark(lastStopped, "unsaved");
+      lastStopped = null;
    };
 
    const setThinking = (t: boolean): void => {
@@ -1192,7 +1218,8 @@ export function mountConversation(
       streamId: number,
       messageId: number,
       savedText?: string,
-      rowSessionId?: number
+      rowSessionId?: number,
+      stopped?: boolean
    ): boolean => {
       let key: string | undefined;
       if (rowSessionId !== undefined) {
@@ -1210,13 +1237,18 @@ export function mountConversation(
       const i = adoptOrder.indexOf(key);
       if (i >= 0) adoptOrder.splice(i, 1);
       stampId(msg, messageId);
-      /* DAWN saved it after all (the Stop landed as it finished): not a stopped reply, and the
-         bubble was cut where the Stop was, so it is drawn from the saved reply. */
-      const stoppedNote = msg.el.querySelector(".convo-stopped");
-      if (stoppedNote) {
-         stoppedNote.remove();
-         if (savedText)
-            msg.text = fillAssistantBody(msg.body, parseAttachments(savedText, "assistant"));
+      /* A reply the user stopped: the saved row is the truth (what DAWN kept can differ from
+         what was drawn by a few characters either way), so it is drawn from it. Saved as a
+         stopped reply it keeps its mark; saved whole (the Stop landed as it finished) it isn't a
+         stopped reply. */
+      if (stopped || msg.el.querySelector(".convo-stopped")) {
+         if (lastStopped === msg) lastStopped = null;
+         setStoppedMark(msg, stopped ? "saved" : null);
+         if (savedText) {
+            const parsed = parseAttachments(savedText, "assistant");
+            if (hasVisual(parsed.text)) pendingVisuals = []; // the saved reply carries them
+            msg.text = fillAssistantBody(msg.body, parsed);
+         }
          return true;
       }
       /* The saved reply is the truth, so the bubble is redrawn from it as a reload would draw it
@@ -1255,11 +1287,13 @@ export function mountConversation(
       text: string;
       messageId: number;
       email?: EmailRef;
+      stopped?: boolean;
    }): void => {
       if (item.messageId > 0 && renderedIds.has(item.messageId)) return; // already in the transcript
       if (item.role === "assistant" && hasVisual(item.text)) pendingVisuals = []; // that saved reply carries them
       const msg = appendMsg(item.role, item.text, item.email, true);
       stampId(msg, item.messageId);
+      if (item.stopped) setStoppedMark(msg, "saved");
       summon();
    };
 
@@ -1399,6 +1433,7 @@ export function mountConversation(
             if (it.text) {
                const msg = appendMsg(it.role, it.text, it.email);
                if (typeof it.id === "number") stampId(msg, it.id);
+               if (it.stopped) setStoppedMark(msg, "saved");
             }
             if (it.tools?.length) for (const call of it.tools) toolCall(call);
          }
@@ -2120,6 +2155,7 @@ export function mountConversation(
       setLinked,
       setTurnActive,
       markStopped,
+      stoppedUnsaved,
       setTurnWait,
       setThinking,
       setSpeaking,

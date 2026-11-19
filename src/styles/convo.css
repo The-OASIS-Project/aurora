@@ -1107,7 +1107,8 @@
 .composer-hint.composer-stop:hover {
    color: var(--accent-glow);
 }
-/* A reply the user stopped: the text so far stays, with a quiet note (DAWN keeps no stopped reply). */
+/* A reply the user stopped: the text so far stays, with a quiet mark ("Stopped", or "Stopped · not
+   saved" when DAWN kept none of it). */
 .convo-stopped {
    margin-top: 0.3rem;
    font-family: var(--font-mono);

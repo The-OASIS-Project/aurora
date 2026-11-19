@@ -138,6 +138,122 @@ describe("Stop", () => {
       expect(c.named("endReply")).toHaveLength(0); // already sealed as stopped
    });
 
+   it("a reply DAWN saved as stopped is adopted with its mark; one it didn't save is marked not saved", () => {
+      const c = client(["turn_wait", "stopped_replies_saved"]);
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.frame("stream_start", { stream_id: 3, conversation_id: 7 });
+      c.frame("stream_delta", { delta: "Once upon", conversation_id: 7 });
+      c.ing.cancelTurn();
+      c.frame("state", { state: "idle" });
+      c.frame("stream_end", {
+         stream_id: 3,
+         conversation_id: 7,
+         reason: "stopped",
+         will_persist: true
+      });
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 90,
+         role: "assistant",
+         text: "Once upon a",
+         stream_id: 3,
+         session_id: c.ing.sessionId,
+         stopped: true
+      });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.named("adoptId").at(-1)?.slice(3)).toEqual(["Once upon a", c.ing.sessionId, true]);
+      expect(c.named("stoppedUnsaved")).toEqual([]);
+
+      /* Stopped before any text (or while a tool ran): nothing saved, so it says so. */
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.ing.cancelTurn();
+      c.frame("state", { state: "idle" });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.named("stoppedUnsaved")).toHaveLength(1);
+   });
+
+   it("a partial saved in the conversation a reset tool left isn't called unsaved", () => {
+      const c = client(["turn_wait", "stopped_replies_saved"]);
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.frame("conversation_reset", {});
+      c.frame("stream_start", { stream_id: 3, conversation_id: 7 });
+      c.frame("stream_delta", { delta: "Done, new", conversation_id: 7 });
+      c.ing.cancelTurn();
+      c.frame("state", { state: "idle" });
+      c.frame("stream_end", {
+         stream_id: 3,
+         conversation_id: 7,
+         reason: "stopped",
+         will_persist: true
+      });
+      /* Its row redraws the bubble still on screen, though the view is unbound now. */
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 92,
+         role: "assistant",
+         text: "Done, new chat",
+         stream_id: 3,
+         session_id: c.ing.sessionId,
+         stopped: true
+      });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.named("stoppedUnsaved")).toEqual([]);
+      expect(c.named("linkStream").at(-1)).toEqual([7, 3, c.ing.sessionId]);
+      expect(c.named("adoptId").at(-1)).toEqual([
+         7,
+         3,
+         92,
+         "Done, new chat",
+         c.ing.sessionId,
+         true
+      ]);
+      expect(c.ing.convId).toBe(0); // not rebound
+      /* Any other row of that conversation isn't drawn here. */
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 93,
+         role: "assistant",
+         text: "later",
+         stream_id: 4
+      });
+      expect(c.named("adoptId")).toHaveLength(1);
+      expect(c.named("renderAppended")).toEqual([]);
+   });
+
+   it("an older DAWN (no saved stopped replies): a stopped reply is marked not saved", () => {
+      const c = client(["turn_wait"]);
+      c.frame("state", { state: "thinking", conversation_id: 7 });
+      c.frame("stream_start", { stream_id: 3, conversation_id: 7 });
+      c.ing.cancelTurn();
+      c.frame("state", { state: "idle" });
+      c.frame("stream_end", { stream_id: 3, conversation_id: 7, reason: "error" });
+      c.frame("state", { state: "idle", conversation_id: 7 });
+      expect(c.named("stoppedUnsaved")).toHaveLength(1);
+   });
+
+   it("a stopped row from another tab or a reload carries its mark", () => {
+      const c = client(["turn_wait", "stopped_replies_saved"]);
+      c.frame("message_appended", {
+         conversation_id: 7,
+         message_id: 91,
+         role: "assistant",
+         text: "Half a story",
+         stream_id: 0,
+         stopped: true
+      });
+      expect(c.named("renderAppended").at(-1)?.[0]).toMatchObject({ stopped: true });
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [
+            { id: 1, role: "user", content: "tell me" },
+            { id: 2, role: "assistant", content: "Half a story", stopped: true }
+         ]
+      });
+      const items = c.named("loadHistory").at(-1)?.[0] as Array<{ stopped?: boolean }>;
+      expect(items.map((i) => i.stopped)).toEqual([false, true]);
+   });
+
    it("after the text has finished, stops only the speech and marks nothing stopped", () => {
       const c = client();
       c.frame("state", { state: "thinking", conversation_id: 7 });

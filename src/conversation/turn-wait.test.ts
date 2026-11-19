@@ -93,3 +93,52 @@ it("a reload of the same conversation keeps the waiting message and its image UR
    const kept = document.querySelector<HTMLImageElement>(".convo-msg.user img")!;
    expect(kept.src).toBe("blob:img-2");
 });
+
+const mark = (): string | null =>
+   document.querySelector(".convo-msg.assistant .convo-stopped")?.textContent ?? null;
+
+it("a stopped reply keeps its mark when DAWN saves it as stopped, drawn from the saved row", () => {
+   mount();
+   view!.startReply();
+   view!.appendDelta("Once upon a ti");
+   view!.markStopped();
+   expect(mark()).toBe("Stopped");
+   view!.linkStream(7, 3, 1);
+   expect(view!.adoptId(7, 3, 90, "Once upon a time", 1, true)).toBe(true);
+   expect(mark()).toBe("Stopped");
+   expect(bubbles()).toEqual(["Once upon a time"]);
+});
+
+it("a stopped reply DAWN saved whole loses its mark; one it didn't save says so", () => {
+   mount();
+   view!.startReply();
+   view!.appendDelta("All of it");
+   view!.markStopped();
+   view!.linkStream(7, 3, 1);
+   view!.adoptId(7, 3, 90, "All of it, finished.", 1, false);
+   expect(mark()).toBeNull();
+   expect(bubbles()).toEqual(["All of it, finished."]);
+   view!.startReply();
+   view!.appendDelta("Never kept");
+   view!.markStopped();
+   view!.stoppedUnsaved();
+   expect(
+      Array.from(document.querySelectorAll(".convo-stopped")).map((n) => n.textContent)
+   ).toEqual(["Stopped · not saved"]);
+});
+
+it("a reload and another tab's row draw the mark from the row", () => {
+   mount();
+   view!.loadHistory([
+      { role: "user", text: "tell me", id: 1 },
+      { role: "assistant", text: "Half a story", id: 2, stopped: true },
+      { role: "assistant", text: "A whole one", id: 3 }
+   ]);
+   expect(
+      Array.from(document.querySelectorAll(".convo-msg")).map(
+         (m) => m.querySelector(".convo-stopped")?.textContent ?? ""
+      )
+   ).toEqual(["", "Stopped", ""]);
+   view!.renderAppended({ role: "assistant", text: "Cut short", messageId: 4, stopped: true });
+   expect(document.querySelectorAll(".convo-stopped")).toHaveLength(2);
+});

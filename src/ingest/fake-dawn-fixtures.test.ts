@@ -767,7 +767,7 @@ describe("the fake's interactive requests", () => {
       });
    });
 
-   it("cancel: the ack at once, the stopped turn's own idle after, nothing of its reply saved", () => {
+   it("cancel: the ack at once; the reply saved as far as it got, marked stopped; then the turn's idle", () => {
       vi.useFakeTimers();
       const { fake, send, to } = interactive(SCENARIOS.signedIn, { firstTokenMs: 10, chunkMs: 50 });
       send("load_conversation", { conversation_id: CONVERSATION_ID });
@@ -777,15 +777,46 @@ describe("the fake's interactive requests", () => {
       expect(send("cancel")).toEqual([{ type: "state", payload: { state: "idle" } }]);
       const at = to(mine).length;
       vi.runAllTimers();
-      /* What DAWN had queued (the next chunk, the stream's "error" end), then the turn's idle. */
+      /* What DAWN had queued (the next chunk), the stream's "stopped" end saying the partial will
+         be saved, its row (marked stopped, to every tab), then the turn's idle. */
+      const after = to(mine).slice(at);
+      expect(after.map((f) => f.type)).toEqual([
+         "stream_delta",
+         "stream_end",
+         "message_appended",
+         "state"
+      ]);
+      expect(after[1].payload).toMatchObject({ reason: "stopped", will_persist: true });
+      expect(after[2].payload).toMatchObject({ role: "assistant", stopped: true });
+      expect(after[3].payload).toEqual({ state: "idle", conversation_id: CONVERSATION_ID });
+      const rows = fake.store.get(CONVERSATION_ID)!.messages;
+      expect(rows.length).toBe(before + 2);
+      expect(rows.at(-1)).toMatchObject({ role: "assistant", stopped: true });
+      expect(rows.at(-1)!.content).toBe(after[2].payload.text);
+      expect(fake.store.get(CONVERSATION_ID)!.messages.at(-1)!.content.length).toBeGreaterThan(0);
+      /* With nothing running, only the ack. */
+      expect(send("cancel")).toEqual([{ type: "state", payload: { state: "idle" } }]);
+   });
+
+   it('cancel on a DAWN that saves no stopped reply: its stream ends "error", nothing of it saved', () => {
+      vi.useFakeTimers();
+      const scenario = {
+         ...SCENARIOS.signedIn,
+         features: SCENARIOS.signedIn.features.filter((f) => f !== "stopped_replies_saved")
+      };
+      const { fake, send, to } = interactive(scenario, { firstTokenMs: 10, chunkMs: 50 });
+      send("load_conversation", { conversation_id: CONVERSATION_ID });
+      const before = fake.store.get(CONVERSATION_ID)!.messages.length;
+      send("text", { text: "stop me" });
+      vi.advanceTimersByTime(100);
+      send("cancel");
+      const at = to(mine).length;
+      vi.runAllTimers();
       const after = to(mine).slice(at);
       expect(after.map((f) => f.type)).toEqual(["stream_delta", "stream_end", "state"]);
       expect(after[1].payload).toMatchObject({ reason: "error" });
       expect(after[1].payload.will_persist).toBeUndefined();
-      expect(after[2].payload).toEqual({ state: "idle", conversation_id: CONVERSATION_ID });
       expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before + 1); // the question only
-      /* With nothing running, only the ack. */
-      expect(send("cancel")).toEqual([{ type: "state", payload: { state: "idle" } }]);
    });
 
    it("turn_wait: a turn waits for another holding the conversation, and stop_other_reply ends that one", () => {
@@ -1211,7 +1242,8 @@ describe("the fake's sessions, keyed by token as in DAWN", () => {
          linked[0][1],
          saved.id,
          saved.content,
-         taken.session_id
+         taken.session_id,
+         false // a finished reply, not a stopped one
       ]);
    });
 
