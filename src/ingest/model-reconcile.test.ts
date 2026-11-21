@@ -1112,6 +1112,32 @@ describe("following the default model", () => {
       expect([s.mode, s.noProvider]).toEqual(["cloud", true]);
    });
 
+   it("Use default model ends the provider prompt, so a changed default shows again", () => {
+      const c = client("local", "llama3");
+      c.ing.llm.followsDefault = false;
+      c.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "" } } },
+         llm_runtime: { type: "local", provider: "none", model: "llama3", follows_default: false }
+      });
+      c.ing.getModelControl().setMode("cloud"); // "Pick a provider"
+      c.ing.getModelControl().useDefaultModel();
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "local",
+         provider: "none",
+         model: "llama3",
+         follows_default: true
+      });
+      c.ing.getModelControl().refreshModels();
+      c.frame("get_config_response", {
+         success: true,
+         config: {},
+         llm_runtime: { type: "local", provider: "none", model: "qwen", follows_default: true }
+      });
+      expect(c.ing.llm.model).toBe("qwen"); // dawn.toml's default changed meanwhile
+   });
+
    it("dawn.toml's anthropic is Claude", () => {
       const c = client("local", "llama3");
       c.frame("get_config_response", {

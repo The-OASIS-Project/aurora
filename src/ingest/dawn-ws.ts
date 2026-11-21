@@ -2835,6 +2835,7 @@ export class DawnIngest implements Ingest {
                   if (this.llm.mode !== "local") this.localPickPending = false;
                   this.applyProvider(p.provider);
                   this.applyFollows(p.follows_default);
+                  this.pickingProvider = false; // a selection DAWN confirmed ends any prompt
                   /* A local session with no named model ("server decides", e.g. after New's reset
                      to a local default) echoes model "". Show "local", as get_config's llm_runtime
                      names it, rather than keeping the previous (cloud) model's name. */
@@ -6799,6 +6800,7 @@ export class DawnIngest implements Ingest {
                reasoning (DAWN #137: a reset with the reasoning fields, never from_restore). The
                echo carries the model it now runs. */
             if (this.llm.followsDefault !== null) this.llm.followsDefault = true;
+            this.pickingProvider = false; // the default replaces the provider prompt
             /* It replaces a switch to local still waiting for the model list: the list mustn't
                complete that one now. */
             this.localPickPending = false;
