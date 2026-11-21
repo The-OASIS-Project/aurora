@@ -204,6 +204,7 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       library's scroll while the queue tab shows. */
    let openedFrom: { page: MusicLibraryPage; scroll: number } | null = null;
    let browseScroll = 0;
+   let searching = false; // a search is shown or on its way: the list's place is already saved
    let libraryScroll = 0;
    const drill = (): void => {
       if (browse) openedFrom = { page: browse, scroll: body.scrollTop };
@@ -549,7 +550,8 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       const q = search.value.trim();
       if (!q) return;
       lastAsk = "search";
-      if (!searchResults) browseScroll = body.scrollTop; // the list under the results, before it goes
+      if (!searching) browseScroll = body.scrollTop; // the list under the results, before it goes
+      searching = true;
       opts.search(q);
       list.replaceChildren();
       moreBtn.hidden = true;
@@ -558,12 +560,14 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    search.addEventListener("input", () => {
       if (search.value.trim() || !searchResults) return;
       searchResults = null; // cleared: back to browsing, where it was
+      searching = false;
       render();
       body.scrollTop = browseScroll;
    });
    backBtn.addEventListener("click", () => {
       if (searchResults) {
          searchResults = null;
+         searching = false;
          search.value = "";
          render();
          body.scrollTop = browseScroll; // the list as it was under the results
@@ -704,7 +708,10 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
             moreBtn.disabled = false;
             browse = page;
          }
-         if (lastAsk === "browse") searchResults = null;
+         if (lastAsk === "browse") {
+            searchResults = null;
+            searching = false;
+         }
          queueMicrotask(recheckEnd);
          /* A newly opened page starts at its top (a More page keeps the position), also when it
             lands while the queue tab shows. */

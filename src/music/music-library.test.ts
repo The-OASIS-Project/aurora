@@ -270,6 +270,7 @@ describe("music library", () => {
       input.value = "x";
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
       body.scrollTop = 0; // the list emptied for the search
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); // again, before the reply
       t.view.setSearchResults("x", [track(1)]);
       body.scrollTop = 0;
       t.q<HTMLButtonElement>(".music-lib-back").click();
