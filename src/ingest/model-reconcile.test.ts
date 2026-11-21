@@ -1076,6 +1076,23 @@ describe("following the default model", () => {
       expect(c.ing.llm.model).toBe("loaded.gguf");
    });
 
+   it("Use default model on llama.cpp shows the loaded model, not DAWN's placeholder", () => {
+      const c = client("local", "loaded.gguf");
+      c.ing.llm.followsDefault = false;
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      c.ing.getModelControl().useDefaultModel();
+      const sent = c.llmWrites().length;
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "local",
+         provider: "none",
+         model: "local",
+         follows_default: true
+      });
+      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.llmWrites()).toHaveLength(sent); // shown, not sent
+   });
+
    it("dawn.toml's anthropic is Claude", () => {
       const c = client("local", "llama3");
       c.frame("get_config_response", {

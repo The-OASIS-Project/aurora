@@ -2848,6 +2848,10 @@ export class DawnIngest implements Ingest {
                         hold: 6
                      });
                   }
+                  /* Following the default on llama.cpp, DAWN's reply names the local LLM by its
+                     placeholder: show the model it has loaded (display only, nothing sent). */
+                  if (this.llm.followsDefault === true && this.llm.mode === "local")
+                     this.syncLoadedLocalModel();
                }
                this.notifyLlm();
             } else {
