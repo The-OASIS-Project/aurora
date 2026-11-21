@@ -2746,7 +2746,13 @@ export class DawnIngest implements Ingest {
                rev: this.llmRev,
                listsOnly: typeof p.req === "string"
             };
-            const appliesSelection = !ask.listsOnly && ask.rev === this.llmRev;
+            /* A lists-only refresh (config_changed, the panel opening) still updates a session
+               that follows the default when DAWN says it still does: the default it shows may
+               have changed in dawn.toml. An explicit pick, or an older DAWN, keeps it out. */
+            const followsNow =
+               this.llm.followsDefault === true &&
+               (rt as { follows_default?: unknown }).follows_default === true;
+            const appliesSelection = ask.rev === this.llmRev && (!ask.listsOnly || followsNow);
             if (appliesSelection) this.llmNeedsRead = false; // the session's selection, as it is
             if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
@@ -6742,8 +6748,13 @@ export class DawnIngest implements Ingest {
             }
             /* Cloud means the provider dawn.toml names, never one guessed from which keys exist;
                with none named, the panel asks for one and nothing is sent until it's picked. */
+            /* Nothing of the previous mode carries over: an older reply or a pending local
+               switch isn't the selection now, and the model is the new provider's default. */
+            this.localPickPending = false;
+            this.llm.model = "";
             if (this.defaultCloudProvider === "") {
                this.llm.noProvider = true;
+               this.llmRev++; // replies to the earlier pick no longer describe what's shown
                this.notifyLlm();
                return;
             }

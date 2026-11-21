@@ -1114,6 +1114,87 @@ describe("following the default model", () => {
       });
    });
 
+   it("a lists-only refresh updates a conversation that follows the default, not one with its own pick", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.followsDefault = true;
+      c.ing.getModelControl().refreshModels(); // MODEL panel opened: a lists-only read
+      c.frame("get_config_response", {
+         success: true,
+         config: {},
+         llm_runtime: {
+            type: "cloud",
+            provider: "Claude",
+            model: "claude-opus-5-5",
+            follows_default: true
+         }
+      });
+      expect(c.ing.llm.model).toBe("claude-opus-5-5"); // dawn.toml's default changed
+
+      const own = client("cloud", "claude-sonnet-5-5");
+      own.ing.llm.followsDefault = false;
+      own.ing.getModelControl().refreshModels();
+      own.frame("get_config_response", {
+         success: true,
+         config: {},
+         llm_runtime: {
+            type: "cloud",
+            provider: "Claude",
+            model: "claude-opus-5-5",
+            follows_default: false
+         }
+      });
+      expect(own.ing.llm.model).toBe("claude-sonnet-5-5");
+   });
+
+   it("Local then Cloud before Local's reply: Cloud lands on the default model, and Local's reply is stale", () => {
+      const c = client("cloud", "claude-opus-5-5");
+      c.frame("get_config_response", {
+         success: true,
+         config: {
+            llm: {
+               cloud: {
+                  provider: "claude",
+                  claude_models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+                  claude_default_model_idx: 1
+               }
+            }
+         },
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
+      });
+      c.ing.getModelControl().setMode("local"); // no local list yet: waits
+      c.ing.getModelControl().setMode("cloud");
+      expect(c.llmWrites().at(-1)?.payload).toEqual({
+         type: "cloud",
+         provider: "claude",
+         model: "claude-sonnet-5-5"
+      });
+      /* The abandoned local switch isn't completed by a later list. */
+      const sent = c.llmWrites().length;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites()).toHaveLength(sent);
+   });
+
+   it("Local then Cloud with no default provider: nothing pending, and Local's reply doesn't switch back", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "" } } },
+         llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
+      });
+      c.ing.getModelControl().setMode("local");
+      c.ing.getModelControl().setMode("cloud");
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "local",
+         provider: "none",
+         model: ""
+      });
+      expect(c.ing.llm.mode).toBe("cloud");
+      const sent = c.llmWrites().length;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], ""));
+      expect(c.llmWrites()).toHaveLength(sent);
+   });
+
    it("Use default model replaces a switch to local still waiting for the list", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.ing.getModelControl().setMode("local"); // no local list yet

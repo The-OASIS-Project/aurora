@@ -724,6 +724,8 @@ export class FakeDawn {
                typeof payload.title === "string" ? payload.title : "",
                s.pick
             );
+            /* Stamped with the session's selection, or none (webui_conv_stamp_llm_settings). */
+            made.follows = s.follows;
             c.conversation = made.id;
             const created = {
                type: "conversation_list_changed",
@@ -1114,15 +1116,13 @@ export class FakeDawn {
             }
          ];
       /* A reset has no selection of its own (it follows the default, the reasoning fields in the
-         message over it); a type with a provider or model is a selection. */
+         message over it); a cloud or local type is a selection. */
       if (payload.type === "reset") {
          s.pick = { ...DEFAULT_PICK };
          s.follows = true;
-      } else if (
-         (payload.type === "cloud" || payload.type === "local") &&
-         (payload.provider !== undefined || payload.model !== undefined)
-      )
-         s.follows = false;
+      } else if (payload.type === "cloud" || payload.type === "local") {
+         s.follows = false; // a type is a selection itself (webui_message_dispatch.c)
+      }
       const setMode =
          typeof payload.thinking_mode === "string" && VALID_MODES.includes(payload.thinking_mode);
       const setEffort =
