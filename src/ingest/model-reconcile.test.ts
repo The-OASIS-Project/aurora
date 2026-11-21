@@ -1093,6 +1093,25 @@ describe("following the default model", () => {
       expect(c.llmWrites()).toHaveLength(sent); // shown, not sent
    });
 
+   it("a lists-only refresh doesn't take away the provider prompt the user is in", () => {
+      const c = client("local", "llama3");
+      c.ing.llm.followsDefault = true;
+      c.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "" } } },
+         llm_runtime: { type: "local", provider: "none", model: "llama3", follows_default: true }
+      });
+      c.ing.getModelControl().setMode("cloud"); // "Pick a provider"
+      c.ing.getModelControl().refreshModels(); // the panel reopened
+      c.frame("get_config_response", {
+         success: true,
+         config: {},
+         llm_runtime: { type: "local", provider: "none", model: "llama3", follows_default: true }
+      });
+      const s = c.ing.getModelControl().getState();
+      expect([s.mode, s.noProvider]).toEqual(["cloud", true]);
+   });
+
    it("dawn.toml's anthropic is Claude", () => {
       const c = client("local", "llama3");
       c.frame("get_config_response", {

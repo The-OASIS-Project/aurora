@@ -1257,6 +1257,9 @@ export class DawnIngest implements Ingest {
    /* The cloud provider dawn.toml names: what choosing Cloud means, never one guessed from which
       keys exist ("" when it names none). */
    private defaultCloudProvider: LlmProvider | "" | null = null; // null: not known (keep the last)
+   /* The user chose Cloud and the panel asks for a provider (nothing sent yet): a refresh of
+      DAWN's still-unchanged selection mustn't take that prompt away. */
+   private pickingProvider = false;
    /* DAWN's per-model reasoning capabilities (P1.1b). cloudCaps is null until a server sends
       them (an older server never does: the panel then falls back to the name heuristic).
       frameCaps is the caps a per-conversation frame carried for ITS model, which covers a
@@ -2750,6 +2753,7 @@ export class DawnIngest implements Ingest {
                that follows the default when DAWN says it still does: the default it shows may
                have changed in dawn.toml. An explicit pick, or an older DAWN, keeps it out. */
             const followsNow =
+               !this.pickingProvider &&
                this.llm.followsDefault === true &&
                (rt as { follows_default?: unknown }).follows_default === true;
             const appliesSelection = ask.rev === this.llmRev && (!ask.listsOnly || followsNow);
@@ -4638,6 +4642,7 @@ export class DawnIngest implements Ingest {
       opens a fresh one, and wipe the surface. Mirrors the old WebUI's startNewChat. */
    newChat(): void {
       this.localPickPending = false; // a new chat starts from DAWN's defaults, not an old switch
+      this.pickingProvider = false;
       this.llmRev++;
       this.send({ type: "clear_session" });
       /* A new chat starts on DAWN's configured default model (dawn.toml), not whatever the last
@@ -6501,6 +6506,7 @@ export class DawnIngest implements Ingest {
       reconcileModel is deliberately NOT called - the stamped model is the truth even
       when it is absent from the active provider's list (as an OpenRouter model is). */
    private applyConvLlmSettings(settings: unknown): void {
+      this.pickingProvider = false; // another conversation's selection: no prompt carries over
       this.localPickPending = false; // a loaded conversation ends any earlier switch's wait
       this.llmRev++; // its settings are newer than any config snapshot in flight
       if (!settings || typeof settings !== "object") return;
@@ -6744,6 +6750,7 @@ export class DawnIngest implements Ingest {
          setMode: (mode) => {
             /* The active one clicked again picks nothing (it would pin the conversation). */
             if (mode === this.llm.mode) return;
+            this.pickingProvider = false; // a new choice of mode ends an earlier prompt
             this.llm.mode = mode;
             if (mode === "local") {
                this.llm.noProvider = false;
@@ -6758,6 +6765,7 @@ export class DawnIngest implements Ingest {
             this.llm.model = "";
             if (this.defaultCloudProvider === "") {
                this.llm.noProvider = true;
+               this.pickingProvider = true;
                this.llmRev++; // replies to the earlier pick no longer describe what's shown
                this.notifyLlm();
                return;
@@ -6768,6 +6776,7 @@ export class DawnIngest implements Ingest {
          },
          setProvider: (provider) => {
             if (provider === this.llm.provider && !this.llm.noProvider) return; // already picked
+            this.pickingProvider = false;
             this.llm.provider = provider;
             this.llm.noProvider = false;
             /* The whole pick in one message: type (it wins at dispatch), the provider, and that
