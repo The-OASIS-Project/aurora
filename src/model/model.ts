@@ -167,6 +167,11 @@ export interface LlmState {
    effort: string; // one of effortOptions
    /* Which cloud providers have a key configured (dim the rest). */
    providers: Record<LlmProvider, boolean>;
+   /* Cloud with no provider selected: the panel asks for one (nothing is sent until it's picked). */
+   noProvider: boolean;
+   /* The conversation follows the dawn.toml default (no model of its own); null: an older DAWN
+      that doesn't say. "Use default model" is offered only when this is false. */
+   followsDefault: boolean | null;
    /* Models available for the current mode+provider. */
    models: string[];
    /* Reasoning-effort values the current model accepts (the heuristic, for an older server
@@ -193,6 +198,8 @@ export interface ModelControl {
    setReasoning(reasoning: Reasoning): void;
    setEffort(effort: string): void;
    setPrivate(on: boolean): void;
+   /* Make the conversation follow the dawn.toml default again (its reasoning kept). */
+   useDefaultModel(): void;
    /* Re-fetch the LLM config (the cloud model lists come from get_config and are read
       only on connect). Called when the MODEL panel opens so a backend config edit shows
       up without a page reload; the response updates the lists and fires onChange. */

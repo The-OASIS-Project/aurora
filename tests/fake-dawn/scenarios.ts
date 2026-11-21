@@ -271,8 +271,14 @@ export function reasoningFields(pick: ReasoningPick): Record<string, unknown> {
 }
 
 /* The conversation settings load_conversation reports (build_conv_llm_settings_json). */
-export function conversationLlm(pick: ReasoningPick): Record<string, unknown> {
-   return { llm_type: "cloud", cloud_provider: "claude", model: MODEL, ...reasoningFields(pick) };
+export function conversationLlm(pick: ReasoningPick, follows = true): Record<string, unknown> {
+   return {
+      follows_default: follows,
+      llm_type: "cloud",
+      cloud_provider: "claude",
+      model: MODEL,
+      ...reasoningFields(pick)
+   };
 }
 
 /* Replies to the requests the fake answers. Saved conversations come from `store` (a FakeDawn
@@ -281,7 +287,9 @@ export function answerFrame(
    type: string,
    payload: Record<string, unknown>,
    store: ConversationStore = defaultStore(),
-   pick: ReasoningPick = DEFAULT_PICK
+   pick: ReasoningPick = DEFAULT_PICK,
+   /* The session has no model of its own (DAWN #137). */
+   follows = true
 ): object[] {
    switch (type) {
       /* webui_config.c (get_config); protocol doc, get_config + §9.1a/§9.13 of the signal map. */
@@ -293,7 +301,9 @@ export function answerFrame(
                   success: true,
                   config: {
                      general: { ai_name: "friday" },
-                     llm: { cloud: { claude_models: [MODEL], vision_enabled: true } }
+                     llm: {
+                        cloud: { provider: "claude", claude_models: [MODEL], vision_enabled: true }
+                     }
                   },
                   llm_runtime: {
                      type: "cloud",
@@ -301,6 +311,7 @@ export function answerFrame(
                      model: MODEL,
                      thinking_mode: resolveReasoning(pick).mode,
                      reasoning_effort: resolveReasoning(pick).effort,
+                     follows_default: follows,
                      openai_available: false,
                      claude_available: true,
                      gemini_available: false,
@@ -374,7 +385,7 @@ export function answerFrame(
                   llm_locked: c.messages.length > 0,
                   context_tokens: 0,
                   context_max: 200000,
-                  llm_settings: conversationLlm(c.pick),
+                  llm_settings: conversationLlm(c.pick, c.follows ?? true),
                   messages: c.messages.map((m) => ({ ...m }))
                }
             }

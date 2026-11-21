@@ -90,6 +90,8 @@ interface Session {
    token: string;
    id: number;
    pick: ReasoningPick;
+   /* No model of its own: it follows the default (DAWN #137). */
+   follows: boolean;
    streamId: number;
    busy: boolean;
    queue: Array<Record<string, unknown>>;
@@ -537,6 +539,7 @@ export class FakeDawn {
             .join(""),
          id: ++this.sessionCount,
          pick: { ...DEFAULT_PICK },
+         follows: true,
          streamId: 0,
          busy: false,
          queue: [],
@@ -639,14 +642,17 @@ export class FakeDawn {
          );
       else if (ANSWERED.has(type)) {
          const s = c.session;
-         out = answerFrame(type, payload, this.store, s.pick);
+         out = answerFrame(type, payload, this.store, s.pick, s.follows);
          /* A conversation the connection loaded or re-anchored to is where its turns run; a load
             also restores its reasoning on the session (webui_restore.c). */
          const ok = (out[0] as { payload?: { success?: unknown } }).payload?.success === true;
          if (ok && (type === "load_conversation" || type === "set_active_conversation")) {
             c.conversation = Number(payload.conversation_id);
             const saved = this.store.get(c.conversation);
-            if (type === "load_conversation" && saved) s.pick = { ...saved.pick };
+            if (type === "load_conversation" && saved) {
+               s.pick = { ...saved.pick };
+               s.follows = saved.follows ?? true; // webui_restore.c applies its selection too
+            }
          }
       } else if (INTERACTIVE.has(type)) out = this.interact(type, payload, conn, c);
       else if (SILENT.has(type)) out = [];
@@ -718,6 +724,8 @@ export class FakeDawn {
                typeof payload.title === "string" ? payload.title : "",
                s.pick
             );
+            /* Stamped with the session's selection, or none (webui_conv_stamp_llm_settings). */
+            made.follows = s.follows;
             c.conversation = made.id;
             const created = {
                type: "conversation_list_changed",
@@ -1081,26 +1089,40 @@ export class FakeDawn {
          provider: "claude",
          model: MODEL,
          ...reasoningFields(pick),
+         follows_default: s.follows,
          openai_available: false,
          claude_available: true,
          gemini_available: false,
          openrouter_available: false
       });
-      /* Provider names match exactly; one DAWN doesn't know is ignored, and only Claude has a
-         key here. */
-      if (["openai", "gemini", "openrouter"].includes(payload.provider as string))
+      /* DAWN #137: a pick whose provider has no key (only Claude has one here) is refused with
+         the reason and the session's current settings; nothing is stored. */
+      const names: Record<string, string> = {
+         openai: "OpenAI",
+         gemini: "Gemini",
+         openrouter: "OpenRouter"
+      };
+      const keyless = names[payload.provider as string];
+      if (keyless)
          return [
             {
                type: "set_session_llm_response",
                payload: {
                   success: false,
-                  error: "API key not configured for requested provider",
+                  error: `${keyless} is selected, but it has no API key. Add one in Settings, or pick another provider.`,
                   ...config(s.pick),
                   reasoning_adjusted: false
                }
             }
          ];
-      if (payload.type === "reset") s.pick = { ...DEFAULT_PICK };
+      /* A reset has no selection of its own (it follows the default, the reasoning fields in the
+         message over it); a cloud or local type is a selection. */
+      if (payload.type === "reset") {
+         s.pick = { ...DEFAULT_PICK };
+         s.follows = true;
+      } else if (payload.type === "cloud" || payload.type === "local") {
+         s.follows = false; // a type is a selection itself (webui_message_dispatch.c)
+      }
       const setMode =
          typeof payload.thinking_mode === "string" && VALID_MODES.includes(payload.thinking_mode);
       const setEffort =
@@ -1115,8 +1137,12 @@ export class FakeDawn {
       const adjusted =
          (setMode && namedMode && effective.mode !== s.pick.mode) ||
          (setEffort && effective.mode !== "disabled" && effective.effort !== s.pick.effort);
+      /* Saved on the conversation, unless it's a restore (applied to the session only). */
       const saved = this.store.get(c.conversation);
-      if (saved) saved.pick = { ...s.pick };
+      if (saved && payload.from_restore !== true) {
+         saved.pick = { ...s.pick };
+         saved.follows = s.follows;
+      }
       return [
          {
             type: "set_session_llm_response",

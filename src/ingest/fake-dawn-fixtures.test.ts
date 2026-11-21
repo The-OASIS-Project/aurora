@@ -866,6 +866,15 @@ describe("the fake's interactive requests", () => {
       expect(fake.store.get(CONVERSATION_ID)!.messages.length).toBe(before);
    });
 
+   it("follows_default: a type alone is a pick, and a new conversation keeps the session's", () => {
+      const { send } = interactive();
+      expect(send("set_session_llm", { type: "local" })[0].payload.follows_default).toBe(false);
+      const made = send("new_conversation")[1].payload.conversation_id as number;
+      const loaded = send("load_conversation", { conversation_id: made })[0].payload;
+      expect(loaded.llm_settings.follows_default).toBe(false);
+      expect(send("set_session_llm", { type: "reset" })[0].payload.follows_default).toBe(true);
+   });
+
    it("a queued turn runs in the conversation it was sent in, even after the tab moves on", () => {
       vi.useFakeTimers();
       const { fake, send } = interactive();
@@ -998,7 +1007,7 @@ describe("the fake's interactive requests", () => {
       /* A refusal still echoes the config; a provider name DAWN doesn't know is ignored. */
       expect(send("set_session_llm", { provider: "openai" })[0].payload).toMatchObject({
          success: false,
-         error: "API key not configured for requested provider",
+         error: "OpenAI is selected, but it has no API key. Add one in Settings, or pick another provider.",
          thinking_mode: "disabled",
          model: expect.any(String),
          reasoning_adjusted: false

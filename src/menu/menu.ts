@@ -390,13 +390,27 @@ function modelMenu(ctrl: ModelControl): {
                   ["gemini", "Gemini"],
                   ["openrouter", "OpenRouter"]
                ],
-               s.provider,
+               s.noProvider ? "" : s.provider,
                (v) => ctrl.setProvider(v as LlmProvider),
-               { enabled: (v) => s.providers[v as LlmProvider] }
+               /* Only a provider with a key can be picked; the one selected stays shown (as
+                  selected) even without one, and the hint below says so. */
+               {
+                  enabled: (v) => s.providers[v as LlmProvider],
+                  selectedOff: !s.noProvider && !s.providers[s.provider]
+               }
             )
          );
+         if (s.noProvider) rows.push(modelHint("Pick a provider"));
+         else if (!s.providers[s.provider])
+            rows.push(
+               modelHint(
+                  `${PROVIDER_NAMES[s.provider]} has no API key. Add one in DAWN's settings, or pick another provider.`
+               )
+            );
       }
-      rows.push(modelSelect(s.models, s.model, (v) => ctrl.setModel(v)));
+      rows.push(modelSelect(s.models, s.noProvider ? "" : s.model, (v) => ctrl.setModel(v)));
+      /* The conversation has a model of its own: offer to follow DAWN's default again. */
+      if (s.followsDefault === false) rows.push(useDefaultRow(() => ctrl.useDefaultModel()));
       rows.push(...reasoningRows(s, ctrl));
       const divider = document.createElement("div");
       divider.className = "model-divider";
@@ -413,6 +427,27 @@ function modelMenu(ctrl: ModelControl): {
    return { el, refresh: build, onOpen: () => ctrl.refreshModels?.() };
 }
 
+const PROVIDER_NAMES: Record<LlmProvider, string> = {
+   openai: "OpenAI",
+   claude: "Claude",
+   gemini: "Gemini",
+   openrouter: "OpenRouter"
+};
+
+/* "Use default model": the conversation follows the model DAWN is set to again. */
+function useDefaultRow(onClick: () => void): HTMLElement {
+   const row = document.createElement("div");
+   row.className = "model-row model-row-action";
+   const btn = document.createElement("button");
+   btn.type = "button";
+   btn.className = "model-default-btn";
+   btn.textContent = "Use default model";
+   btn.title = "Follow the model DAWN is set to, instead of this conversation's own";
+   btn.addEventListener("click", onClick);
+   row.appendChild(btn);
+   return row;
+}
+
 /* A labelled segmented control: one active option, the rest selectable (or dimmed
    when unavailable / all disabled). */
 function segmented(
@@ -420,7 +455,13 @@ function segmented(
    options: [string, string][],
    current: string,
    onSelect: (value: string) => void,
-   opts: { enabled?: (value: string) => boolean; allDisabled?: boolean } = {}
+   opts: {
+      enabled?: (value: string) => boolean;
+      allDisabled?: boolean;
+      /* The selected option can't be picked again (its provider has no key): shown selected, and
+         marked so. */
+      selectedOff?: boolean;
+   } = {}
 ): HTMLElement {
    const row = document.createElement("div");
    row.className = "model-row";
@@ -436,6 +477,7 @@ function segmented(
       btn.textContent = text;
       const off = opts.allDisabled || (opts.enabled ? !opts.enabled(value) : false);
       if (value === current) btn.classList.add("active");
+      if (value === current && opts.selectedOff) btn.classList.add("nokey");
       if (off) {
          btn.disabled = true;
          btn.classList.add("off");
