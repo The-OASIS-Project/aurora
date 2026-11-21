@@ -383,7 +383,8 @@ function toLibraryPage(p: Record<string, unknown>): MusicLibraryPage | null {
             albums: arr("albums").map((a) => ({
                name: str(a.name),
                artist: str(a.artist),
-               tracks: Number(a.track_count ?? 0) || 0
+               tracks: Number(a.track_count ?? 0) || 0,
+               ...(typeof a.key === "string" && a.key ? { key: a.key } : {})
             })),
             offset: num("offset"),
             total: num("total_count")

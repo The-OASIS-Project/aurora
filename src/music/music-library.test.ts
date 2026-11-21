@@ -80,6 +80,19 @@ describe("music queue", () => {
       expect(t.calls.library.length).toBe(2); // has a page now: no more asks
    });
 
+   it("a double-click plays once, not again from the start", () => {
+      const t = setup();
+      t.view.setQueue({ tracks: [track(1), track(2)], currentIndex: 0 });
+      const main = t.rows()[1].querySelector<HTMLButtonElement>(".music-lib-main")!;
+      main.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      t.rows()[1]
+         .querySelector<HTMLButtonElement>(".music-lib-main")!
+         .dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+      expect(t.calls.control.filter(([a]) => a === "play_index")).toEqual([
+         ["play_index", { index: 1 }]
+      ]);
+   });
+
    it("filters, and clears the queue", () => {
       const t = setup();
       t.view.setQueue({ tracks: [track(1), track(2), track(12)], currentIndex: 0 });
@@ -189,6 +202,82 @@ describe("music library", () => {
       expect(t.calls.control.pop()).toEqual(["add_artist", { artist: "Nightwish" }]);
       t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-main")!.click();
       expect(t.calls.library.pop()).toEqual(["tracks_by_artist", { artist: "Nightwish" }]);
+   });
+
+   it("opens or adds an album by its key, name and artist, so albums sharing a name stay apart", () => {
+      const t = setup();
+      openLibrary(t);
+      t.view.setLibrary({
+         kind: "albums",
+         albums: [
+            { name: "Greatest Hits", artist: "Queen", tracks: 17, key: "41" },
+            { name: "Greatest Hits", artist: "Tom Petty", tracks: 18, key: "77" },
+            { name: "Old", artist: "", tracks: 3 } // an older DAWN: no key
+         ],
+         offset: 0,
+         total: 3
+      });
+      const queen = { album: "Greatest Hits", artist: "Queen", album_key: "41" };
+      t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-act")!.click();
+      expect(t.calls.control.pop()).toEqual(["add_album", queen]);
+      t.rows()[2].querySelector<HTMLButtonElement>(".music-lib-act")!.click();
+      expect(t.calls.control.pop()).toEqual(["add_album", { album: "Old" }]);
+      t.rows()[0].querySelector<HTMLButtonElement>(".music-lib-main")!.click();
+      expect(t.calls.library.pop()).toEqual(["tracks_by_album", queen]);
+      /* Opened: DAWN names only the album; its artist shows under it, and it can be added whole. */
+      t.view.setLibrary({ kind: "album", name: "Greatest Hits", tracks: [track(1)] });
+      const head = t.q(".music-lib-album-head");
+      expect(head.querySelector(".music-lib-album-artist")?.textContent).toBe("Queen");
+      head.querySelector<HTMLButtonElement>(".music-lib-act")!.click();
+      expect(t.calls.control.pop()).toEqual(["add_album", queen]);
+   });
+
+   it("opens an album at its top, and Back returns to the list as loaded, where it was", () => {
+      const t = setup();
+      openLibrary(t);
+      const body = t.q<HTMLElement>(".music-lib-body");
+      const albums = Array.from({ length: 80 }, (_, i) => ({
+         name: `Album ${i}`,
+         artist: "Someone",
+         tracks: 10,
+         key: String(i)
+      }));
+      t.view.setLibrary({ kind: "albums", albums: albums.slice(0, 50), offset: 0, total: 80 });
+      t.view.setLibrary({ kind: "albums", albums: albums.slice(50), offset: 50, total: 80 });
+      body.scrollTop = 1234;
+      t.rows()[70].querySelector<HTMLButtonElement>(".music-lib-main")!.click();
+      t.view.setLibrary({ kind: "album", name: "Album 70", tracks: [track(1)] });
+      expect(body.scrollTop).toBe(0); // the opened album starts at its top
+      const asked = t.calls.library.length;
+      t.q<HTMLButtonElement>(".music-lib-back").click();
+      expect(t.calls.library.length).toBe(asked); // no reload: the list as it was loaded
+      expect(t.rows()).toHaveLength(80);
+      expect(body.scrollTop).toBe(1234);
+   });
+
+   it("keeps the list's place under search results and while the queue tab shows", () => {
+      const t = setup();
+      openLibrary(t);
+      const body = t.q<HTMLElement>(".music-lib-body");
+      t.view.setLibrary({
+         kind: "albums",
+         albums: [{ name: "A", artist: "B", tracks: 1 }],
+         offset: 0,
+         total: 1
+      });
+      body.scrollTop = 300;
+      const input = t.view.el.querySelectorAll<HTMLInputElement>(".music-lib-input")[1]; // search
+      input.value = "x";
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      body.scrollTop = 0; // the list emptied for the search
+      t.view.setSearchResults("x", [track(1)]);
+      body.scrollTop = 0;
+      t.q<HTMLButtonElement>(".music-lib-back").click();
+      expect(body.scrollTop).toBe(300);
+      t.q<HTMLButtonElement>('[data-tab="queue"]').click();
+      body.scrollTop = 0;
+      openLibrary(t);
+      expect(body.scrollTop).toBe(300);
    });
 
    it("searches on Enter and shows the results", () => {
