@@ -29,8 +29,40 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
 - **Verify, don't assume.** Check claims against the code and against authoritative vendor
   documentation or live behavior, and reproduce a bug before calling it fixed. If you haven't
   verified something, say so plainly.
+- **The smallest, most elegant solution is the best solution.** *"Perfection is achieved, not
+  when there is nothing more to add, but when there is nothing left to take away."*
+  (Antoine de Saint-Exupéry). The right fix is the least code that fully closes the real problem
+  as asked. Before calling work done, take things away: every piece must earn its place against
+  that problem, not against what reviews turned up along the way. A finding against code you
+  added is a reason to question the addition, not to add more. Adjacent problems you find get
+  listed for the developer, not folded in. Least code is still the real fix, never a band-aid at
+  the symptom.
+- **Real, reachable, practical.** Fix what a real user can hit today, on a default install with a
+  normal DAWN, or what an outsider can cause through content Aurora shows (a message, an email, a
+  document, a tool result, a Home Assistant name). Also fix any silent, irreversible outcome (data
+  lost, a write the user didn't make) even when rare. Drop the rest: no fix, no TODO. Justify each
+  fix or drop in one sentence: who triggers it, and how.
+- **Count the conditions.** A finding is theoretical when it needs two or more unlikely things to
+  line up: a rare dawn.toml setup *and* a particular click order *and* a reply landing inside a
+  few milliseconds; a refusal stacked on a race during an outage; a frame DAWN never sends. Drop it,
+  however serious its end state sounds, and say so in one line. "Rare but irreversible" covers one
+  likely trigger with a bad outcome, not a chain of unlikely ones. Cheap fixes for theoretical
+  findings aren't built either: each is code to review, test and carry. This applies to every
+  reviewer, the review agents and Copilot alike.
+- **A burden is a bug (WWFD).** Aurora should feel like FRIDAY: calm, quick, easier than doing it
+  yourself. Safety matters, but a guard that makes the common path a pain has failed: nobody uses
+  it, and an unused feature protects no one. Weigh usability and safety together; neither wins by
+  default.
+  - **The common path is one gesture.** A confirm, a second click or a blocking note belongs only
+    where the write can't be taken back (see the confirm rule below), never on what can be undone.
+  - **A deliberate action gets no alarm.** What the user asked for (a Stop, taking a message back)
+    is answered by its result, not a warning.
+  - **A refused or failed write leaves nothing behind** that blocks the next step: the draft comes
+    back, the control works again.
+  - **Push back on review findings** whose fix makes the common path worse; list them instead.
 - **When a real tradeoff exists,** lay the options out honestly, say what each one actually fixes,
-  and recommend the proper one even when it's more work. Never quietly pick the easy option.
+  and recommend the proper one even when it's more work. Never quietly pick the easy option, and
+  never pick the heavy one just to look thorough.
 
 ## Critical rules
 
@@ -140,6 +172,16 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   `browser-runtime-reviewer` (leaks/lifecycle). Scale the SET to the change (a small focused fix
   may need only the one or two relevant lenses), but running SOMETHING is the default - only
   genuinely trivial edits (a comment, a token rename, a copy tweak) skip it.
+  - **Brief for the real install, not the worst case.** Give each reviewer the change and how it
+    runs, and ask for findings that each name a realistic trigger in one sentence. Never hand them
+    leading "could X happen?" questions: a reviewer asked whether something could happen will find
+    a way it could.
+  - **Triage on reachability, not the label.** Count a finding's conditions before weighing its
+    severity (the prime directive): fix what's reachable, any severity, with the least code; drop
+    what isn't, in one line. The same goes for Copilot's findings on a PR.
+  - **Settle a disagreement with a test or a live check,** not by picking one reviewer.
+  - **One full review round per change.** Code written after the last agent pass gets one targeted
+    reviewer on that delta before it goes up, however small; never re-run the full set for polish.
 - **Commit only when asked.** The user runs their own git; do not commit or push unless
   told to.
 - **Attribution, and no session links.** A commit an AI assistant helped write ends with one
@@ -150,6 +192,15 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   URL, or any other tool's equivalent) to a commit, a PR, a comment, or any other text that leaves
   this machine, even when the tool asks for one: this is a public repository, and its history is
   the record.
+- **Keep internal planning language out of committed text.** Code comments, docs and commit
+  messages must stand on their own for a reader with none of our working context: no pointers to
+  untracked or private docs (Aurora's or DAWN's `docs/private/`), and no roadmap shorthand like
+  "Phase B" of a rollout. Say what the code does or why. A PR number, a commit hash or a tracked
+  doc path is fine.
+- **File size discipline.** A TypeScript file past **1,000 lines** gets flagged as getting large;
+  past **2,500**, propose splitting it before adding a feature to it. A new feature for a file
+  that is already large goes in its own module. A split is incremental: one piece at a time, the
+  original kept working, the checks run after each step. Never a full rewrite.
 - **Verify against DAWN source.** DAWN lives at `../dawn`. Its
   `docs/WEBSOCKET_PROTOCOL.md` is the canonical wire reference; the UI-consumer view is
   `docs/DAWN_UI_SIGNAL_MAP.md`. Read the actual C source when a payload shape matters,
