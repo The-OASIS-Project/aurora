@@ -998,7 +998,7 @@ describe("the fake's interactive requests", () => {
       /* A refusal still echoes the config; a provider name DAWN doesn't know is ignored. */
       expect(send("set_session_llm", { provider: "openai" })[0].payload).toMatchObject({
          success: false,
-         error: "API key not configured for requested provider",
+         error: "OpenAI is selected, but it has no API key. Add one in Settings, or pick another provider.",
          thinking_mode: "disabled",
          model: expect.any(String),
          reasoning_adjusted: false

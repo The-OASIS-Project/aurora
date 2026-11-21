@@ -191,3 +191,37 @@
    gap: 0.6rem;
    padding-left: 0.6rem;
 }
+
+/* The selected provider has no API key: still shown as selected, but dashed, so it reads as
+   unusable rather than as an ordinary choice. */
+.model-seg-btn.active.nokey {
+   background: transparent;
+   color: var(--accent);
+   outline: 1px dashed var(--accent);
+   outline-offset: -2px;
+   opacity: 1;
+}
+
+/* "Use default model": a quiet text action at the end of the model rows. */
+.model-row-action {
+   justify-content: flex-end;
+}
+.model-default-btn {
+   font-family: var(--font-mono);
+   font-size: var(--fs-label);
+   letter-spacing: 0.08em;
+   color: var(--text-dim);
+   background: none;
+   border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+   border-radius: 2px;
+   padding: 0.15rem 0.6rem;
+   cursor: pointer;
+}
+.model-default-btn:hover {
+   color: var(--accent);
+   border-color: var(--accent);
+}
+.model-default-btn:focus-visible {
+   outline: 2px solid var(--accent);
+   outline-offset: 2px;
+}

@@ -64,7 +64,8 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
     WebUI does it, confirms included: matching what it can do and guards is the target, and a
     difference in behaviour should be deliberate.
   - **The writes Aurora makes today** (an inventory, not a limit): chat submit;
-    `set_session_llm`; `set_private`; `set_tts_enabled` (a per-connection "mute my socket's voice"
+    `set_session_llm` (one message per pick, `type` with the model; "Use default model" =
+    `{type:"reset"}` with the reasoning, signal-map §9.19); `set_private`; `set_tts_enabled` (a per-connection "mute my socket's voice"
     preference - it also stops DAWN pacing the reply to synthesis speed, so a client-side audio drop
     alone is not enough); `scheduler_action` dismiss / **snooze**; `new_conversation` + the UI's own
     final-answer persistence; music transport (`music_subscribe` / `music_control` + the

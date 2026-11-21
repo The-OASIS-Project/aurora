@@ -1229,6 +1229,40 @@ turn's bubble stays as sent. `turn_waiting` isn't re-sent after
 a reconnect, so a link loss or conversation switch clears the line. Only for the conversation on
 screen.
 
+### 9.19 Picking a conversation's model, and following the default (DAWN #137) - consumed 2026-11-20
+
+DAWN uses a cloud API key only for the provider the user selected; it never picks a provider
+because its key exists. A conversation with no pick of its own follows the dawn.toml default.
+
+- **One message per pick:** `set_session_llm` `{type:"cloud", provider, model}` or `{type:"local",
+  model}`, always `type` with a model (a model alone moves the session only when a dawn.toml cloud
+  list names it exactly). A provider change clears the model, so the new provider's model rides in
+  the same message (`reconcileModel(pick)` in `dawn-ws.ts`). Choosing Cloud means the provider
+  dawn.toml names (`config.llm.cloud.provider`); with none named, the panel says "Pick a provider"
+  and nothing is sent until one is. An older DAWN without that field keeps the last provider. A
+  model rides with the pick only when it's in the picked list (or llama.cpp's loaded one): with no
+  list the pick goes alone and DAWN names the model, so one vendor's model never reaches another.
+  Clicking the mode or provider already picked sends nothing (it would pin the conversation).
+  dawn.toml's `anthropic` reads as Claude. On an older DAWN (no `follows_default`) nothing guesses
+  it: the "Use default model" control and the llama.cpp guard stay off.
+- **`follows_default`** (on `set_session_llm_response`, `llm_runtime`, a loaded conversation's
+  `llm_settings`, `llm_state_update`): true = no pick of its own, the values shown are the
+  default's. DAWN's restore applies a conversation's selection (or none) to the session itself, so
+  Aurora sends nothing on load; the llama.cpp loaded-model sync is skipped while it is true (it
+  would give the session a pick of its own: the "pinned until reopened" bug). New Chat sends
+  `{type:"reset"}`. **Use default model** (MODEL panel, only while `follows_default` is false)
+  sends `{type:"reset"}` with the conversation's reasoning picks, never `from_restore`, which saves
+  the conversation as following the default again.
+- **Refusals:** a pick that can't run (no API key, an unknown provider) is `success:false` with
+  `error` (DAWN's own sentence, shown as the notice) and the session's current settings, which the
+  panel resyncs from (key availability included).
+- **Provider list:** `*_available` only decide which providers can be picked (dimmed otherwise),
+  never which one is chosen. The selected provider stays shown as selected without a key, marked
+  (dashed) with "<Provider> has no API key. Add one in DAWN's settings, or pick another provider."
+  `provider` "none" on a cloud session = none selected.
+- A local conversation with no model of its own reports model `""` in `llm_settings` (Aurora then
+  re-reads the session's runtime). `set_llm_runtime` is gone (Aurora never sent it).
+
 *Last mapped against source: 2026-07-28. Backend-TODO added 2026-07-30; music items
 (#5, #6) added 2026-07-30 while wiring the dedicated audio socket. §9.1–9.3 added
 2026-07-30 recording items #1/#2/#5 shipped + the reasoning-control behaviour and

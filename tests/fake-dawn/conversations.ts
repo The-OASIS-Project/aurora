@@ -28,6 +28,8 @@ export interface FakeConversation {
    updated_at: number;
    messages: FakeMessage[];
    pick: ReasoningPick;
+   /* No model of its own: it follows the dawn.toml default (DAWN #137). Absent = true. */
+   follows?: boolean;
 }
 
 const now = (): number => Math.floor(Date.now() / 1000);

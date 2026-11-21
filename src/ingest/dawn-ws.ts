@@ -198,6 +198,12 @@ const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
    conversation's llm_settings ("openrouter"), so callers lower-case first. An
    unknown value is rejected rather than coerced, so the panel never mislabels
    one provider as another. */
+/* A provider name as DAWN may write it ("Claude", dawn.toml's "anthropic"), lowercased. */
+function providerKey(name: string): string {
+   const key = name.toLowerCase();
+   return key === "anthropic" ? "claude" : key;
+}
+
 function isLlmProvider(v: string): v is LlmProvider {
    return v === "openai" || v === "claude" || v === "gemini" || v === "openrouter";
 }
@@ -1240,8 +1246,17 @@ export class DawnIngest implements Ingest {
       providers: { openai: false, claude: false, gemini: false, openrouter: false } as Record<
          LlmProvider,
          boolean
-      >
+      >,
+      /* No cloud provider selected (DAWN's "none" for a cloud session): the panel asks for one,
+         and nothing is sent until the user picks it. */
+      noProvider: false,
+      /* The conversation has no model of its own and follows the dawn.toml default (DAWN #137);
+         null: an older DAWN that doesn't say. */
+      followsDefault: null as boolean | null
    };
+   /* The cloud provider dawn.toml names: what choosing Cloud means, never one guessed from which
+      keys exist ("" when it names none). */
+   private defaultCloudProvider: LlmProvider | "" | null = null; // null: not known (keep the last)
    /* DAWN's per-model reasoning capabilities (P1.1b). cloudCaps is null until a server sends
       them (an older server never does: the panel then falls back to the name heuristic).
       frameCaps is the caps a per-conversation frame carried for ITS model, which covers a
@@ -1266,7 +1281,14 @@ export class DawnIngest implements Ingest {
    };
    /* Which openrouter_models entry to default to when switching onto OpenRouter
       (DAWN's curated default; parity with the old WebUI which snaps to it). */
-   private openrouterDefaultIdx = 0;
+   /* Each cloud provider's default model, as an index into its list (dawn.toml
+      <provider>_default_model_idx): what a switch to that provider picks. */
+   private defaultModelIdx: Record<LlmProvider, number> = {
+      openai: 0,
+      claude: 0,
+      gemini: 0,
+      openrouter: 0
+   };
    /* Set while a MODEL-panel-open refresh get_config is in flight: the response updates the
       model lists + provider availability, but must NOT re-apply the session's llm_runtime
       selection (mode/provider/model/reasoning) - that would revert a loaded conversation's
@@ -2659,16 +2681,23 @@ export class DawnIngest implements Ingest {
             }
             const c = cfg.llm?.cloud;
             if (c) {
+               const raw = (c as { provider?: unknown }).provider;
+               const dp = typeof raw === "string" ? providerKey(raw) : null;
+               this.defaultCloudProvider = dp === null ? null : isLlmProvider(dp) ? dp : "";
                this.cloudModels.openai = c.openai_models ?? [];
                this.cloudModels.claude = c.claude_models ?? [];
                this.cloudModels.gemini = c.gemini_models ?? [];
                /* OpenRouter's curated model list (operator-managed in dawn.toml).
                   Absent -> [], and modelSelect still shows the live model string. */
                this.cloudModels.openrouter = c.openrouter_models ?? [];
-               this.openrouterDefaultIdx =
-                  typeof c.openrouter_default_model_idx === "number"
-                     ? c.openrouter_default_model_idx
-                     : 0;
+               const idx = (v: unknown): number => (typeof v === "number" ? v : 0);
+               const ci = c as Record<string, unknown>;
+               this.defaultModelIdx = {
+                  openai: idx(ci.openai_default_model_idx),
+                  claude: idx(ci.claude_default_model_idx),
+                  gemini: idx(ci.gemini_default_model_idx),
+                  openrouter: idx(ci.openrouter_default_model_idx)
+               };
             }
             /* Per-model reasoning capabilities, keyed exactly like the model lists above. */
             const rc = p.reasoning_capabilities;
@@ -2722,9 +2751,9 @@ export class DawnIngest implements Ingest {
             if (appliesSelection) {
                if (rt.type) this.llm.mode = rt.type === "local" ? "local" : "cloud";
                this.localPickPending = false; // DAWN's own state now stands
-               const prov = (rt.provider ?? "").toLowerCase();
-               if (isLlmProvider(prov)) this.llm.provider = prov;
+               this.applyProvider(rt.provider);
                if (rt.model) this.llm.model = rt.model;
+               this.applyFollows((rt as { follows_default?: unknown }).follows_default);
                /* Reasoning/effort: the session's EFFECTIVE runtime values (+ the stored pick and
                   this model's caps); fall back to the global config default only for older
                   servers that omit them from llm_runtime. */
@@ -2733,18 +2762,7 @@ export class DawnIngest implements Ingest {
                   effort: rt.reasoning_effort ?? cfg.llm?.thinking?.reasoning_effort
                });
             }
-            if (rt.openai_available !== undefined) {
-               this.llm.providers = {
-                  openai: rt.openai_available === true,
-                  claude: rt.claude_available === true,
-                  gemini: rt.gemini_available === true,
-                  /* llm_runtime does not carry an openrouter_available flag yet;
-                     read it if a newer server adds one, else light OpenRouter when
-                     it is the resolved provider (it is plainly configured then), so
-                     the panel never shows the active provider greyed. */
-                  openrouter: rt.openrouter_available === true || this.llm.provider === "openrouter"
-               };
-            }
+            this.applyAvailability(rt);
             /* The local model list may have come first on this connection: now that the mode is
                known, follow llama.cpp's loaded model (a no-op otherwise). */
             if (appliesSelection) this.syncLoadedLocalModel();
@@ -2776,7 +2794,7 @@ export class DawnIngest implements Ingest {
             if (this.localPickPending && this.llm.mode === "local") {
                /* The user switched to local mode before this list arrived: complete their switch. */
                this.localPickPending = false;
-               this.reconcileModel();
+               this.reconcileModel({ type: "local" }, true);
             } else {
                this.localPickPending = false;
                this.syncLoadedLocalModel();
@@ -2805,10 +2823,8 @@ export class DawnIngest implements Ingest {
                   if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
                   /* Moved off local meanwhile (a "reset" from New): no local pick left to complete. */
                   if (this.llm.mode !== "local") this.localPickPending = false;
-                  if (typeof p.provider === "string") {
-                     const prov = p.provider.toLowerCase();
-                     if (isLlmProvider(prov)) this.llm.provider = prov;
-                  }
+                  this.applyProvider(p.provider);
+                  this.applyFollows(p.follows_default);
                   /* A local session with no named model ("server decides", e.g. after New's reset
                      to a local default) echoes model "". Show "local", as get_config's llm_runtime
                      names it, rather than keeping the previous (cloud) model's name. */
@@ -2817,15 +2833,7 @@ export class DawnIngest implements Ingest {
                }
                /* Availability only when the echo actually carries it (both builders
                   do as of Phase 1); absent -> leave the current record untouched. */
-               if (p.openai_available !== undefined) {
-                  this.llm.providers = {
-                     openai: p.openai_available === true,
-                     claude: p.claude_available === true,
-                     gemini: p.gemini_available === true,
-                     openrouter:
-                        p.openrouter_available === true || this.llm.provider === "openrouter"
-                  };
-               }
+               this.applyAvailability(p);
                /* An older reply's reasoning belongs to the model it was for, not the newer one. */
                if (latestReply) {
                   this.applyReasoningFields(p);
@@ -2848,13 +2856,12 @@ export class DawnIngest implements Ingest {
                if (latestReply) {
                   this.localPickPending = false;
                   if (p.type === "local" || p.type === "cloud") this.llm.mode = p.type;
-                  if (typeof p.provider === "string") {
-                     const prov = p.provider.toLowerCase();
-                     if (isLlmProvider(prov)) this.llm.provider = prov;
-                  }
+                  this.applyProvider(p.provider);
                   if (typeof p.model === "string" && p.model) this.llm.model = p.model;
+                  this.applyFollows(p.follows_default);
                   this.applyReasoningFields(p); // its reasoning too, as DAWN resolved it
                }
+               this.applyAvailability(p); // which providers have a key, as DAWN says now
                this.notifyLlm();
                this.spikeNotice("llm-switch-error", "attention", err || "Could not switch model", {
                   tone: "attention",
@@ -6406,6 +6413,39 @@ export class DawnIngest implements Ingest {
       this.askListsOnly = false;
    }
 
+   /* A frame's provider, after its type: a known one is selected; DAWN's "none" (or "") on a
+      cloud session means none is. An unknown name changes nothing. */
+   private applyProvider(raw: unknown): void {
+      if (typeof raw !== "string") return;
+      const prov = providerKey(raw);
+      if (isLlmProvider(prov)) {
+         this.llm.provider = prov;
+         this.llm.noProvider = false;
+      } else if (prov === "none" || prov === "") {
+         this.llm.noProvider = this.llm.mode === "cloud";
+      }
+   }
+
+   /* A frame's follows_default (DAWN #137), when it carries one. */
+   private applyFollows(raw: unknown): void {
+      if (typeof raw === "boolean") this.llm.followsDefault = raw;
+   }
+
+   /* Which providers have a key: for showing which can be picked, never for choosing one. An
+      older DAWN without openrouter_available counts OpenRouter as keyed when it runs. */
+   private applyAvailability(p: Record<string, unknown>): void {
+      if (p.openai_available === undefined) return;
+      this.llm.providers = {
+         openai: p.openai_available === true,
+         claude: p.claude_available === true,
+         gemini: p.gemini_available === true,
+         openrouter:
+            p.openrouter_available === undefined
+               ? this.llm.provider === "openrouter"
+               : p.openrouter_available === true
+      };
+   }
+
    /* Apply an llm_state_update (mode/provider/model + provider availability). */
    private applyLlmState(json: string): void {
       let msg: { payload?: Record<string, unknown> };
@@ -6419,17 +6459,10 @@ export class DawnIngest implements Ingest {
       this.llm.mode = pl.type === "local" ? "local" : "cloud";
       this.localPickPending = false; // a tool switched the model: nothing of the user's to complete
       this.llmRev++; // older config snapshots no longer describe the selection
-      if (typeof pl.provider === "string") {
-         const prov = pl.provider.toLowerCase();
-         if (isLlmProvider(prov)) this.llm.provider = prov;
-      }
+      this.applyProvider(pl.provider);
       if (typeof pl.model === "string" && pl.model) this.llm.model = pl.model;
-      this.llm.providers = {
-         openai: pl.openai_available === true,
-         claude: pl.claude_available === true,
-         gemini: pl.gemini_available === true,
-         openrouter: pl.openrouter_available === true || this.llm.provider === "openrouter"
-      };
+      this.applyFollows(pl.follows_default);
+      this.applyAvailability(pl);
       /* A switch_llm tool call changed the session model, and reasoning now depends on the model
          (P1.1b), but this frame carries no reasoning fields or caps. Re-read the session's
          runtime (a full get_config, not a lists-only refresh) for the effective values. */
@@ -6437,8 +6470,12 @@ export class DawnIngest implements Ingest {
       this.notifyLlm();
    }
 
-   /* Send a session-only LLM change, then reflect it optimistically. */
+   /* Send a session-only LLM change, then reflect it optimistically. A pick of a type, provider
+      or model gives the conversation a selection of its own (the echo confirms it). */
    private applyLlm(fields: Record<string, string>): void {
+      /* Only once DAWN has said (an older one never does). */
+      if ((fields.type === "local" || fields.type === "cloud") && this.llm.followsDefault !== null)
+         this.llm.followsDefault = false;
       this.send({ type: "set_session_llm", payload: fields });
       this.notifyLlm();
    }
@@ -6465,13 +6502,10 @@ export class DawnIngest implements Ingest {
          reasoning_effort?: string;
       };
       if (s.llm_type) this.llm.mode = s.llm_type === "local" ? "local" : "cloud";
-      const prov = (s.cloud_provider ?? "").toLowerCase();
-      if (isLlmProvider(prov)) {
-         this.llm.provider = prov;
-         /* The conversation demonstrably ran on this provider, so light its panel
-            segment (never grey the active provider). */
-         this.llm.providers = { ...this.llm.providers, [prov]: true };
-      }
+      /* Its provider as DAWN reports it; one without a key shows as that (the panel says so),
+         never lit as if it had one. */
+      this.applyProvider(s.cloud_provider);
+      this.applyFollows((settings as { follows_default?: unknown }).follows_default);
       /* An empty model (DAWN PR #113) means that type's or provider's own default, which DAWN
          restored the session to: read the model that actually runs (a read, not a write). */
       if (s.model) this.llm.model = s.model;
@@ -6580,38 +6614,44 @@ export class DawnIngest implements Ingest {
 
    /* After the user picks a mode or provider: if the current model isn't in that list, switch to
       its default, as the user's own choice. Local mode prefers the model llama.cpp has loaded
-      (localLoadedModel), else the first; OpenRouter uses the operator's configured default index (parity with DAWN's
-      WebUI); every other provider, the first. Local mode with no list yet waits for it
+      (localLoadedModel), else the first; a cloud provider uses its dawn.toml default index
+      (<provider>_default_model_idx, parity with DAWN's WebUI), else the first. Local mode with no list yet waits for it
       (localPickPending), and the list's arrival completes the switch. */
-   private reconcileModel(): void {
+   /* `pick`: the pick's type (and provider), sent with the model in ONE message (DAWN #137: a
+      provider change clears the model, and the server checks the whole pick). */
+   /* `fromList`: completing a switch to local as its model list arrives (the pick itself was
+      already sent). */
+   private reconcileModel(pick: Record<string, string>, fromList = false): void {
       if (this.llm.mode !== "local") this.localPickPending = false; // switched away meanwhile
       const models = this.modelsFor(this.llm.mode, this.llm.provider);
       if (this.llm.mode === "local" && models.length === 0 && !this.localLoadedModel) {
+         /* Local with no list yet: the server's local LLM now; its model when a list comes. */
          this.localPickPending = true;
-         this.notifyLlm();
+         if (fromList) this.notifyLlm();
+         else this.applyLlm(pick);
          return;
       }
       const preferred =
          this.llm.mode === "local" && this.localLoadedModel ? this.localLoadedModel : "";
       if (!models.includes(this.llm.model) && (models.length > 0 || preferred)) {
-         const idx =
-            this.llm.mode === "cloud" && // the OpenRouter default indexes only its own list
-            this.llm.provider === "openrouter" &&
-            this.openrouterDefaultIdx >= 0 &&
-            this.openrouterDefaultIdx < models.length
-               ? this.openrouterDefaultIdx
-               : 0;
+         /* The provider's configured default (each indexes only its own list), else the first. */
+         const want = this.llm.mode === "cloud" ? this.defaultModelIdx[this.llm.provider] : 0;
+         const idx = want >= 0 && want < models.length ? want : 0;
          this.llm.model = preferred || models[idx];
          /* Keep reasoning valid for the new model so the panel's segmented controls always have
             an active value (the server resolves + echoes too, but this avoids a transient
             no-selection state until the echo lands). */
          this.fitReasoningToModel();
-         this.send({
-            type: "set_session_llm",
-            payload: { type: this.llm.mode, model: this.llm.model }
-         }); // type too (see setProvider)
       }
-      this.notifyLlm();
+      /* A model goes with the pick only when it belongs to the picked list (or is what llama.cpp
+         has loaded): with no list, the pick goes alone and DAWN names the model, so one vendor's
+         model never goes to another. */
+      if (this.llm.model && (models.includes(this.llm.model) || this.llm.model === preferred)) {
+         this.applyLlm({ ...pick, model: this.llm.model });
+      } else {
+         this.llm.model = ""; // DAWN's reply names it
+         this.applyLlm(pick);
+      }
    }
 
    /* The local model list arrived with no switch of the user's waiting on it: in local mode with
@@ -6630,7 +6670,12 @@ export class DawnIngest implements Ingest {
       }
       this.loadedSyncDeferred = false;
       const loaded = this.localLoadedModel;
-      if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
+      /* A conversation following the default isn't pinned to what's loaded (DAWN #137): sending
+         the model would give the session a selection of its own. */
+      if (this.llm.mode === "local" && loaded && this.llm.followsDefault === true) {
+         this.llm.model = loaded; // shown, not sent: it's what the default runs here
+         this.fitReasoningToModel();
+      } else if (this.llm.mode === "local" && loaded && loaded !== this.llm.model) {
          this.llm.model = loaded;
          this.fitReasoningToModel();
          /* type with the model: without it, a local name that starts like a cloud one (Ollama's
@@ -6674,7 +6719,12 @@ export class DawnIngest implements Ingest {
             reasoning: this.llm.reasoning,
             effort: this.llm.effort,
             providers: this.llm.providers,
-            models: this.modelsFor(this.llm.mode, this.llm.provider),
+            noProvider: this.llm.mode === "cloud" && this.llm.noProvider,
+            followsDefault: this.llm.followsDefault,
+            models:
+               this.llm.mode === "cloud" && this.llm.noProvider
+                  ? []
+                  : this.modelsFor(this.llm.mode, this.llm.provider),
             effortOptions: effortOptionsForModel(this.llm.model),
             reasoningCaps: this.currentCaps(),
             reasoningNote: this.reasoningNoteText(),
@@ -6682,22 +6732,61 @@ export class DawnIngest implements Ingest {
          }),
          onChange: (cb) => this.llmListeners.push(cb),
          setMode: (mode) => {
+            /* The active one clicked again picks nothing (it would pin the conversation). */
+            if (mode === this.llm.mode) return;
             this.llm.mode = mode;
-            this.applyLlm({ type: mode });
-            this.reconcileModel();
+            if (mode === "local") {
+               this.llm.noProvider = false;
+               this.reconcileModel({ type: "local" });
+               return;
+            }
+            /* Cloud means the provider dawn.toml names, never one guessed from which keys exist;
+               with none named, the panel asks for one and nothing is sent until it's picked. */
+            if (this.defaultCloudProvider === "") {
+               this.llm.noProvider = true;
+               this.notifyLlm();
+               return;
+            }
+            if (this.defaultCloudProvider) this.llm.provider = this.defaultCloudProvider;
+            this.llm.noProvider = false;
+            this.reconcileModel({ type: "cloud", provider: this.llm.provider });
          },
          setProvider: (provider) => {
+            if (provider === this.llm.provider && !this.llm.noProvider) return; // already picked
             this.llm.provider = provider;
-            /* Send `type` (cloud|local) alongside provider: the daemon tracks type/provider/model
-               as INDEPENDENT fields and `type` WINS at dispatch, so omitting it leaves the session
-               on its prior type - a cloud pick would silently keep routing to the local endpoint. */
-            this.applyLlm({ type: this.llm.mode, provider });
-            this.reconcileModel();
+            this.llm.noProvider = false;
+            /* The whole pick in one message: type (it wins at dispatch), the provider, and that
+               provider's model (a provider change clears the model). */
+            this.reconcileModel({ type: "cloud", provider });
          },
          setModel: (model) => {
+            if (this.llm.mode === "cloud" && this.llm.noProvider) return; // pick a provider first
             this.llm.model = model;
             this.fitReasoningToModel();
-            this.applyLlm({ type: this.llm.mode, model }); // send type too (see setProvider)
+            /* type with the model always: a model alone can move the session (DAWN #137). */
+            this.applyLlm(
+               this.llm.mode === "cloud"
+                  ? { type: "cloud", provider: this.llm.provider, model }
+                  : { type: "local", model }
+            );
+         },
+         useDefaultModel: () => {
+            /* Save the conversation as following the dawn.toml default again, keeping its
+               reasoning (DAWN #137: a reset with the reasoning fields, never from_restore). The
+               echo carries the model it now runs. */
+            if (this.llm.followsDefault !== null) this.llm.followsDefault = true;
+            /* It replaces a switch to local still waiting for the model list: the list mustn't
+               complete that one now. */
+            this.localPickPending = false;
+            this.send({
+               type: "set_session_llm",
+               payload: {
+                  type: "reset",
+                  thinking_mode: this.reasoningPick.mode || this.llm.reasoning,
+                  reasoning_effort: this.reasoningPick.effort || this.llm.effort
+               }
+            });
+            this.notifyLlm();
          },
          setReasoning: (reasoning) => {
             /* Optimistic; the set_session_llm_response echo confirms or adjusts it. */
@@ -7193,9 +7282,12 @@ export class DawnIngest implements Ingest {
       }
       if (type === "set_session_llm") {
          /* The user's own choice, not New Chat's reset or the llama.cpp follow (see the notice in
-            settleModelRefusal). */
+            settleModelRefusal). "Use default model" is a reset the user chose: it carries the
+            reasoning, which New Chat's never does. */
          const fields = (msg as { payload?: Record<string, unknown> }).payload ?? {};
-         const chosen = fields.type !== "reset" && fields.from_restore !== true;
+         const chosen =
+            (fields.type !== "reset" || fields.thinking_mode !== undefined) &&
+            fields.from_restore !== true;
          this.llmWritesOwed.push({ rev: this.llmRev, req, chosen }); // see llmWritesOwed
          if (chosen && this.loadRetry) {
             const { req: _req, ...choice } = fields;

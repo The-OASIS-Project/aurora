@@ -99,8 +99,8 @@ describe("switching to local mode", () => {
       const c = client("cloud", "claude-sonnet-5-5");
       c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "claude-sonnet-5-5"));
       c.ing.getModelControl().setMode("local");
+      /* One message: the pick and its model (DAWN #137). */
       expect(c.llmWrites()).toEqual([
-         { type: "set_session_llm", payload: { type: "local" } },
          { type: "set_session_llm", payload: { type: "local", model: "llama3" } }
       ]);
    });
@@ -200,7 +200,7 @@ describe("switching to local mode", () => {
    it("from OpenRouter, the local pick is the first local model, not OpenRouter's default index", () => {
       const c = client("cloud", "openai/gpt-5.5");
       c.ing.llm.provider = "openrouter";
-      c.ing.openrouterDefaultIdx = 1;
+      c.ing.defaultModelIdx.openrouter = 1;
       c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "openai/gpt-5.5"));
       c.ing.getModelControl().setMode("local");
       expect(c.llmWrites().at(-1)).toEqual({
@@ -926,5 +926,284 @@ describe("a reconnect while an opened conversation hasn't loaded", () => {
       c.sent.length = 0;
       c.frame("session", { authenticated: true, reconnected: true });
       expect(c.sent.map((m) => m.type)).not.toContain("load_conversation");
+   });
+});
+
+/* DAWN #137: a key is used only for the provider the user picked; a conversation with no pick of
+   its own follows the dawn.toml default (follows_default). */
+describe("following the default model", () => {
+   const runtime = (rt: object) => ({ success: true, config: {}, llm_runtime: rt });
+   /* DAWN sends llm_state_update inside a transcript with role __llm_state__ (webui_server.c). */
+   const llmState = (c: ReturnType<typeof client>, payload: object): void =>
+      c.frame("transcript", {
+         role: "__llm_state__",
+         text: JSON.stringify({ type: "llm_state_update", payload })
+      });
+
+   it("reads follows_default from every frame that carries it", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      const state = () => c.ing.getModelControl().getState();
+      expect(state().followsDefault).toBeNull(); // an older DAWN says nothing
+      c.frame(
+         "get_config_response",
+         runtime({ type: "cloud", provider: "Claude", follows_default: true })
+      );
+      expect(state().followsDefault).toBe(true);
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [],
+         llm_settings: {
+            follows_default: false,
+            llm_type: "cloud",
+            cloud_provider: "claude",
+            model: "m"
+         }
+      });
+      expect(state().followsDefault).toBe(false);
+      c.frame("set_session_llm_response", {
+         success: true,
+         type: "cloud",
+         provider: "Claude",
+         follows_default: true
+      });
+      expect(state().followsDefault).toBe(true);
+      llmState(c, {
+         type: "cloud",
+         provider: "claude",
+         model: "m",
+         follows_default: false
+      });
+      expect(state().followsDefault).toBe(false);
+   });
+
+   it("a conversation following the default isn't pinned to llama.cpp's loaded model", () => {
+      const c = client("local", "");
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [],
+         llm_settings: {
+            follows_default: true,
+            llm_type: "local",
+            cloud_provider: "none",
+            model: ""
+         }
+      });
+      /* The empty model re-reads the session's runtime; the default it follows runs. */
+      c.frame("get_config_response", {
+         success: true,
+         config: {},
+         llm_runtime: { type: "local", provider: "none", model: "", follows_default: true }
+      });
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("a provider pick is one message, with that provider's model", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.cloudModels.openai = ["gpt-6", "gpt-6-mini"];
+      c.ing.llm.followsDefault = true; // DAWN said so
+      c.ing.getModelControl().setProvider("openai");
+      expect(c.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { type: "cloud", provider: "openai", model: "gpt-6" } }
+      ]);
+      expect(c.ing.getModelControl().getState().followsDefault).toBe(false);
+   });
+
+   it("a model pick names its type and provider", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "cloud", provider: "claude", model: "claude-opus-5-5" }
+         }
+      ]);
+   });
+
+   it("Use default model saves a reset keeping the reasoning, never as a restore", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.llm.followsDefault = false;
+      c.ing.reasoningPick = { mode: "adaptive", effort: "high" };
+      c.ing.getModelControl().useDefaultModel();
+      expect(c.llmWrites()).toEqual([
+         {
+            type: "set_session_llm",
+            payload: { type: "reset", thinking_mode: "adaptive", reasoning_effort: "high" }
+         }
+      ]);
+      expect(c.ing.getModelControl().getState().followsDefault).toBe(true);
+   });
+
+   it("a provider with no model list gets the pick alone, never the previous vendor's model", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.cloudModels.gemini = [];
+      c.ing.getModelControl().setProvider("gemini");
+      expect(c.llmWrites()).toEqual([
+         { type: "set_session_llm", payload: { type: "cloud", provider: "gemini" } }
+      ]);
+      expect(c.ing.llm.model).toBe("");
+   });
+
+   it("an older DAWN that never says follows_default isn't given one", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setModel("claude-opus-5-5");
+      c.ing.getModelControl().useDefaultModel();
+      expect(c.ing.getModelControl().getState().followsDefault).toBeNull();
+   });
+
+   it("clicking the mode or provider already picked sends nothing", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("cloud");
+      c.ing.getModelControl().setProvider("claude");
+      expect(c.llmWrites()).toEqual([]);
+   });
+
+   it("an empty local list while a switch to local waits doesn't send it again", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local");
+      c.frame("list_llm_models_response", list("Ollama", [], ""));
+      c.frame("list_llm_models_response", list("Ollama", [], ""));
+      expect(c.llmWrites()).toEqual([{ type: "set_session_llm", payload: { type: "local" } }]);
+   });
+
+   it("following the default on llama.cpp shows the loaded model without sending it", () => {
+      const c = client("local", "local");
+      c.ing.llm.followsDefault = true;
+      c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
+      expect(c.llmWrites()).toEqual([]);
+      expect(c.ing.llm.model).toBe("loaded.gguf");
+   });
+
+   it("dawn.toml's anthropic is Claude", () => {
+      const c = client("local", "llama3");
+      c.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "anthropic", claude_models: ["c1"] } } },
+         llm_runtime: { type: "local" }
+      });
+      c.ing.getModelControl().setMode("cloud");
+      expect(c.llmWrites().at(-1)?.payload).toEqual({
+         type: "cloud",
+         provider: "claude",
+         model: "c1"
+      });
+   });
+
+   it("back to Cloud lands on the default provider's configured default model, not its first", () => {
+      const c = client("local", "llama3");
+      c.frame("get_config_response", {
+         success: true,
+         config: {
+            llm: {
+               cloud: {
+                  provider: "claude",
+                  claude_models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+                  claude_default_model_idx: 1
+               }
+            }
+         },
+         llm_runtime: { type: "local" }
+      });
+      c.ing.getModelControl().setMode("cloud");
+      expect(c.llmWrites().at(-1)?.payload).toEqual({
+         type: "cloud",
+         provider: "claude",
+         model: "claude-sonnet-5-5"
+      });
+   });
+
+   it("Use default model replaces a switch to local still waiting for the list", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      c.ing.getModelControl().setMode("local"); // no local list yet
+      c.ing.getModelControl().useDefaultModel();
+      const sent = c.llmWrites().length;
+      c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
+      expect(c.llmWrites()).toHaveLength(sent);
+   });
+
+   it("Cloud means the provider dawn.toml names; with none named, nothing is sent until one is picked", () => {
+      const named = client("local", "llama3");
+      named.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "gemini", gemini_models: ["g1"] } } },
+         llm_runtime: { type: "local" }
+      });
+      named.ing.getModelControl().setMode("cloud");
+      expect(named.llmWrites().at(-1)).toEqual({
+         type: "set_session_llm",
+         payload: { type: "cloud", provider: "gemini", model: "g1" }
+      });
+
+      const none = client("local", "llama3");
+      none.frame("get_config_response", {
+         success: true,
+         config: { llm: { cloud: { provider: "" } } },
+         llm_runtime: { type: "local" }
+      });
+      const before = none.llmWrites().length;
+      none.ing.getModelControl().setMode("cloud");
+      none.ing.getModelControl().setModel("anything");
+      expect(none.llmWrites()).toHaveLength(before);
+      const s = none.ing.getModelControl().getState();
+      expect(s.noProvider).toBe(true);
+      expect(s.models).toEqual([]);
+   });
+
+   it("the selected provider stays shown without a key, never lit as if it had one", () => {
+      const c = client("cloud", "g1");
+      c.frame("load_conversation_response", {
+         success: true,
+         conversation_id: 7,
+         messages: [],
+         llm_settings: {
+            follows_default: false,
+            llm_type: "cloud",
+            cloud_provider: "gemini",
+            model: "g1"
+         }
+      });
+      llmState(c, {
+         type: "cloud",
+         provider: "gemini",
+         model: "g1",
+         openai_available: true,
+         claude_available: true,
+         gemini_available: false,
+         openrouter_available: false
+      });
+      const s = c.ing.getModelControl().getState();
+      expect(s.provider).toBe("gemini");
+      expect(s.providers.gemini).toBe(false);
+   });
+
+   it("a refused pick shows DAWN's reason and resyncs the picker from the reply", () => {
+      const c = client("cloud", "claude-sonnet-5-5");
+      const notices: string[] = [];
+      c.ing.spikeNotice = (_id: string, _k: string, text: string) => notices.push(text);
+      c.ing.getModelControl().setProvider("gemini");
+      c.frame("set_session_llm_response", {
+         success: false,
+         error: "Gemini is selected, but it has no API key. Add one in Settings, or pick another provider.",
+         type: "cloud",
+         provider: "Claude",
+         model: "claude-sonnet-5-5",
+         follows_default: true,
+         openai_available: false,
+         claude_available: true,
+         gemini_available: false,
+         openrouter_available: false
+      });
+      const s = c.ing.getModelControl().getState();
+      expect(notices).toContain(
+         "Gemini is selected, but it has no API key. Add one in Settings, or pick another provider."
+      );
+      expect([s.provider, s.model, s.followsDefault]).toEqual([
+         "claude",
+         "claude-sonnet-5-5",
+         true
+      ]);
+      expect(s.providers.gemini).toBe(false);
    });
 });
