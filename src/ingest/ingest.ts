@@ -267,7 +267,9 @@ export type MusicLibraryPage =
      }
    | {
         kind: "albums";
-        albums: Array<{ name: string; artist: string; tracks: number }>;
+        /* `key`: DAWN's id for the album (DAWN #138; absent on an older DAWN), sent back with the
+           name and artist to open or add it, so albums sharing a name stay apart. */
+        albums: Array<{ name: string; artist: string; tracks: number; key?: string }>;
         offset: number;
         total: number;
      }

@@ -196,6 +196,31 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    let refreshTimer = 0;
    /* Library: the last browse page (stats until something is opened), or search results. */
    let browse: MusicLibraryPage | null = null;
+   /* The album opened from the list: DAWN's reply names only the album, so its artist (and the
+      key, to add it whole) come from the row clicked. */
+   let openedAlbum: { name: string; artist: string; key?: string } | null = null;
+   /* Where the user was, to come back to: the list an artist or album was opened from (as it was
+      loaded, so Back needs no reload), the browse position under search results, and the
+      library's scroll while the queue tab shows. */
+   let openedFrom: { page: MusicLibraryPage; scroll: number } | null = null;
+   let browseScroll = 0;
+   let searching = false; // a search is shown or on its way: the list's place is already saved
+   let libraryScroll = 0;
+   const drill = (): void => {
+      if (browse) openedFrom = { page: browse, scroll: body.scrollTop };
+   };
+   /* An album as DAWN takes it to open or add it (DAWN #138): its key with the name and artist as
+      the browse gave them, so a key gone stale after a rescan still finds it, and two albums
+      sharing a name stay apart. An older DAWN without keys gets the name and artist. */
+   const albumRef = (a: {
+      name: string;
+      artist: string;
+      key?: string;
+   }): Record<string, string> => ({
+      album: a.name,
+      ...(a.artist ? { artist: a.artist } : {}),
+      ...(a.key ? { album_key: a.key } : {})
+   });
    let searchResults: { query: string; tracks: MusicTrack[] } | null = null;
    let pagePending = false; // a "More" page is on its way (More is disabled meanwhile)
    let lastAsk: "browse" | "search" = "browse"; // a late browse reply mustn't replace newer search results
@@ -248,7 +273,11 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
          [t.artist, t.album].filter(Boolean).join(" · "),
          `Play ${t.title || "track"}`
       );
-      main.addEventListener("click", onPlay);
+      /* One click plays. A double-click's second click (detail 2) would play the track again from
+         the start a moment later, so it's ignored; the keyboard's click (detail 0) plays. */
+      main.addEventListener("click", (e) => {
+         if (e.detail <= 1) onPlay();
+      });
       const a = actionButton(act.glyph, act.label);
       a.addEventListener("click", () => act.run(a));
       li.append(main, el("span", "music-lib-dur", fmtTime(t.durationSec)), a);
@@ -354,9 +383,10 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
                `${a.albums} album${a.albums === 1 ? "" : "s"} · ${a.tracks} track${a.tracks === 1 ? "" : "s"}`,
                `Open ${a.name || "artist"}`
             );
-            main.addEventListener("click", () =>
-               askLibrary("tracks_by_artist", { artist: a.name })
-            );
+            main.addEventListener("click", () => {
+               drill();
+               askLibrary("tracks_by_artist", { artist: a.name });
+            });
             const add = actionButton(
                "plus",
                `Add everything by ${a.name || "this artist"} to the queue`
@@ -378,10 +408,14 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
                   .join(" · "),
                `Open ${a.name || "album"}`
             );
-            main.addEventListener("click", () => askLibrary("tracks_by_album", { album: a.name }));
+            main.addEventListener("click", () => {
+               drill();
+               openedAlbum = a;
+               askLibrary("tracks_by_album", albumRef(a));
+            });
             const add = actionButton("plus", `Add ${a.name || "this album"} to the queue`);
             add.addEventListener("click", () => {
-               opts.control("add_album", { album: a.name });
+               opts.control("add_album", albumRef(a));
                flash(add);
             });
             li.append(main, add);
@@ -413,10 +447,32 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       }
       backLabel.textContent =
          browse.kind === "artist" ? "Artists" : browse.kind === "album" ? "Albums" : "Library";
-      if (browse.kind === "artist" || browse.kind === "album") {
+      if (browse.kind === "artist") {
          const head = el("li", "music-lib-heading", browse.name || "Unknown");
          head.setAttribute("role", "heading");
          head.setAttribute("aria-level", "3");
+         list.appendChild(head);
+      } else if (browse.kind === "album") {
+         /* The album opened: its artist under the name (albums can share a name), and adding it
+            whole from here. */
+         const opened = openedAlbum && openedAlbum.name === browse.name ? openedAlbum : null;
+         const head = el("li", "music-lib-heading music-lib-album-head");
+         const titles = el("div", "music-lib-album-titles");
+         const name = el("span", "", browse.name || "Unknown");
+         name.setAttribute("role", "heading");
+         name.setAttribute("aria-level", "3");
+         titles.appendChild(name);
+         if (opened?.artist)
+            titles.appendChild(el("span", "music-lib-album-artist", opened.artist));
+         head.appendChild(titles);
+         if (opened) {
+            const add = actionButton("plus", `Add ${opened.name || "this album"} to the queue`);
+            add.addEventListener("click", () => {
+               opts.control("add_album", albumRef(opened));
+               flash(add);
+            });
+            head.appendChild(add);
+         }
          list.appendChild(head);
       }
       appendBrowseRows(browse);
@@ -446,6 +502,9 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    };
 
    const showTab = (t: "queue" | "library"): void => {
+      if (tab === "library" && t !== "library") libraryScroll = body.scrollTop;
+      if (t === "queue") lastShownCurrent = -1; // the queue opens on its current track
+      const back = tab !== "library" && t === "library";
       tab = t;
       writePref(TAB_KEY, t);
       if (open) {
@@ -453,6 +512,7 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
          else if (!browse && !searchResults) askLibrary("stats");
       }
       render();
+      if (back) body.scrollTop = libraryScroll; // where the library was left
    };
 
    /* --- events ---------------------------------------------------------------- */
@@ -490,6 +550,8 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
       const q = search.value.trim();
       if (!q) return;
       lastAsk = "search";
+      if (!searching) browseScroll = body.scrollTop; // the list under the results, before it goes
+      searching = true;
       opts.search(q);
       list.replaceChildren();
       moreBtn.hidden = true;
@@ -497,14 +559,29 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
    });
    search.addEventListener("input", () => {
       if (search.value.trim() || !searchResults) return;
-      searchResults = null; // cleared: back to browsing
+      searchResults = null; // cleared: back to browsing, where it was
+      searching = false;
       render();
+      body.scrollTop = browseScroll;
    });
    backBtn.addEventListener("click", () => {
       if (searchResults) {
          searchResults = null;
+         searching = false;
          search.value = "";
+         render();
+         body.scrollTop = browseScroll; // the list as it was under the results
+         return;
       } else if (browse && (browse.kind === "artist" || browse.kind === "album")) {
+         /* Back to the list it was opened from, as far as it was loaded and where it was. */
+         const from = openedFrom;
+         openedFrom = null;
+         if (from) {
+            browse = from.page;
+            render();
+            body.scrollTop = from.scroll;
+            return;
+         }
          askLibrary(browse.kind === "artist" ? "artists" : "albums", { offset: 0, limit: PAGE });
          return;
       } else {
@@ -631,9 +708,18 @@ export function mountMusicLibrary(opts: MusicLibraryOptions): MusicLibraryView {
             moreBtn.disabled = false;
             browse = page;
          }
-         if (lastAsk === "browse") searchResults = null;
+         if (lastAsk === "browse") {
+            searchResults = null;
+            searching = false;
+         }
          queueMicrotask(recheckEnd);
-         if (open && tab === "library") render();
+         /* A newly opened page starts at its top (a More page keeps the position), also when it
+            lands while the queue tab shows. */
+         const fresh = !(paged && page.offset > 0);
+         if (open && tab === "library") {
+            render();
+            if (fresh) body.scrollTop = 0;
+         } else if (fresh) libraryScroll = 0;
       },
       destroy: () => {
          window.clearTimeout(refreshTimer);

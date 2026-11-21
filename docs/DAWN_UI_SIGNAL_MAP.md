@@ -164,7 +164,12 @@ Aurora's player also has a queue and library section (`src/music/music-library.t
 query narrows it), and `music_library {type: stats|tracks|artists|albums|tracks_by_artist|tracks_by_album,
 offset, limit, artist?, album?}` -> `music_library_response {browse_type, ...}`; queue edits ride
 `music_control` (add_to_queue, remove_from_queue, clear_queue, add_artist, add_album, play {path},
-play_index). DAWN answers a queue edit with `music_state` (to the sender and the user's other tabs),
+play_index). Albums (DAWN #138): an `albums` browse entry carries `key` (a string, valid until the
+next rescan or Plex sync, so each DAWN restart) with `name`, `artist` and `track_count`; opening
+(`tracks_by_album`) and adding (`add_album`) send `album_key` plus `album` and `artist` as the entry
+gave them, so two albums sharing a name stay apart and a stale key still finds its album (an older
+DAWN without keys gets the name and artist). The opened album's heading shows its artist (the reply
+names only the album) and adds it whole. DAWN answers a queue edit with `music_state` (to the sender and the user's other tabs),
 never the list, so the list is re-read when the queue moves while it's open: its length, current
 index or track, or `music_state.queue_rev` (DAWN PR #91; bumped on every queue edit incl. a
 shuffle/repeat change, never on a track advance; absent = 0 on an older DAWN), which catches an edit

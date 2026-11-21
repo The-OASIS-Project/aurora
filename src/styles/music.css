@@ -607,6 +607,23 @@
    letter-spacing: 0.14em;
    text-transform: uppercase;
 }
+/* An opened album's heading: name over artist, and its add-whole-album action at the right. */
+.music-lib-album-head {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 0.5rem;
+}
+.music-lib-album-titles {
+   display: flex;
+   flex-direction: column;
+   min-width: 0;
+}
+.music-lib-album-artist {
+   color: var(--text-faint);
+   letter-spacing: 0.08em;
+   text-transform: none;
+}
 .music-lib-stats {
    display: flex;
    gap: 0.5rem;
