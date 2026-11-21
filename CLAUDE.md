@@ -37,8 +37,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   added is a reason to question the addition, not to add more. Adjacent problems you find get
   listed for the developer, not folded in. Least code is still the real fix, never a band-aid at
   the symptom.
-- **Real, reachable, practical.** Fix what a real user can hit today, on a default install with a
-  normal DAWN, or what an outsider can cause through content Aurora shows (a message, an email, a
+- **Real, reachable, practical.** Fix what a real user can hit today on a supported setup (any DAWN
+  version Aurora supports, with or without its optional features and flags, as RELEASING.md says),
+  or what an outsider can cause through content Aurora shows (a message, an email, a
   document, a tool result, a Home Assistant name). Also fix any silent, irreversible outcome (data
   lost, a write the user didn't make) even when rare. Drop the rest: no fix, no TODO. Justify each
   fix or drop in one sentence: who triggers it, and how.
@@ -53,8 +54,9 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   yourself. Safety matters, but a guard that makes the common path a pain has failed: nobody uses
   it, and an unused feature protects no one. Weigh usability and safety together; neither wins by
   default.
-  - **The common path is one gesture.** A confirm, a second click or a blocking note belongs only
-    where the write can't be taken back (see the confirm rule below), never on what can be undone.
+  - **The common path is one gesture.** A confirm, a second click or a blocking note belongs where
+    the confirm rule below puts one (what can't be taken back, what changes the daemon for every
+    user, and wherever DAWN's WebUI has one), and nowhere else.
   - **A deliberate action gets no alarm.** What the user asked for (a Stop, taking a message back)
     is answered by its result, not a warning.
   - **A refused or failed write leaves nothing behind** that blocks the next step: the draft comes
@@ -172,7 +174,7 @@ See @ARCHITECTURE.md for the four-layer design and the render seam, and
   `browser-runtime-reviewer` (leaks/lifecycle). Scale the SET to the change (a small focused fix
   may need only the one or two relevant lenses), but running SOMETHING is the default - only
   genuinely trivial edits (a comment, a token rename, a copy tweak) skip it.
-  - **Brief for the real install, not the worst case.** Give each reviewer the change and how it
+  - **Brief for real, supported setups, not the worst case.** Give each reviewer the change and how it
     runs, and ask for findings that each name a realistic trigger in one sentence. Never hand them
     leading "could X happen?" questions: a reviewer asked whether something could happen will find
     a way it could.
