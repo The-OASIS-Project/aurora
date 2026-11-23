@@ -130,12 +130,14 @@ const MUSIC_SECTION_ERRORS = new Set([
 ]);
 const MUSIC_MAX_STALLS = 3; // silent-while-playing replacements in a row before "unavailable"
 const MUSIC_SEEK_TOLERANCE_SEC = 1.25; // position divergence from projected playback that counts as a seek
-const MAIN_WS_MAX_DELAY = 30000; // cap the main-socket reconnect backoff (retries indefinitely)
+/* Cap the main-socket reconnect backoff (retries indefinitely): low, so the link is back within a
+   few seconds of DAWN returning from a restart. One tab asking every few seconds is no load. */
+const MAIN_WS_MAX_DELAY = 5000;
 const LOGIN_WATCH_FAST_MS = 5000; // the login card re-checks the cookie this often for a minute...
 const LOGIN_WATCH_FAST_CHECKS = 12;
 const LOGIN_WATCH_SLOW_MS = 30000; // ...then this often
 const AUTH_STATUS_TIMEOUT_MS = 5000; // a /api/auth/status that takes longer counts as unreachable
-const RESUME_QUIET_TRIES = 6; // ~1 minute of page-load retries before the card says DAWN can't be reached
+const RESUME_QUIET_TRIES = 14; // ~1 minute of page-load retries (1+2+4 s, then 5 s each) before the card says DAWN can't be reached
 const REVOKE_RECHECKS = 3; // a "not logged in" answer to an UNAUTHORIZED is asked again this many times...
 const REVOKE_RECHECK_MS = 3000; // ...this far apart, before signing out
 const UNCONFIRMED_REVOKE_MAX = 3; // reconnects on an UNAUTHORIZED auth status didn't confirm, before signing out
