@@ -2,7 +2,7 @@
    batches draw in the conversation on screen, and the Context panel's memory deletes: their
    requests, the replies and refusals that settle them, and the pushes that change a batch. */
 
-import type { IngestSinks } from "./ingest.ts";
+import type { IngestSinks, SpikeNotice } from "./ingest.ts";
 import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
 import { MemoryMarks } from "./memory-marks.ts";
 
@@ -29,13 +29,6 @@ const MEMORY_DELETE_VERBS: Record<string, { type: string; field: string }> = {
 
 /* The views it drives. */
 type Sinks = Pick<IngestSinks, "memoryBatches" | "conversation">;
-
-type SpikeNotice = (
-   id: string,
-   kind: string,
-   summary: string,
-   opts: { tone?: "nominal" | "attention"; hold?: number }
-) => void;
 
 export class MemoryFeed {
    /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
