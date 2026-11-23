@@ -81,8 +81,7 @@ import {
 } from "../model/model.ts";
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
-import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wire.ts";
-import { MemoryMarks } from "./memory-marks.ts";
+import { MemoryFeed } from "./memory-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 import { TelemetryFeed } from "./telemetry-feed.ts";
@@ -230,33 +229,12 @@ const KEEPALIVE_KEY = "dawn.hero.sessionKeepalive"; // persisted "Always on (thi
    restore of the conversation on screen (no redraw), or a reload that redraws it (a reclaim). */
 type LoadPurpose = "user" | "resume" | "reanchor" | "reload";
 
-/* A Learned-list request still owed a reply (see DawnIngest.memoryReqs). */
-type MemoryReq =
-   | { kind: "list"; id: number; before: number | null }
-   | { kind: "undo"; batchId: number; opId: number | null }
-   | { kind: "keep"; batchId: number; opId: number }
-   | { kind: "forget"; factId: number }
-   | { kind: "marks"; id: number; conversationId: number };
-
 /* How long a stopped turn's leftover frames may be dropped at most (a safety net: DAWN always ends
    the turn with its tagged idle). */
 const STOP_DRAIN_MAX_MS = 180_000;
 /* When to offer to stop the other reply, if DAWN's turn_waiting doesn't say (stop_after_ms). */
 const TURN_WAIT_STOP_AFTER_MS = 5000;
 const TURN_WAIT_STOP_AFTER_MAX_MS = 600_000;
-
-/* A Learned-list page (DAWN allows up to 50). */
-const MEMORY_BATCH_PAGE = 20;
-
-/* Context-panel memory delete: item_id prefix -> the user-scoped delete verb + its id field
-   (verified in dawn/src/webui/webui_memory.c + memory_focus_adapters.c). Only these prefixes
-   have an id-based delete; relation/document_chunk/calendar_occ and preferences do not. Paired
-   with the Context panel's DELETABLE_PREFIXES (the display gate) - keep the kinds in sync. */
-const MEMORY_DELETE_VERBS: Record<string, { type: string; field: string }> = {
-   fact: { type: "delete_memory_fact", field: "fact_id" },
-   entity: { type: "delete_memory_entity", field: "entity_id" },
-   summary: { type: "delete_memory_summary", field: "summary_id" }
-};
 
 interface JobRow {
    conversation_id?: number;
@@ -654,20 +632,16 @@ export class DawnIngest implements Ingest {
    /* The conversation a user-opened load returns to if refused (set by loadConversation, taken
       by send). */
    private loadBack: number | undefined;
-   /* Facts a Learned-list Forget was sent for: their delete_memory_fact_response is the panel's. */
-   private pendingFactForgets = new Set<number>();
-   /* The Learned list's requests still owed a reply, by the `req` they carry (request_refs): an
-      error naming one (SERVICE_UNAVAILABLE when DAWN can't check the login, say) is its only
-      answer, and settles it as failed. */
-   private memoryReqs = new Map<string, MemoryReq>();
-   private memoryReqSeq = 0;
    /* The conversation whose transcript is drawn (0: a fresh chat). The active id can run ahead of
       it (an open still loading); a reconnect then must load it in full, not just re-anchor. */
    private drawnConvId = 0;
-   /* What memory learned from the conversation on screen, drawn as marks in it. */
-   private marks = new MemoryMarks(
-      (conversationId, before) => this.listConversationBatches(conversationId, before),
-      (m) => this.sinks.conversation.setMemoryMarks(m)
+   /* The Learned list (memory_batches), its marks in the conversation on screen, and the
+      Context panel's memory deletes. */
+   private readonly memoryFeed = new MemoryFeed(
+      (msg) => this.send(msg),
+      (flag) => this.hasFeature(flag),
+      () => this.sinks,
+      (id, kind, summary, opts) => this.spikeNotice(id, kind, summary, opts)
    );
    /* A llama.cpp sync that waited for the session's selection to be known (selectionSettled). */
    private loadedSyncDeferred = false;
@@ -1085,10 +1059,7 @@ export class DawnIngest implements Ingest {
          /* Nor the Learned list's requests on an older socket. Its close normally said so, but a
             socket that opened before the old one's close arrived (a fast reconnect, a reclaim)
             skips that cleanup (the stale-socket guard), so say it here too. */
-         this.pendingFactForgets.clear();
-         this.memoryReqs.clear();
-         this.sinks.memoryBatches.linkDown();
-         this.marks.linkDown();
+         this.memoryFeed.linkDown();
          /* Learned again from this connection's list (the local provider's models may have
             changed meanwhile): until it comes, a switch to local waits for it. */
          this.localModels = [];
@@ -1228,10 +1199,7 @@ export class DawnIngest implements Ingest {
          this.stoppedSave = null; // a reload after the reconnect draws the row
          this.sinks.conversation.setTurnActive(false);
          this.setTurnWait(null, true); // kept: DAWN still holds the turn
-         this.pendingFactForgets.clear(); // their replies can't come now
-         this.memoryReqs.clear();
-         this.sinks.memoryBatches.linkDown();
-         this.marks.linkDown();
+         this.memoryFeed.linkDown(); // their replies can't come now
          this.stopMetrics();
          this.closeMusicStream();
          /* Drop the seek-detection baseline: a resume may land at a different track/
@@ -1804,11 +1772,7 @@ export class DawnIngest implements Ingest {
             this.email.setServerSupport(this.hasFeature("email_client"));
             /* The Learned list exists only on a DAWN that records batches; on each connect what
                changed while away comes from a fresh first page. */
-            this.sinks.memoryBatches.setAvailable(this.hasFeature("memory_batches"));
-            if (this.hasFeature("memory_batches")) {
-               this.sinks.memoryBatches.linkUp();
-               this.marks.refresh();
-            }
+            this.memoryFeed.configured();
             /* On-connect config. Advertises the dedicated music-stream server as of
                signal-map §9.1c: skip the socket entirely when music is disabled, else
                open it now with the token `session` just stored. Older servers omit
@@ -2306,76 +2270,12 @@ export class DawnIngest implements Ingest {
 
          case "delete_memory_fact_response":
          case "delete_memory_entity_response":
-         case "delete_memory_summary_response": {
-            /* A Forget from the Learned list (the reply names its fact): the panel's own. */
-            const forgotId = type === "delete_memory_fact_response" ? rowId(p.fact_id) : null;
-            if (forgotId !== null && this.pendingFactForgets.delete(forgotId)) {
-               this.memoryReplied(p, (r) => r.kind === "forget" && r.factId === forgotId);
-               this.onMemoryForgotten(forgotId, p);
-               break;
-            }
-            /* The Context panel confirm-gated + optimistically removed the row. On success
-               there is nothing to do; a genuine failure surfaces a notice. "Not found" means
-               it was already gone (a re-click, or deleted elsewhere), so treat it as success -
-               the optimistic removal was correct. No id echo in the response, so nothing to
-               reconcile per-row. */
-            if ((p as { success?: boolean }).success === false) {
-               const err = String((p as { error?: string }).error ?? "");
-               if (!/not found/i.test(err)) {
-                  this.spikeNotice(
-                     "memory-delete",
-                     "attention",
-                     err || "Couldn't delete that memory",
-                     {
-                        hold: 5,
-                        tone: "attention"
-                     }
-                  );
-               }
-            }
-            break;
-         }
-
-         case "list_memory_batches_response": {
-            const asked = this.memoryReplied(p);
-            /* The per-conversation form (conversation_id echoed) is the marks'; the other is the
-               Learned list's page. */
-            if (p.conversation_id != null) {
-               this.marks.page({
-                  conversationId: rowId(p.conversation_id) ?? 0,
-                  ...parseMemoryBatchPage(p),
-                  ...(asked?.kind === "marks" ? { request: asked.id } : {})
-               });
-               break;
-            }
-            const page = parseMemoryBatchPage(p);
-            if (asked?.kind === "list") page.request = asked.id;
-            this.sinks.memoryBatches.setPage(page);
-            break;
-         }
-
-         case "memory_batch": {
-            /* Recorded, changed by an undo / keep / forgotten fact, or removed by a forget. */
-            const removedId = p.removed === true ? rowId(p.batch_id) : null;
-            if (removedId !== null) {
-               this.sinks.memoryBatches.removeBatch(removedId);
-               this.marks.remove(removedId);
-               break;
-            }
-            const batch = parseMemoryBatch(p);
-            if (batch) {
-               this.sinks.memoryBatches.upsertBatch(batch);
-               this.marks.push(batch);
-            }
-            break;
-         }
-
+         case "delete_memory_summary_response":
+         case "list_memory_batches_response":
+         case "memory_batch":
          case "undo_memory_batch_response":
-            this.onMemoryUndone(p);
-            break;
-
          case "keep_memory_op_response":
-            this.onMemoryKept(p);
+            this.memoryFeed.onFrame(type, p);
             break;
 
          case "set_private_response": {
@@ -2713,7 +2613,7 @@ export class DawnIngest implements Ingest {
                ambient spike so the user sees why. */
             const code = typeof p.code === "string" ? p.code : "";
             /* A request DAWN refused (it names it by `req`): settled here, never a reactor error. */
-            if (this.settleModelRefusal(p) || this.settleMemoryRefusal(p)) {
+            if (this.settleModelRefusal(p) || this.memoryFeed.settleMemoryRefusal(p)) {
                /* What the code means for the whole connection still applies. */
                if (code === "UNKNOWN_TYPE") this.onUnknownType(str(p.request_type), str(p.req));
                if (code === "UNAUTHORIZED")
@@ -4046,224 +3946,27 @@ export class DawnIngest implements Ingest {
          this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
    }
 
-   /* --- The Learned list (memory_batches). The writes come only from the panel's buttons (Undo
-      all and Forget behind their named confirms there). Undo and Keep run on a DAWN worker and
-      answer when it ends; DAWN pushes the changed batch first, so the list redraws from that
-      and the reply only says how it went. */
+   /* --- The Learned list (memory_batches): see memory-feed.ts. */
    listMemoryBatches(before?: number): number {
-      if (!this.hasFeature("memory_batches")) return 0;
-      const payload: Record<string, number> = { limit: MEMORY_BATCH_PAGE };
-      if (before !== undefined && before > 0) payload.before_batch_id = before;
-      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
-      const sent = this.sendMemory("list_memory_batches", payload, {
-         kind: "list",
-         id,
-         before: payload.before_batch_id ?? null
-      });
-      return sent ? id : 0;
+      return this.memoryFeed.listMemoryBatches(before);
    }
 
    /* The transcript on screen is now this conversation's: its memory marks follow it. */
    private showConversation(id: number): void {
       this.drawnConvId = id;
-      this.marks.show(id);
-   }
-
-   /* A page of one conversation's batches, for the marks drawn in it (memory-marks.ts). */
-   private listConversationBatches(conversationId: number, before: number | null): number {
-      if (!this.hasFeature("memory_batches") || conversationId <= 0) return 0;
-      const payload: Record<string, number> = {
-         conversation_id: conversationId,
-         limit: MEMORY_BATCH_PAGE
-      };
-      if (before !== null && before > 0) payload.before_batch_id = before;
-      const id = this.memoryReqSeq + 1; // the id sendMemory gives it
-      const sent = this.sendMemory("list_memory_batches", payload, {
-         kind: "marks",
-         id,
-         conversationId
-      });
-      return sent ? id : 0;
+      this.memoryFeed.show(id);
    }
 
    undoMemoryBatch(batchId: number, opId: number | null): boolean {
-      if (!this.hasFeature("memory_batches") || batchId <= 0) return false;
-      const payload: Record<string, number> = { batch_id: batchId };
-      if (opId !== null && opId > 0) payload.op_id = opId;
-      return this.sendMemory("undo_memory_batch", payload, {
-         kind: "undo",
-         batchId,
-         opId: payload.op_id ?? null
-      });
+      return this.memoryFeed.undoMemoryBatch(batchId, opId);
    }
 
    keepMemoryOp(batchId: number, opId: number): boolean {
-      if (!this.hasFeature("memory_batches") || batchId <= 0 || opId <= 0) return false;
-      return this.sendMemory(
-         "keep_memory_op",
-         { batch_id: batchId, op_id: opId },
-         { kind: "keep", batchId, opId }
-      );
+      return this.memoryFeed.keepMemoryOp(batchId, opId);
    }
 
-   /* The forget DAWN suggested (an op's action "forget"): the ordinary delete_memory_fact, which
-      records the forget and pushes the batch without that row. */
    forgetMemoryFact(factId: number): boolean {
-      if (!this.hasFeature("memory_batches") || factId <= 0) return false;
-      if (!this.sendMemory("delete_memory_fact", { fact_id: factId }, { kind: "forget", factId }))
-         return false;
-      this.pendingFactForgets.add(factId);
-      return true;
-   }
-
-   /* A Learned-list request, tagged with a `req` when DAWN echoes it (request_refs). */
-   private sendMemory(type: string, payload: Record<string, number>, pending: MemoryReq): boolean {
-      const id = ++this.memoryReqSeq;
-      const req = this.hasFeature("request_refs") ? `mem-${id}` : "";
-      if (!this.send({ type, payload: req ? { ...payload, req } : payload })) return false;
-      if (req) this.memoryReqs.set(req, pending);
-      return true;
-   }
-
-   /* A reply settles its request: the one it names (request_refs), else, for a reply DAWN's
-      worker sends (Undo, Keep and Forget, which don't echo `req`), the oldest one it matches. */
-   private memoryReplied(
-      p: Record<string, unknown>,
-      matches?: (pending: MemoryReq) => boolean
-   ): MemoryReq | undefined {
-      const named = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
-      if (named) {
-         this.memoryReqs.delete(p.req as string);
-         return named;
-      }
-      if (!matches) return undefined;
-      for (const [req, pending] of this.memoryReqs) {
-         if (!matches(pending)) continue;
-         this.memoryReqs.delete(req);
-         return pending;
-      }
-      return undefined;
-   }
-
-   /* An error naming a Learned-list request (request_refs): DAWN refused it, and no reply will
-      come. Settle it as failed, so the list stops loading and the buttons come back; nothing is
-      sent again (the user retries). Whether it was one. */
-   private settleMemoryRefusal(p: Record<string, unknown>): boolean {
-      const pending = typeof p.req === "string" ? this.memoryReqs.get(p.req) : undefined;
-      if (!pending || p.severity === "info") return false;
-      this.memoryReqs.delete(p.req as string);
-      const message =
-         typeof p.message === "string" && p.message
-            ? p.message
-            : "DAWN couldn't do this right now. Try again in a moment.";
-      if (pending.kind === "marks") {
-         this.marks.failed(pending.id);
-         return true;
-      }
-      if (pending.kind === "list") {
-         this.sinks.memoryBatches.setPage({
-            before: pending.before,
-            batches: [],
-            nextBefore: null,
-            error: message,
-            request: pending.id
-         });
-         return true;
-      }
-      this.memoryNotice(message, true);
-      if (pending.kind === "forget") {
-         this.pendingFactForgets.delete(pending.factId);
-         this.sinks.memoryBatches.actionDone({ kind: "forget", factId: pending.factId, ok: false });
-      } else if (pending.kind === "keep") {
-         this.sinks.memoryBatches.actionDone({
-            kind: "keep",
-            batchId: pending.batchId,
-            opId: pending.opId,
-            ok: false,
-            factId: null
-         });
-      } else {
-         this.sinks.memoryBatches.actionDone({
-            kind: "undo",
-            batchId: pending.batchId,
-            opId: pending.opId,
-            ok: false
-         });
-      }
-      return true;
-   }
-
-   private onMemoryUndone(p: Record<string, unknown>): void {
-      /* One with no usable batch id still ends the undo that was running (the panel's slot). */
-      const batchId = rowId(p.batch_id) ?? 0;
-      const opId = rowId(p.op_id);
-      /* DAWN runs one per user at a time, so a reply without usable ids is the one running. */
-      this.memoryReplied(
-         p,
-         (r) => r.kind === "undo" && (batchId === 0 || (r.batchId === batchId && r.opId === opId))
-      );
-      const undone = Array.isArray(p.undone) ? p.undone.length : 0;
-      const stale = Array.isArray(p.stale) ? p.stale.length : 0;
-      const error = typeof p.error === "string" && p.error ? p.error : "";
-      /* Done: the pushed batch already shows it. Anything else is said once, calmly. */
-      if (p.status === "ok") {
-         if (undone === 0) this.memoryNotice("Nothing left to undo", false);
-      } else if (p.status === "partial") {
-         const them =
-            stale === 1
-               ? "1 item changed since and stayed as it is"
-               : `${stale} items changed since and stayed as they are`;
-         this.memoryNotice(`Undid ${undone}; ${them}.`, false);
-      } else if (p.status === "stale") {
-         this.memoryNotice(error || "This memory changed since; nothing was undone.", false);
-      } else {
-         this.memoryNotice(error || "Couldn't undo this.", true);
-      }
-      this.sinks.memoryBatches.actionDone({
-         kind: "undo",
-         batchId,
-         opId,
-         ok: p.status === "ok"
-      });
-   }
-
-   private onMemoryKept(p: Record<string, unknown>): void {
-      /* One with no usable ids still ends the keep that was running (the panel's slot). */
-      const batchId = rowId(p.batch_id) ?? 0;
-      const opId = rowId(p.op_id) ?? 0;
-      this.memoryReplied(
-         p,
-         (r) =>
-            r.kind === "keep" &&
-            (batchId === 0 || opId === 0 || (r.batchId === batchId && r.opId === opId))
-      );
-      const ok = p.status === "ok" && batchId > 0 && opId > 0;
-      if (p.status !== "ok") {
-         const error = typeof p.error === "string" && p.error ? p.error : "";
-         this.memoryNotice(error || "Couldn't keep this.", true);
-      }
-      this.sinks.memoryBatches.actionDone({
-         kind: "keep",
-         batchId,
-         opId,
-         ok,
-         factId: ok ? rowId(p.fact_id) : null
-      });
-   }
-
-   private onMemoryForgotten(factId: number, p: Record<string, unknown>): void {
-      /* "Not found": already gone (forgotten elsewhere), which is what was asked. */
-      const error = typeof p.error === "string" ? p.error : "";
-      const ok = p.success !== false || /not found/i.test(error);
-      if (!ok) this.memoryNotice(error || "Couldn't forget that memory", true);
-      this.sinks.memoryBatches.actionDone({ kind: "forget", factId, ok });
-   }
-
-   private memoryNotice(text: string, failed: boolean): void {
-      this.spikeNotice("memory-batch", failed ? "attention" : "memory", text, {
-         hold: failed ? 6 : 5,
-         ...(failed ? { tone: "attention" as const } : {})
-      });
+      return this.memoryFeed.forgetMemoryFact(factId);
    }
 
    /* Forget what a conversation (and its continuations) taught memory. DESTRUCTIVE: reached
@@ -6292,22 +5995,9 @@ export class DawnIngest implements Ingest {
       }
    }
 
-   /* Delete one of the user's own memories from the Context panel. Maps the row's item_id
-      prefix to the matching user-scoped delete verb (auth-only, user-scoped server-side). The
-      panel already confirm-gated this and removed the row optimistically; a server failure is
-      surfaced as a notice from the *_response handler. Non-memory prefixes are ignored. */
+   /* Delete one of the user's own memories from the Context panel (memory-feed.ts). */
    deleteMemory(itemId: string): void {
-      const colon = itemId.indexOf(":");
-      if (colon <= 0) return;
-      const kind = itemId.slice(0, colon);
-      const idStr = itemId.slice(colon + 1);
-      /* Canonical positive-integer id only (rejects "", "abc", "0", "1e3", "0x10", " 5 "), so a
-         malformed/non-canonical item_id never sends a wrong or rounded delete key. Mirrors the
-         panel's isDeletable, so "show control" and "can delete" agree on every input. */
-      if (!/^[1-9]\d*$/.test(idStr)) return;
-      const verb = MEMORY_DELETE_VERBS[kind];
-      if (!verb) return;
-      this.send({ type: verb.type, payload: { [verb.field]: Number(idStr) } });
+      this.memoryFeed.deleteMemory(itemId);
    }
 
    /* Focus/blur is a local UI cue only; the real reactor state comes from DAWN's

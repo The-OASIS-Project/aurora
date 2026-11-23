@@ -200,10 +200,10 @@ describe("the Learned list over the wire", () => {
       c.ing.undoMemoryBatch(4, 2);
       /* DAWN's worker replies without the req: the undo is done all the same. */
       c.frame("undo_memory_batch_response", { batch_id: 4, op_id: 2, status: "ok", undone: [2] });
-      expect(c.ing.memoryReqs.size).toBe(0);
+      expect(c.ing.memoryFeed.memoryReqs.size).toBe(0);
       c.ing.forgetMemoryFact(9);
       c.frame("delete_memory_fact_response", { fact_id: 9, success: true });
-      expect(c.ing.memoryReqs.size).toBe(0);
+      expect(c.ing.memoryFeed.memoryReqs.size).toBe(0);
    });
 
    it("a refused request that says the login ended also signs out", () => {
@@ -258,15 +258,15 @@ describe("the Learned list over the wire", () => {
       c.ing.openSocket();
       sockets[0].onopen?.();
       expect(c.calls.map(([name]) => name)).toContain("linkDown");
-      expect(c.ing.memoryReqs.size).toBe(0);
-      expect(c.ing.pendingFactForgets.size).toBe(0);
+      expect(c.ing.memoryFeed.memoryReqs.size).toBe(0);
+      expect(c.ing.memoryFeed.pendingFactForgets.size).toBe(0);
       vi.unstubAllGlobals();
    });
 
    it("a conversation's own batches are read for its marks, and drawn there", () => {
       const marks: unknown[] = [];
       const c = client(["memory_batches"], { setMemoryMarks: (m: unknown) => marks.push(m) });
-      c.ing.marks.show(7);
+      c.ing.memoryFeed.marks.show(7);
       expect(c.sent.at(-1)).toEqual({
          type: "list_memory_batches",
          payload: { conversation_id: 7, limit: 20 }
