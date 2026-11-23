@@ -53,7 +53,6 @@ import { RecordingDing } from "../audio/ding.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
 import type { EmailRef, EmailSource } from "./email.ts";
-import { formatCacheState } from "../util/cache-state.ts";
 import { PhoneCalls, PHONE_NOTICE_ID } from "./phone-wire.ts";
 import { DawnEmail } from "./email-wire.ts";
 import { APP_NAME, setAppLogins, tagDawnUrl } from "../util/dawn-app.ts";
@@ -86,6 +85,7 @@ import { parseMemoryBatch, parseMemoryBatchPage, rowId } from "./memory-batch-wi
 import { MemoryMarks } from "./memory-marks.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
+import { TelemetryFeed } from "./telemetry-feed.ts";
 import { toActivity, toReactorState } from "./state-map.ts";
 import { toLibraryPage, toMusicState, toMusicTrack } from "./music-wire.ts";
 import {
@@ -105,13 +105,7 @@ import {
    watchFieldsToWire
 } from "./feeds-wire.ts";
 import { toStockPortfolio, toStockWatchlist, watchRejectMessage } from "./stocks-wire.ts";
-import {
-   displayModelName,
-   fmtUptime,
-   formatCacheAvg,
-   formatCacheTurn,
-   formatCtx
-} from "./telemetry-format.ts";
+import { displayModelName, formatCtx } from "./telemetry-format.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
    type prefix then payload. TTS rides the MAIN socket; music rides ONLY the dedicated
@@ -263,15 +257,6 @@ const MEMORY_DELETE_VERBS: Record<string, { type: string; field: string }> = {
    entity: { type: "delete_memory_entity", field: "entity_id" },
    summary: { type: "delete_memory_summary", field: "summary_id" }
 };
-/* Exponential moving average of the live token rate: a smooth figure that leans
-   toward recent generations. Persisted so it survives a refresh. */
-const RATE_EMA_KEY = "dawn.hero.rateEma";
-const RATE_EMA_ALPHA = 0.15; // higher = more responsive to the latest samples
-
-/* Cumulative cache accounting for the CACHE / CACHE AVG HUD rows: cached / input / saved token
-   sums folded from each idle metrics_update frame, so the average is a token-weighted session
-   hit/savings rate. Persisted so it survives a refresh (like the token-rate EMA). */
-const CACHE_SUM_KEY = "dawn.hero.cacheSums";
 
 interface JobRow {
    conversation_id?: number;
@@ -411,7 +396,6 @@ export class DawnIngest implements Ingest {
       () => this.sinks.notifications,
       this.alarmChime
    );
-   private metricsTimer = 0; // polls get_metrics to keep the HUD readout live
    private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
    private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
    /* doc_library_list_response is one type for list / search / load-more, so remember
@@ -448,9 +432,6 @@ export class DawnIngest implements Ingest {
    private readonly haEntities = new Map<string, HAEntity>();
    private zoneFromSession = false; // this DAWN names the zone on the session frame (get_my_settings's is then ignored)
    private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
-   private uptimeTimer = 0; // ticks the uptime display every second between polls
-   private uptimeBaseSec = 0; // last authoritative uptime from get_metrics
-   private uptimeBaseAt = 0; // performance.now() when that uptime was received
    /* Created at construction (not in start) so its Opus-decode support is probed before
       the handshake advertises a codec, and so the reactor tap is wired once. onLevels
       references sinks, which start() sets before any audio can arrive. */
@@ -533,29 +514,13 @@ export class DawnIngest implements Ingest {
       same-token session carries the flag we last set; a fresh session clears it (handled on the
       `reconnected:false` path). */
    private keepaliveServerOn = this.keepaliveOn;
-   private rateEma = Number(localStorage.getItem(RATE_EMA_KEY) ?? 0); // 0 = no samples yet
-   /* Cumulative cache token sums for the CACHE AVG row, restored across a refresh. Corrupt or
-      absent storage starts fresh at zero. */
-   /* A turn's stream ended and its cache figures haven't been added to the session sums yet: DAWN
-      repeats the last call's figures on every metrics_update (several idle frames can carry the
-      same call), so CACHE AVG adds each turn ONCE, on the first idle frame after its stream_end. */
-   private cacheTurnPending = false;
-   private cacheSum = ((): { cached: number; input: number; saved: number } => {
-      try {
-         const v = localStorage.getItem(CACHE_SUM_KEY);
-         if (v) {
-            const o = JSON.parse(v) as Record<string, unknown>;
-            return {
-               cached: Number(o.cached) || 0,
-               input: Number(o.input) || 0,
-               saved: Number(o.saved) || 0
-            };
-         }
-      } catch {
-         /* ignore corrupt persisted sums */
-      }
-      return { cached: 0, input: 0, saved: 0 };
-   })();
+   /* The HUD's telemetry rows (token rate, cache, context, TTFT / latency, uptime) and the
+      reactor's strain / hesitation gauges. */
+   private readonly telemetryFeed = new TelemetryFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      () => this.llm
+   );
    /* Tool-use latch. DAWN pings `tool_call` then flips straight back to `thinking`
       while the tool runs and its results are processed, so the tool_call state alone
       flickers past unseen. We latch "using tools" from the ping until the turn leaves
@@ -814,10 +779,7 @@ export class DawnIngest implements Ingest {
       /* Closed-loop flow control: report our buffered depth up the music socket so the
          server can hold its ~2 s cushion (see MusicAudio). No-op until the socket auths. */
       this.music.setBufferReporter((ms) => this.musicReport(ms));
-      /* Surface the persisted token-rate EMA immediately (survives refresh). */
-      if (this.rateEma > 0) {
-         this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
-      }
+      this.telemetryFeed.showRate();
       /* Stay silent until tryResume() decides - so a successful auto-resume never
          flashes the login card. */
       this.emit("checking");
@@ -1199,12 +1161,7 @@ export class DawnIngest implements Ingest {
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
-         window.clearInterval(this.metricsTimer);
-         window.clearInterval(this.uptimeTimer);
-         this.metricsTimer = window.setInterval(() => this.send({ type: "get_metrics" }), 8000);
-         /* Count uptime locally every second; each poll re-syncs the base so it
-            never drifts from DAWN. */
-         this.uptimeTimer = window.setInterval(() => this.tickUptime(), 1000);
+         this.telemetryFeed.startPolling();
          this.emit("connected");
       };
 
@@ -3522,93 +3479,11 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "metrics_update": {
-            /* token_rate -> throughput strain (gauge, live) AND an EMA for the HUD (a
-               smooth figure that tracks recent generations, not the fluctuating
-               instantaneous rate). Strain normalized against a brisk ~50 tok/s. */
-            const rate = Number(p.token_rate ?? 0);
-            this.sinks.reactor.setStrain(Math.min(rate / 50, 1));
-            /* ttft_ms -> hesitation (the pause before the first token), full at ~2s. Only
-               when reported (>0); metrics_update sometimes omits it mid-generation. */
-            const ttft = Number(p.ttft_ms ?? 0);
-            if (ttft > 0) this.sinks.reactor.setHesitation(Math.min(ttft / 2000, 1));
-            if (rate > 0) {
-               this.rateEma =
-                  this.rateEma > 0 ? this.rateEma + RATE_EMA_ALPHA * (rate - this.rateEma) : rate;
-               localStorage.setItem(RATE_EMA_KEY, String(this.rateEma));
-               this.sinks.telemetry.update({ rate: `${Math.round(this.rateEma)}/s` });
-            }
-            /* Cache hit-rate + savings for the CACHE / CACHE AVG rows, sampled off the FINAL/idle
-               frame ONLY: the mid-stream "thinking" frames fire before usage is parsed and carry
-               the PREVIOUS turn's numbers. On the idle frame input_tokens/cached_tokens are
-               always present (a cache-miss turn honestly reports 0); cache_saved_tokens too (may
-               be negative on a cold write turn). Gate on a NUMERIC input_tokens (the denominator):
-               an older daemon omits it, so the rows stay "--" rather than skewing the session
-               sums; the typeof check also rejects a stray null that would fold a 0 denominator. */
-            if (p.state === "idle" && typeof p.input_tokens === "number") {
-               const cached = Math.max(0, Number(p.cached_tokens ?? 0) || 0);
-               const input = Math.max(0, Number(p.input_tokens) || 0);
-               const saved = Number(p.cache_saved_tokens ?? 0) || 0; // may be negative
-               const local = this.llm.mode === "local"; // local models report no billing savings
-               /* Sum each turn once (the first idle after its stream_end); later idle frames repeat
-                  the same call's figures, and only refresh the per-turn rows. */
-               if (this.cacheTurnPending) {
-                  this.cacheTurnPending = false;
-                  this.cacheSum = {
-                     cached: this.cacheSum.cached + cached,
-                     input: this.cacheSum.input + input,
-                     saved: this.cacheSum.saved + saved
-                  };
-                  try {
-                     localStorage.setItem(CACHE_SUM_KEY, JSON.stringify(this.cacheSum));
-                  } catch {
-                     /* storage full/disabled - the rows still update in-memory */
-                  }
-               }
-               /* Why the cache did or didn't hit (DAWN 8ed2552d; absent on an older daemon -> "--"). */
-               const cs = formatCacheState((p as { cache_state?: unknown }).cache_state);
-               this.sinks.telemetry.update({
-                  cache: formatCacheTurn(cached, input, saved, local),
-                  cachestate: cs.text,
-                  cachestate_flag: cs.flag ? "1" : "",
-                  cacheavg: formatCacheAvg(this.cacheSum)
-               });
-            }
+         case "metrics_update":
+         case "context":
+         case "get_metrics_response":
+            this.telemetryFeed.onFrame(type, p);
             break;
-         }
-
-         case "context": {
-            /* Context-window usage, last known (pushed during turns): percent plus the raw
-               token counts (current / max) from the same frame. */
-            const cp = p as { usage?: number; current?: number; max?: number };
-            const usage = cp.usage !== undefined ? Number(cp.usage) : undefined; // let formatCtx derive it if absent
-            const cur = Number(cp.current ?? 0);
-            const max = Number(cp.max ?? 0);
-            this.sinks.telemetry.update({ ctx: formatCtx(cur, max, usage) });
-            break;
-         }
-
-         case "get_metrics_response": {
-            /* HUD: TTFT (time to first token) and LATENCY (full LLM response), both
-               averaged for stability; token rate + context usage come from their own
-               push frames. */
-            const m = p as {
-               session?: { uptime_seconds?: number };
-               last?: { llm_ttft_ms?: number; llm_total_ms?: number };
-               averages?: { llm_ttft_ms?: number; llm_total_ms?: number };
-            };
-            const ttft = m.averages?.llm_ttft_ms || m.last?.llm_ttft_ms || 0;
-            const latency = m.averages?.llm_total_ms || m.last?.llm_total_ms || 0;
-            /* Re-sync the uptime base; the 1 Hz ticker carries it between polls. */
-            this.uptimeBaseSec = m.session?.uptime_seconds ?? 0;
-            this.uptimeBaseAt = performance.now();
-            this.sinks.telemetry.update({
-               ttft: ttft > 0 ? `${Math.round(ttft)}ms` : "--",
-               lat: latency > 0 ? `${Math.round(latency)}ms` : "--"
-            });
-            this.tickUptime();
-            break;
-         }
 
          case "stream_start":
             if (this.dropsStoppedReply()) break; // the stopped reply's late start
@@ -3650,7 +3525,7 @@ export class DawnIngest implements Ingest {
                stream_start/end per iteration); only a TERMINAL end carries the final answer. */
             const reason = typeof p.reason === "string" ? p.reason : "";
             if (reason !== "tool_iteration") {
-               this.cacheTurnPending = true; // the next idle metrics_update carries this turn's cache figures
+               this.telemetryFeed.turnEnded(); // the next idle metrics_update carries this turn's cache figures
                /* DAWN is the sole writer of the turn (server-authoritative persistence): the
                   client no longer saves the reply. Register the finalized bubble under
                   (conv, streamId) so the fanned message_appended adopts onto it instead of
@@ -6740,17 +6615,8 @@ export class DawnIngest implements Ingest {
       this.sendBinary(frame);
    }
 
-   /* Advance the displayed uptime from the last synced base, so it counts up every
-      second like the clock instead of jumping each 8s poll. */
-   private tickUptime(): void {
-      if (this.uptimeBaseAt === 0) return;
-      const elapsed = (performance.now() - this.uptimeBaseAt) / 1000;
-      this.sinks.telemetry.update({ up: fmtUptime(this.uptimeBaseSec + elapsed) });
-   }
-
    private stopMetrics(): void {
-      window.clearInterval(this.metricsTimer);
-      window.clearInterval(this.uptimeTimer);
+      this.telemetryFeed.stopPolling();
       window.clearInterval(this.calendarTimer);
       window.clearTimeout(this.calendarDebounce);
       window.clearInterval(this.haTimer);
