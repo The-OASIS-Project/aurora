@@ -623,6 +623,14 @@ export interface NoticeAction {
 export type NoticeOpen =
    { kind: "conversation"; id: number } | { kind: "email"; accountId: number; messageId: string };
 
+/* The ingest's own notice helper, as its feed modules see it (DawnIngest.spikeNotice). */
+export type SpikeNotice = (
+   id: string,
+   kind: string,
+   summary: string,
+   opts: { tone?: "nominal" | "attention"; hold?: number }
+) => void;
+
 export interface Notice {
    id: string;
    kind: string;

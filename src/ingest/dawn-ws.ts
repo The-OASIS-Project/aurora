@@ -31,7 +31,6 @@ import type {
    LinkStatus,
    CalendarInfo,
    ConversationMeta,
-   HAEntity,
    HAServiceCall,
    Ingest,
    IngestSinks,
@@ -82,6 +81,9 @@ import {
 import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
 import { MemoryFeed } from "./memory-feed.ts";
+import { HAFeed } from "./ha-feed.ts";
+import { WatchesFeed } from "./watches-feed.ts";
+import { StocksFeed } from "./stocks-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 import { TelemetryFeed } from "./telemetry-feed.ts";
@@ -95,15 +97,7 @@ import {
    toEmailRef,
    type ReloadedToolResult
 } from "./history-wire.ts";
-import {
-   toCalendarEvent,
-   toContextItem,
-   toHAEntity,
-   toLibraryItem,
-   toWatchItem,
-   watchFieldsToWire
-} from "./feeds-wire.ts";
-import { toStockPortfolio, toStockWatchlist, watchRejectMessage } from "./stocks-wire.ts";
+import { toCalendarEvent, toContextItem, toLibraryItem } from "./feeds-wire.ts";
 import { displayModelName, formatCtx } from "./telemetry-format.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
@@ -398,18 +392,24 @@ export class DawnIngest implements Ingest {
       resolved by whichever *_update_response arrives is enough - and it sidesteps note_update
       omitting the id on its error branches (id correlation would miss those). */
    private pendingDocEdit: { resolve: (err: string | null) => void; timer: number } | null = null;
-   private haTimer = 0; // polls ha_refresh_entities as the backstop under the realtime push
-   private watchTimer = 0; // polls watch_list (no push exists); refreshes the rule structure
-   private watchReadingsWanted = false; // Watches panel visible -> subscribe to the 1 Hz gauge stream
-   private stocksPortfolioWanted = false; // Stocks panel effectively visible -> subscribe to the portfolio push
-   private stocksExtHours = false; // the panel's Extended-Hours choice, re-sent on reconnect
-   private stocksWatchWanted = false; // Watchlist panel effectively visible -> subscribe to the watch push
-   private stocksWatchExtHours = false; // the Watchlist panel's Extended-Hours choice, re-sent on reconnect
-   /* The merged HA entity snapshot, keyed by entity_id. A poll replaces it wholesale; the
-      realtime ha_state_changed push (§9.4 #3) merges its delta into this same map and
-      re-emits. Keeping the map (vs. re-emitting the raw array) is what makes that a
-      drop-in - a single-entity delta updates one row without a full re-poll. */
-   private readonly haEntities = new Map<string, HAEntity>();
+   /* The Home Assistant, Watches and Stocks / Watchlist boards. */
+   private readonly haFeed = new HAFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      (id, kind, summary, opts) => this.spikeNotice(id, kind, summary, opts)
+   );
+   private readonly watchesFeed = new WatchesFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      (id, kind, summary, opts) => this.spikeNotice(id, kind, summary, opts),
+      () => this.isLinkLive(),
+      (message) => this.notifyUser(message)
+   );
+   private readonly stocksFeed = new StocksFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      (message) => this.notifyUser(message)
+   );
    private zoneFromSession = false; // this DAWN names the zone on the session frame (get_my_settings's is then ignored)
    private userTz = ""; // user's IANA tz (from get_my_settings); "" => browser-local
    /* Created at construction (not in start) so its Opus-decode support is probed before
@@ -1096,41 +1096,9 @@ export class DawnIngest implements Ingest {
          /* Library: the notes + documents list for the Library panel. A poll (there is no
             push feed); the panel's refresh control re-lists on demand. A read, no writes. */
          this.requestLibrary();
-         /* Home Assistant: a read-only status board. There is no push feed yet (SAGE
-            item #3), so poll. ha_status reports configured/connected for the header;
-            ha_list_entities fills from DAWN's <=5min cache immediately; then a slow
-            ha_refresh_entities interval forces a live refetch (bypassing that cache)
-            so state stays current. All reads, admin-gated server-side. */
-         this.send({ type: "ha_status" });
-         this.send({ type: "ha_list_entities" });
-         window.clearInterval(this.haTimer);
-         this.haTimer = window.setInterval(() => this.send({ type: "ha_refresh_entities" }), 30000);
-         /* SAGE watches (the Watches panel): the rule list + live readings. Poll-only (no
-            push - a watch FIRING arrives as an attention notice), so re-list on a slow
-            backstop to refresh the readings. A read; the panel's toggle is the only write. */
-         this.send({ type: "watch_list" });
-         window.clearInterval(this.watchTimer);
-         this.watchTimer = window.setInterval(() => this.send({ type: "watch_list" }), 30000);
-         /* Re-arm the live-gauge stream if the panel wanted it before this (re)connect - the
-            subscription is per-connection and lost on reconnect. */
-         if (this.watchReadingsWanted) {
-            this.send({ type: "watch_readings_subscribe", payload: { enabled: true } });
-         }
-         /* Same for the portfolio push (per-connection, lost on reconnect). Re-subscribing gets
-            an immediate fresh snapshot, so a reconnect / standby-wake has no visible lag. */
-         if (this.stocksPortfolioWanted) {
-            this.send({
-               type: "stocks_portfolio_subscribe",
-               payload: { ext_hours: this.stocksExtHours }
-            });
-         }
-         /* Same for the watchlist push (its own independent per-connection subscription). */
-         if (this.stocksWatchWanted) {
-            this.send({
-               type: "stocks_watch_subscribe",
-               payload: { ext_hours: this.stocksWatchExtHours }
-            });
-         }
+         this.haFeed.linkUp();
+         this.watchesFeed.linkUp();
+         this.stocksFeed.linkUp();
          /* System metrics for the HUD, now and on a slow poll (they are a snapshot,
             not pushed). Cleared on close. */
          ws.send(JSON.stringify({ type: "get_metrics" }));
@@ -2998,198 +2966,34 @@ export class DawnIngest implements Ingest {
          }
 
          case "ha_status_response":
-            /* Configured/connected for the board header. Absent fields => false. */
-            this.sinks.ha.setStatus({
-               configured: p.configured === true,
-               connected: p.connected === true,
-               error: typeof p.error === "string" ? p.error : undefined
-            });
+         case "ha_entities_response":
+         case "ha_call_service_response":
+         case "ha_state_changed":
+            this.haFeed.onFrame(type, p);
             break;
 
-         case "ha_entities_response": {
-            /* Both ha_list_entities and ha_refresh_entities land here. success:false
-               means HA is unreachable (NOT an empty house) - surface offline and keep
-               the last snapshot on screen. On success, rebuild the merged map and emit
-               the whole set; a future single-entity push merges into this same map. */
-            if (p.success === false) {
-               this.sinks.ha.setStatus({
-                  configured: true,
-                  connected: false,
-                  error: typeof p.error === "string" ? p.error : undefined
-               });
-               break;
-            }
-            const ents = (p.entities ?? []) as Array<Record<string, unknown>>;
-            this.haEntities.clear();
-            for (const e of ents) {
-               const ent = toHAEntity(e);
-               if (ent.entityId) this.haEntities.set(ent.entityId, ent);
-            }
-            this.sinks.ha.setStatus({ configured: true, connected: true });
-            this.sinks.ha.setEntities([...this.haEntities.values()]);
+         case "watch_list_response":
+         case "watch_set_enabled_response":
+         case "watch_readings":
+            this.watchesFeed.onFrame(type, p);
             break;
-         }
-
-         case "ha_call_service_response": {
-            /* Ack for a widget control (§9.4 #8). Success is silent: the server has
-               already re-polled HA and will broadcast a fresh ha_entities_response, which
-               reconciles the board (the optimistic flip only bridged the round-trip). A
-               failure gets no broadcast, so revert the optimistic flip with a live re-poll
-               and surface why (allowlist reject, HA offline, HA-side error). */
-            if (p.success === false) {
-               const err =
-                  typeof p.error === "string" && p.error
-                     ? p.error
-                     : "Home Assistant control failed";
-               console.warn("[dawn] ha_call_service failed:", p.entity_id, err);
-               this.refreshHA();
-               this.spikeNotice("ha-notice", "home", err, {
-                  tone: "attention",
-                  hold: 7
-               });
-            }
-            break;
-         }
-
-         case "ha_state_changed": {
-            /* Realtime delta (§9.4 #3): an unsolicited, coalesced (~200ms) push of the
-               entities that just changed - from ANY source (a control action, a physical
-               switch, an HA automation), so one frame can carry many entities (a scene
-               flip). Batch-merge the whole array into the retained map by entity_id -
-               each element is either a full entity (toHAEntity handles it) or a
-               {entity_id, removed:true} tombstone - then re-emit the full set so the board
-               diff-spikes just the changed rows. The 30s poll stays as the backstop, so a
-               client that misses or ignores this frame still self-heals. HA strings are
-               bound via textContent downstream (they now arrive without an admin gesture). */
-            const ents = (p.entities ?? []) as Array<Record<string, unknown>>;
-            let touched = false;
-            for (const e of ents) {
-               const id = str(e.entity_id);
-               if (!id) continue;
-               if (e.removed === true) this.haEntities.delete(id);
-               else this.haEntities.set(id, toHAEntity(e));
-               touched = true;
-            }
-            if (touched) this.sinks.ha.setEntities([...this.haEntities.values()]);
-            break;
-         }
-
-         case "watch_list_response": {
-            /* The SAGE watch rules + live readings (Watches panel). A FAILED list carries no
-               watches/catalog/attention_enabled, so surface a status error and keep the last
-               rows rather than rendering an empty list (which would read as "nothing watched").
-               Watch strings (label/name/unit/source) are bound via textContent downstream. */
-            if ((p as { success?: boolean }).success === false) {
-               this.sinks.watches.setStatus({
-                  ok: false,
-                  attentionEnabled: false,
-                  error:
-                     typeof (p as { error?: string }).error === "string"
-                        ? (p as { error?: string }).error
-                        : "Couldn't list watches"
-               });
-               break;
-            }
-            const rows = (p.watches ?? []) as Array<Record<string, unknown>>;
-            const catalog = ((p.catalog ?? []) as Array<Record<string, unknown>>).map((c) => ({
-               key: str(c.key),
-               label: str(c.label, str(c.key)),
-               unit: str(c.unit),
-               ruleType: typeof c.rule_type === "string" ? c.rule_type : undefined,
-               defaultDirection:
-                  typeof c.default_direction === "string" ? c.default_direction : undefined,
-               defaultThreshold:
-                  typeof c.default_threshold === "number" ? c.default_threshold : undefined
-            }));
-            this.sinks.watches.setWatches(rows.map(toWatchItem), catalog);
-            this.sinks.watches.setStatus({
-               ok: true,
-               attentionEnabled: (p as { attention_enabled?: boolean }).attention_enabled === true
-            });
-            break;
-         }
-
-         case "watch_set_enabled_response": {
-            /* A benign toggle ack. On failure surface the reason; either way re-list so the
-               panel reflects the server-authoritative truth (mirrors the HA reconcile). */
-            if ((p as { success?: boolean }).success === false) {
-               const err = (p as { error?: string }).error;
-               console.warn("[dawn] watch_set_enabled failed:", err);
-               this.spikeNotice("watch-toggle", "attention", err || "Couldn't update the watch", {
-                  tone: "attention",
-                  hold: 6
-               });
-            }
-            this.send({ type: "watch_list" });
-            break;
-         }
-
-         case "watch_readings": {
-            /* The ~1 Hz live-gauge stream (only while subscribed + SAGE attention is on).
-               Patch just the volatile values onto the existing rows - no re-list, no spike. */
-            const readings = (p.readings ?? []) as Array<Record<string, unknown>>;
-            this.sinks.watches.setReadings(
-               readings.map((r) => ({
-                  id: Number(r.id ?? 0),
-                  hasCurrent: r.has_current === true,
-                  current: typeof r.current === "number" ? r.current : undefined,
-                  breaching: typeof r.breaching === "boolean" ? r.breaching : undefined
-               }))
-            );
-            break;
-         }
 
          case "stocks_portfolio_update":
-            /* Portfolio push (immediate on subscribe, then on cadence, or a one-shot get). */
-            this.sinks.stocks.setPortfolio(toStockPortfolio(p));
-            break;
-
          case "stocks_watch_update":
-            /* Watchlist push (immediate on subscribe, on cadence, on a set, or a one-shot get). */
-            this.sinks.watchlist.setWatchlist(toStockWatchlist(p));
-            break;
-
-         /* Acks for the subscribe/unsubscribe verbs - the data arrives as its own frame, so
-            these are no-ops. Present so the default arm does not console.debug the payload. */
          case "stocks_portfolio_subscribe_response":
          case "stocks_portfolio_unsubscribe_response":
          case "stocks_watch_subscribe_response":
          case "stocks_watch_unsubscribe_response":
+         case "stocks_watch_set_response":
+            this.stocksFeed.onFrame(type, p);
             break;
-
-         case "stocks_watch_set_response": {
-            /* Surface any rejected add (typo / unknown symbol / hit the 25 cap) as a notice, so an
-               invalid add is not a silent no-op. Feature-detected: no `rejected` => nothing shown. */
-            const msg = watchRejectMessage(p.rejected);
-            if (msg) this.notifyUser(msg);
-            break;
-         }
 
          case "watch_readings_subscribe_response":
-            break; // just an ack; the readings frames are what matter
-
          case "watch_add_response":
          case "watch_update_response":
-         case "watch_remove_response": {
-            /* Phase-2 CRUD acks. Surface a failure; re-list either way so the panel reflects
-               the server-authoritative truth (add upserts + re-enables, update/remove change
-               the row). */
-            const r = p as { success?: boolean; error?: string };
-            if (r.success === false) {
-               console.warn("[dawn] watch mutation failed:", type, r.error);
-               this.spikeNotice(
-                  "watch-mutate",
-                  "attention",
-                  r.error || "Couldn't update the watch",
-                  {
-                     tone: "attention",
-                     hold: 6
-                  }
-               );
-            }
-            this.send({ type: "watch_list" });
+         case "watch_remove_response":
+            this.watchesFeed.onFrame(type, p);
             break;
-         }
 
          case "jobs_snapshot": {
             /* The complete active set - replace ours wholesale. */
@@ -4550,119 +4354,45 @@ export class DawnIngest implements Ingest {
       }
    }
 
-   /* Force a live HA re-poll now (the board's manual refresh). ha_refresh_entities
-      bypasses DAWN's 5-min cache and returns the fresh list; a read, not a mutation. */
+   /* --- The boards: see ha-feed.ts, watches-feed.ts and stocks-feed.ts. */
    refreshHA(): void {
-      this.send({ type: "ha_refresh_entities" });
+      this.haFeed.refreshHA();
    }
-
-   /* HA widget control (signal-map §9.4 #8): the board's write path, a deliberate
-      user-initiated action (like music transport), not ambient control. `data` is passed
-      VERBATIM to HA - the panel already uses HA's own keys (brightness/percentage/
-      position/hvac_mode/temperature). The server allowlists the (domain, service) pairs
-      the board can invoke; anything else comes back "Service not permitted".
-
-      On SUCCESS the server re-polls HA and broadcasts a fresh ha_entities_response on its
-      own, so the board reconciles without us re-polling; the optimistic flip just bridges
-      the round-trip. On FAILURE nothing is broadcast, so ha_call_service_response drives
-      the revert + surfaces the error (see the handler). */
    haControl(call: HAServiceCall): void {
-      this.send({
-         type: "ha_call_service",
-         payload: {
-            entity_id: call.entityId,
-            domain: call.domain,
-            service: call.service,
-            ...(call.data ? { data: call.data } : {})
-         }
-      });
+      this.haFeed.haControl(call);
    }
-
-   /* Re-list the SAGE watches (Watches panel manual refresh / poll). Read-only. */
    requestWatches(): void {
-      this.send({ type: "watch_list" });
+      this.watchesFeed.requestWatches();
    }
-
-   /* Toggle one watch on/off. A benign per-watch flip (the sanctioned deliberate-user-action
-      class, like set_pinned); the server reconciles via the re-list in watch_set_enabled_response.
-      Blocked on a dead link so the panel doesn't flip a state that never took (like haControl). */
    setWatchEnabled(id: number, enabled: boolean): void {
-      if (!this.isLinkLive()) {
-         this.notifyUser("Not connected to DAWN - change not sent.");
-         return;
-      }
-      this.send({ type: "watch_set_enabled", payload: { id, enabled } });
+      this.watchesFeed.setWatchEnabled(id, enabled);
    }
-
-   /* Opt into / out of the 1 Hz watch_readings gauge stream (driven off panel visibility).
-      Track the intent so a reconnect re-subscribes (the subscription is per-connection); the
-      onopen handler replays it. `send` is a no-op when the socket is down, which is fine -
-      the intent is remembered and re-sent on connect. */
    watchReadingsSubscribe(enabled: boolean): void {
-      this.watchReadingsWanted = enabled;
-      this.send({ type: "watch_readings_subscribe", payload: { enabled } });
+      this.watchesFeed.watchReadingsSubscribe(enabled);
    }
-
-   /* Phase-2 watch CRUD. Per-user proactive rules (deliberate user actions), gated on link
-      liveness; each reconciles via the re-list in its *_response handler. `updateWatch` sends
-      the full field state (a partial send would reset omitted fields to catalog defaults).
-      `removeWatch` is only ever invoked from the panel's confirm-gated gesture. */
    addWatch(metric: string, fields?: WatchFields): void {
-      if (!this.isLinkLive()) {
-         this.notifyUser("Not connected to DAWN - not sent.");
-         return;
-      }
-      /* CREATES a new watch (add no longer dedups by metric). The create modal supplies the
-         name + condition in `fields`; a bare add falls back to the server's catalog defaults. */
-      this.send({ type: "watch_add", payload: { metric, ...watchFieldsToWire(fields) } });
+      this.watchesFeed.addWatch(metric, fields);
    }
    updateWatch(id: number, fields: WatchFields): void {
-      if (!this.isLinkLive()) {
-         this.notifyUser("Not connected to DAWN - not sent.");
-         return;
-      }
-      this.send({ type: "watch_update", payload: { id, ...watchFieldsToWire(fields) } });
+      this.watchesFeed.updateWatch(id, fields);
    }
    removeWatch(id: number): void {
-      if (!this.isLinkLive()) {
-         this.notifyUser("Not connected to DAWN - not sent.");
-         return;
-      }
-      this.send({ type: "watch_remove", payload: { id } });
+      this.watchesFeed.removeWatch(id);
    }
-
-   /* Opt into / out of the portfolio push, gated on the panel's effective visibility (mirror of
-      watchReadingsSubscribe). The intent + ext-hours choice are stored so the onopen handler can
-      re-subscribe after a reconnect (the subscription is per-connection). `send` no-ops when the
-      socket is down; the stored intent survives. A re-subscribe with a new extHours is idempotent
-      server-side (it just resets the per-connection flags), so no unsubscribe-first dance. */
    stocksPortfolioSubscribe(enabled: boolean, extHours: boolean): void {
-      this.stocksPortfolioWanted = enabled;
-      this.stocksExtHours = extHours;
-      if (enabled)
-         this.send({ type: "stocks_portfolio_subscribe", payload: { ext_hours: extHours } });
-      else this.send({ type: "stocks_portfolio_unsubscribe" });
+      this.stocksFeed.stocksPortfolioSubscribe(enabled, extHours);
    }
-   /* One-shot cached snapshot for the manual refresh button. A read; the server TTL-clamps it. */
    refreshStocks(extHours: boolean): void {
-      this.send({ type: "stocks_portfolio_get", payload: { ext_hours: extHours } });
+      this.stocksFeed.refreshStocks(extHours);
    }
-
-   /* Watchlist: its own subscription, independent of the portfolio's, gated on the Watchlist
-      panel's own effective visibility. Re-sent on reconnect if still wanted (see onopen). */
    stocksWatchSubscribe(enabled: boolean, extHours: boolean): void {
-      this.stocksWatchWanted = enabled;
-      this.stocksWatchExtHours = extHours;
-      if (enabled) this.send({ type: "stocks_watch_subscribe", payload: { ext_hours: extHours } });
-      else this.send({ type: "stocks_watch_unsubscribe" });
+      this.stocksFeed.stocksWatchSubscribe(enabled, extHours);
    }
    refreshWatchlist(extHours: boolean): void {
-      this.send({ type: "stocks_watch_get", payload: { ext_hours: extHours } });
+      this.stocksFeed.refreshWatchlist(extHours);
    }
-   /* User-scoped write: the user curating their own watchlist. Delta add/remove; the server
-      dedups, clamps, ignores invalid, and answers with a fresh stocks_watch_update. */
    stocksWatchSet(add: string[], remove: string[]): void {
-      this.send({ type: "stocks_watch_set", payload: { add, remove } });
+      this.stocksFeed.stocksWatchSet(add, remove);
    }
 
    getMusicAudio(): MusicAudio {
@@ -6275,7 +6005,7 @@ export class DawnIngest implements Ingest {
             connected: false,
             error: "Home Assistant isn't available on this DAWN"
          });
-      if (requestType.startsWith("ha_")) window.clearInterval(this.haTimer);
+      if (requestType.startsWith("ha_")) this.haFeed.stopPolling();
       if (requestType.startsWith("calendar_")) {
          window.clearInterval(this.calendarTimer);
          this.sinks.calendar.setUnsupported?.(true);
@@ -6311,8 +6041,8 @@ export class DawnIngest implements Ingest {
       this.telemetryFeed.stopPolling();
       window.clearInterval(this.calendarTimer);
       window.clearTimeout(this.calendarDebounce);
-      window.clearInterval(this.haTimer);
-      window.clearInterval(this.watchTimer);
+      this.haFeed.stopPolling();
+      this.watchesFeed.stopPolling();
    }
 
    /* A notification card. Handed to the notification layer, which owns its life: it
