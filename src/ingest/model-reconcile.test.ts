@@ -25,8 +25,8 @@ function client(mode: "local" | "cloud", model: string) {
       send: (t: string) => sent.push(JSON.parse(t)),
       close: () => {}
    };
-   ing.llm.mode = mode;
-   ing.llm.model = model;
+   ing.modelFeed.llm.mode = mode;
+   ing.modelFeed.llm.model = model;
    const frame = (type: string, payload: object): void =>
       ing.onFrame(JSON.stringify({ type, payload }));
    const llmWrites = (): Sent[] => sent.filter((m) => m.type === "set_session_llm");
@@ -61,7 +61,7 @@ describe("the local model list arriving", () => {
             payload: { type: "local", model: "loaded.gguf", from_restore: true }
          }
       ]);
-      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.ing.modelFeed.llm.model).toBe("loaded.gguf");
    });
 
    it("Ollama: current_model is the session's own echoed back, so nothing is written", () => {
@@ -77,14 +77,14 @@ describe("the local model list arriving", () => {
       expect(c.llmWrites()).toEqual([
          { type: "set_session_llm", payload: { type: "local", model: "qwen" } }
       ]);
-      expect(c.ing.llm.model).toBe("qwen");
+      expect(c.ing.modelFeed.llm.model).toBe("qwen");
    });
 
    it('leaves a stored model alone, and ignores DAWN\'s "(unknown)" placeholder', () => {
       const c = client("local", "removed-model");
       c.frame("list_llm_models_response", list("Ollama", [], "(unknown)"));
       expect(c.llmWrites()).toEqual([]);
-      expect(c.ing.llm.model).toBe("removed-model");
+      expect(c.ing.modelFeed.llm.model).toBe("removed-model");
    });
 
    it("writes nothing in cloud mode", () => {
@@ -137,10 +137,10 @@ describe("switching to local mode", () => {
       const opened = client("cloud", "claude-sonnet-5-5");
       /* The curated cloud list lacks the conversation's older model, so a completed "pick" would
          replace it. */
-      opened.ing.cloudModels.claude = ["claude-sonnet-5-5"];
+      opened.ing.modelFeed.cloudModels.claude = ["claude-sonnet-5-5"];
       opened.ing.getModelControl().setMode("local");
       /* A conversation is loaded before the list comes: its own settings stand. */
-      opened.ing.applyConvLlmSettings({
+      opened.ing.modelFeed.applyConvLlmSettings({
          llm_type: "cloud",
          cloud_provider: "claude",
          model: "claude-legacy-4"
@@ -148,7 +148,7 @@ describe("switching to local mode", () => {
       const sentOpened = opened.llmWrites().length;
       opened.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-legacy-4"));
       expect(opened.llmWrites()).toHaveLength(sentOpened);
-      expect(opened.ing.llm.model).toBe("claude-legacy-4");
+      expect(opened.ing.modelFeed.llm.model).toBe("claude-legacy-4");
    });
 
    it("a config reply asked before the switch doesn't undo it", () => {
@@ -160,7 +160,7 @@ describe("switching to local mode", () => {
          success: true,
          llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
       });
-      expect(c.ing.llm.mode).toBe("local");
+      expect(c.ing.modelFeed.llm.mode).toBe("local");
       c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
       expect(c.llmWrites().at(-1)).toEqual({
          type: "set_session_llm",
@@ -171,7 +171,7 @@ describe("switching to local mode", () => {
    it("New Chat, or a load with no settings, ends a switch's wait", () => {
       for (const end of [
          (ing: Record<string, any>) => ing.newChat(),
-         (ing: Record<string, any>) => ing.applyConvLlmSettings(undefined)
+         (ing: Record<string, any>) => ing.modelFeed.applyConvLlmSettings(undefined)
       ]) {
          const c = client("cloud", "claude-sonnet-5-5");
          c.ing.getModelControl().setMode("local");
@@ -191,7 +191,7 @@ describe("switching to local mode", () => {
          provider: "claude",
          model: "claude-sonnet-5-5"
       });
-      expect(c.ing.llm.mode).toBe("cloud"); // what the session still runs
+      expect(c.ing.modelFeed.llm.mode).toBe("cloud"); // what the session still runs
       const before = c.llmWrites().length;
       c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
       expect(c.llmWrites()).toHaveLength(before);
@@ -199,8 +199,8 @@ describe("switching to local mode", () => {
 
    it("from OpenRouter, the local pick is the first local model, not OpenRouter's default index", () => {
       const c = client("cloud", "openai/gpt-5.5");
-      c.ing.llm.provider = "openrouter";
-      c.ing.defaultModelIdx.openrouter = 1;
+      c.ing.modelFeed.llm.provider = "openrouter";
+      c.ing.modelFeed.defaultModelIdx.openrouter = 1;
       c.frame("list_llm_models_response", list("Ollama", ["llama3", "qwen"], "openai/gpt-5.5"));
       c.ing.getModelControl().setMode("local");
       expect(c.llmWrites().at(-1)).toEqual({
@@ -258,7 +258,7 @@ describe("switching to local mode", () => {
          });
       echo("local");
       echo("cloud"); // older: mustn't undo the final switch
-      expect(c.ing.llm.mode).toBe("local");
+      expect(c.ing.modelFeed.llm.mode).toBe("local");
       echo("local");
       c.frame("list_llm_models_response", list("Ollama", ["llama3"], "claude-sonnet-5-5"));
       expect(c.llmWrites().at(-1)).toEqual({
@@ -270,7 +270,7 @@ describe("switching to local mode", () => {
    it("a lists-only config reply never changes the selection, even after DAWN's tool switched it", () => {
       const c = client("local", "old-model");
       c.ing.requestConfigRefresh(); // the MODEL panel opened: a lists-only ask, in flight
-      c.ing.applyLlmState(
+      c.ing.modelFeed.applyLlmState(
          JSON.stringify({
             type: "llm_state_update",
             payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
@@ -282,16 +282,22 @@ describe("switching to local mode", () => {
             llm_runtime: { type, provider: "Claude", model }
          });
       snapshot("local", "old-model"); // the lists-only reply, from before the switch
-      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      expect([c.ing.modelFeed.llm.mode, c.ing.modelFeed.llm.model]).toEqual([
+         "cloud",
+         "claude-opus-5-5"
+      ]);
       snapshot("cloud", "claude-opus-5-5"); // the full re-read
-      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-opus-5-5"]);
+      expect([c.ing.modelFeed.llm.mode, c.ing.modelFeed.llm.model]).toEqual([
+         "cloud",
+         "claude-opus-5-5"
+      ]);
       expect(c.llmWrites()).toEqual([]);
    });
 
    it("an older reply's reasoning doesn't overwrite the newer model's", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.llm.reasoning = "adaptive";
-      c.ing.llm.effort = "medium";
+      c.ing.modelFeed.llm.reasoning = "adaptive";
+      c.ing.modelFeed.llm.effort = "medium";
       const control = c.ing.getModelControl();
       control.setModel("claude-a");
       control.setModel("claude-b");
@@ -301,19 +307,22 @@ describe("switching to local mode", () => {
          thinking_mode: "disabled",
          reasoning_effort: "low"
       });
-      expect([c.ing.llm.model, c.ing.llm.reasoning]).toEqual(["claude-b", "adaptive"]);
+      expect([c.ing.modelFeed.llm.model, c.ing.modelFeed.llm.reasoning]).toEqual([
+         "claude-b",
+         "adaptive"
+      ]);
       c.frame("set_session_llm_response", {
          success: true,
          model: "claude-b",
          thinking_mode: "adaptive",
          reasoning_effort: "high"
       });
-      expect(c.ing.llm.effort).toBe("high");
+      expect(c.ing.modelFeed.llm.effort).toBe("high");
    });
 
    it("a new connection forgets the old local list: a switch waits for the new one", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.localModels = ["gone-model"]; // from before DAWN restarted
+      c.ing.modelFeed.localModels = ["gone-model"]; // from before DAWN restarted
       const sockets: Array<{ onopen: (() => void) | null }> = [];
       vi.stubGlobal(
          "WebSocket",
@@ -350,8 +359,8 @@ describe("switching to local mode", () => {
 
    it("a refusal shows the session's reasoning as well as its model", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.llm.reasoning = "adaptive";
-      c.ing.llm.effort = "medium";
+      c.ing.modelFeed.llm.reasoning = "adaptive";
+      c.ing.modelFeed.llm.effort = "medium";
       const control = c.ing.getModelControl();
       control.setModel("claude-a"); // accepted, but its reply is no longer the latest
       control.setProvider("openai"); // refused: no API key
@@ -365,17 +374,17 @@ describe("switching to local mode", () => {
          thinking_mode: "adaptive",
          reasoning_effort: "high"
       });
-      expect([c.ing.llm.provider, c.ing.llm.model, c.ing.llm.effort]).toEqual([
-         "claude",
-         "claude-a",
-         "high"
-      ]);
+      expect([
+         c.ing.modelFeed.llm.provider,
+         c.ing.modelFeed.llm.model,
+         c.ing.modelFeed.llm.effort
+      ]).toEqual(["claude", "claude-a", "high"]);
    });
 
    it("a delayed echo doesn't undo a conversation load or a tool switch made after its write", () => {
       for (const after of [
          (ing: Record<string, any>) =>
-            ing.applyConvLlmSettings({
+            ing.modelFeed.applyConvLlmSettings({
                llm_type: "cloud",
                cloud_provider: "claude",
                model: "claude-opus-5-5",
@@ -383,7 +392,7 @@ describe("switching to local mode", () => {
                reasoning_effort: "high"
             }),
          (ing: Record<string, any>) =>
-            ing.applyLlmState(
+            ing.modelFeed.applyLlmState(
                JSON.stringify({
                   type: "llm_state_update",
                   payload: { type: "cloud", provider: "Claude", model: "claude-opus-5-5" }
@@ -401,20 +410,23 @@ describe("switching to local mode", () => {
             thinking_mode: "disabled",
             reasoning_effort: "low"
          });
-         expect(c.ing.llm.model).toBe("claude-opus-5-5");
-         expect(c.ing.llm.reasoning).not.toBe("disabled");
+         expect(c.ing.modelFeed.llm.model).toBe("claude-opus-5-5");
+         expect(c.ing.modelFeed.llm.reasoning).not.toBe("disabled");
       }
    });
 
    it("a loaded conversation with no stored model reads the model that actually runs", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.applyConvLlmSettings({ llm_type: "local", model: "" });
+      c.ing.modelFeed.applyConvLlmSettings({ llm_type: "local", model: "" });
       expect(c.sent.filter((m) => m.type === "get_config")).toHaveLength(1);
       c.frame("get_config_response", {
          success: true,
          llm_runtime: { type: "local", provider: "", model: "configured-local" }
       });
-      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["local", "configured-local"]);
+      expect([c.ing.modelFeed.llm.mode, c.ing.modelFeed.llm.model]).toEqual([
+         "local",
+         "configured-local"
+      ]);
       expect(c.llmWrites()).toEqual([]);
    });
 
@@ -463,7 +475,7 @@ describe("switching to local mode", () => {
                model: convType === "cloud" ? "claude-sonnet-5-5" : "old.gguf"
             }
          });
-         expect(c.ing.llm.mode).toBe(convType);
+         expect(c.ing.modelFeed.llm.mode).toBe(convType);
          expect(syncs()).toEqual(
             convType === "cloud"
                ? []
@@ -482,7 +494,9 @@ describe("switching to local mode", () => {
          so nothing should hold the llama.cpp sync for its reply. */
       const c = client("local", "old.gguf");
       c.ing.ws.readyState = WebSocket.CLOSED;
-      c.ing.applyLlmState(JSON.stringify({ payload: { type: "local", model: "old.gguf" } }));
+      c.ing.modelFeed.applyLlmState(
+         JSON.stringify({ payload: { type: "local", model: "old.gguf" } })
+      );
       c.ing.ws.readyState = WebSocket.OPEN;
       c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
       expect(c.llmWrites()).toEqual([
@@ -505,7 +519,7 @@ describe("switching to local mode", () => {
          messages: [],
          llm_settings: { llm_type: "local", cloud_provider: "claude", model: "old.gguf" }
       });
-      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.ing.modelFeed.llm.model).toBe("loaded.gguf");
       expect(c.llmWrites()).toEqual([
          {
             type: "set_session_llm",
@@ -537,7 +551,10 @@ describe("switching to local mode", () => {
          llm_runtime: { type: "cloud", provider: "Claude", model: "claude-sonnet-5-5" }
       });
       expect(c.llmWrites()).toEqual([]);
-      expect([c.ing.llm.mode, c.ing.llm.model]).toEqual(["cloud", "claude-sonnet-5-5"]);
+      expect([c.ing.modelFeed.llm.mode, c.ing.modelFeed.llm.model]).toEqual([
+         "cloud",
+         "claude-sonnet-5-5"
+      ]);
    });
 
    it("opening another conversation ends a switch's wait at once, before its settings arrive", () => {
@@ -638,7 +655,7 @@ describe("with request_refs, model requests are settled by the request they name
       const c = refs();
       c.ing.askConfig();
       c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
-      c.ing.llm.mode = "local";
+      c.ing.modelFeed.llm.mode = "local";
       expect(c.llmWrites()).toEqual([]); // waiting for the read
       c.frame("error", { code: "SERVICE_UNAVAILABLE", severity: "error", req: "llm-1" });
       expect(c.llmWrites()).toEqual([
@@ -834,7 +851,7 @@ describe("with request_refs, model requests are settled by the request they name
          model: "claude-opus-5-5",
          req: write?.payload?.req
       });
-      expect(c.ing.llm.model).toBe("claude-opus-5-5"); // the panel shows what DAWN runs
+      expect(c.ing.modelFeed.llm.model).toBe("claude-opus-5-5"); // the panel shows what DAWN runs
    });
 
    it("an open refused while a refused resume waits puts the resume back", () => {
@@ -866,7 +883,7 @@ describe("with request_refs, model requests are settled by the request they name
          req: "llm-2"
       });
       expect(c.ing.llmWritesOwed.map((e: { req: string }) => e.req)).toEqual(["llm-1"]);
-      expect(c.ing.llm.model).toBe("claude-haiku-5-5");
+      expect(c.ing.modelFeed.llm.model).toBe("claude-haiku-5-5");
    });
 });
 
@@ -1002,8 +1019,8 @@ describe("following the default model", () => {
 
    it("a provider pick is one message, with that provider's model", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.cloudModels.openai = ["gpt-6", "gpt-6-mini"];
-      c.ing.llm.followsDefault = true; // DAWN said so
+      c.ing.modelFeed.cloudModels.openai = ["gpt-6", "gpt-6-mini"];
+      c.ing.modelFeed.llm.followsDefault = true; // DAWN said so
       c.ing.getModelControl().setProvider("openai");
       expect(c.llmWrites()).toEqual([
          { type: "set_session_llm", payload: { type: "cloud", provider: "openai", model: "gpt-6" } }
@@ -1024,8 +1041,8 @@ describe("following the default model", () => {
 
    it("Use default model saves a reset keeping the reasoning, never as a restore", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.llm.followsDefault = false;
-      c.ing.reasoningPick = { mode: "adaptive", effort: "high" };
+      c.ing.modelFeed.llm.followsDefault = false;
+      c.ing.modelFeed.reasoningPick = { mode: "adaptive", effort: "high" };
       c.ing.getModelControl().useDefaultModel();
       expect(c.llmWrites()).toEqual([
          {
@@ -1038,12 +1055,12 @@ describe("following the default model", () => {
 
    it("a provider with no model list gets the pick alone, never the previous vendor's model", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.cloudModels.gemini = [];
+      c.ing.modelFeed.cloudModels.gemini = [];
       c.ing.getModelControl().setProvider("gemini");
       expect(c.llmWrites()).toEqual([
          { type: "set_session_llm", payload: { type: "cloud", provider: "gemini" } }
       ]);
-      expect(c.ing.llm.model).toBe("");
+      expect(c.ing.modelFeed.llm.model).toBe("");
    });
 
    it("an older DAWN that never says follows_default isn't given one", () => {
@@ -1070,15 +1087,15 @@ describe("following the default model", () => {
 
    it("following the default on llama.cpp shows the loaded model without sending it", () => {
       const c = client("local", "local");
-      c.ing.llm.followsDefault = true;
+      c.ing.modelFeed.llm.followsDefault = true;
       c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
       expect(c.llmWrites()).toEqual([]);
-      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.ing.modelFeed.llm.model).toBe("loaded.gguf");
    });
 
    it("Use default model on llama.cpp shows the loaded model, not DAWN's placeholder", () => {
       const c = client("local", "loaded.gguf");
-      c.ing.llm.followsDefault = false;
+      c.ing.modelFeed.llm.followsDefault = false;
       c.frame("list_llm_models_response", list("llama.cpp", ["loaded.gguf"], "loaded.gguf"));
       c.ing.getModelControl().useDefaultModel();
       const sent = c.llmWrites().length;
@@ -1089,13 +1106,13 @@ describe("following the default model", () => {
          model: "local",
          follows_default: true
       });
-      expect(c.ing.llm.model).toBe("loaded.gguf");
+      expect(c.ing.modelFeed.llm.model).toBe("loaded.gguf");
       expect(c.llmWrites()).toHaveLength(sent); // shown, not sent
    });
 
    it("a lists-only refresh doesn't take away the provider prompt the user is in", () => {
       const c = client("local", "llama3");
-      c.ing.llm.followsDefault = true;
+      c.ing.modelFeed.llm.followsDefault = true;
       c.frame("get_config_response", {
          success: true,
          config: { llm: { cloud: { provider: "" } } },
@@ -1114,7 +1131,7 @@ describe("following the default model", () => {
 
    it("Use default model ends the provider prompt, so a changed default shows again", () => {
       const c = client("local", "llama3");
-      c.ing.llm.followsDefault = false;
+      c.ing.modelFeed.llm.followsDefault = false;
       c.frame("get_config_response", {
          success: true,
          config: { llm: { cloud: { provider: "" } } },
@@ -1135,7 +1152,7 @@ describe("following the default model", () => {
          config: {},
          llm_runtime: { type: "local", provider: "none", model: "qwen", follows_default: true }
       });
-      expect(c.ing.llm.model).toBe("qwen"); // dawn.toml's default changed meanwhile
+      expect(c.ing.modelFeed.llm.model).toBe("qwen"); // dawn.toml's default changed meanwhile
    });
 
    it("dawn.toml's anthropic is Claude", () => {
@@ -1178,7 +1195,7 @@ describe("following the default model", () => {
 
    it("a lists-only refresh updates a conversation that follows the default, not one with its own pick", () => {
       const c = client("cloud", "claude-sonnet-5-5");
-      c.ing.llm.followsDefault = true;
+      c.ing.modelFeed.llm.followsDefault = true;
       c.ing.getModelControl().refreshModels(); // MODEL panel opened: a lists-only read
       c.frame("get_config_response", {
          success: true,
@@ -1190,10 +1207,10 @@ describe("following the default model", () => {
             follows_default: true
          }
       });
-      expect(c.ing.llm.model).toBe("claude-opus-5-5"); // dawn.toml's default changed
+      expect(c.ing.modelFeed.llm.model).toBe("claude-opus-5-5"); // dawn.toml's default changed
 
       const own = client("cloud", "claude-sonnet-5-5");
-      own.ing.llm.followsDefault = false;
+      own.ing.modelFeed.llm.followsDefault = false;
       own.ing.getModelControl().refreshModels();
       own.frame("get_config_response", {
          success: true,
@@ -1205,7 +1222,7 @@ describe("following the default model", () => {
             follows_default: false
          }
       });
-      expect(own.ing.llm.model).toBe("claude-sonnet-5-5");
+      expect(own.ing.modelFeed.llm.model).toBe("claude-sonnet-5-5");
    });
 
    it("Local then Cloud before Local's reply: Cloud lands on the default model, and Local's reply is stale", () => {
@@ -1251,7 +1268,7 @@ describe("following the default model", () => {
          provider: "none",
          model: ""
       });
-      expect(c.ing.llm.mode).toBe("cloud");
+      expect(c.ing.modelFeed.llm.mode).toBe("cloud");
       const sent = c.llmWrites().length;
       c.frame("list_llm_models_response", list("Ollama", ["llama3"], ""));
       expect(c.llmWrites()).toHaveLength(sent);

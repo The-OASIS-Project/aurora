@@ -144,11 +144,11 @@ describe("the answers", () => {
       const c = client();
       for (const f of answer("get_config", {})) c.frame(f);
       expect(c.called("conversation", "setAssistantName")).toEqual([["Friday"]]);
-      expect(c.ing.llm.provider).toBe("claude");
-      expect(c.ing.llm.model).toBe("claude-sonnet-5-5");
-      expect(c.ing.cloudModels.claude).toEqual(["claude-sonnet-5-5"]);
+      expect(c.ing.modelFeed.llm.provider).toBe("claude");
+      expect(c.ing.modelFeed.llm.model).toBe("claude-sonnet-5-5");
+      expect(c.ing.modelFeed.cloudModels.claude).toEqual(["claude-sonnet-5-5"]);
       /* The model's reasoning caps parsed: off or adaptive, adaptive by default. */
-      const caps = c.ing.cloudCaps.claude["claude-sonnet-5-5"];
+      const caps = c.ing.modelFeed.cloudCaps.claude["claude-sonnet-5-5"];
       expect(caps.modes.map((m: { mode: string }) => m.mode)).toEqual(["disabled", "adaptive"]);
       expect(c.called("telemetry", "update")).toContainEqual([
          { effort: "MEDIUM", provider: "Claude", model: "claude-sonnet-5-5" }
@@ -165,11 +165,11 @@ describe("the answers", () => {
 
    it("list_llm_models: no local models", () => {
       const c = client();
-      c.ing.localModels = ["stale"];
+      c.ing.modelFeed.localModels = ["stale"];
       const frames = answer("list_llm_models", {});
       carries(frames[0], ["models"]);
       for (const f of frames) c.frame(f);
-      expect(c.ing.localModels).toEqual([]);
+      expect(c.ing.modelFeed.localModels).toEqual([]);
    });
 
    it("list_conversations: the row, and the remembered conversation is opened", () => {
@@ -198,7 +198,7 @@ describe("the answers", () => {
       ]);
       expect(c.ing.convId).toBe(CONVERSATION_ID);
       expect(c.called("telemetry", "update")).toContainEqual([{ title: TRANSCRIPT.title }]);
-      expect(c.ing.llm.model).toBe("claude-sonnet-5-5");
+      expect(c.ing.modelFeed.llm.model).toBe("claude-sonnet-5-5");
    });
 
    it("load_conversation of a conversation that's gone: a fresh chat, silently", () => {
@@ -1027,7 +1027,10 @@ describe("the fake's interactive requests", () => {
       /* The echo means to the client what it says: the shown reasoning follows it. */
       const c = client();
       c.frame(low[0]);
-      expect([c.ing.llm.reasoning, c.ing.llm.effort]).toEqual(["adaptive", "low"]);
+      expect([c.ing.modelFeed.llm.reasoning, c.ing.modelFeed.llm.effort]).toEqual([
+         "adaptive",
+         "low"
+      ]);
    });
 
    it("New Chat's replies are ones the real client handles", () => {
@@ -1036,7 +1039,10 @@ describe("the fake's interactive requests", () => {
       for (const f of [...send("clear_session"), ...send("set_session_llm", { type: "reset" })])
          c.frame(f);
       /* (afterEach fails the test on any frame the client doesn't handle.) */
-      expect([c.ing.llm.reasoning, c.ing.llm.effort]).toEqual(["adaptive", "medium"]);
+      expect([c.ing.modelFeed.llm.reasoning, c.ing.modelFeed.llm.effort]).toEqual([
+         "adaptive",
+         "medium"
+      ]);
    });
 
    it("only space, tab, CR and LF make a turn empty, as in DAWN", () => {
