@@ -29,7 +29,6 @@ import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
 import type {
    ActivityStatus,
    LinkStatus,
-   CalendarInfo,
    ConversationMeta,
    HAServiceCall,
    Ingest,
@@ -78,12 +77,13 @@ import {
    type ModelControl,
    type Reasoning
 } from "../model/model.ts";
-import { todayWindow } from "../util/time.ts";
 import { str } from "./wire.ts";
 import { MemoryFeed } from "./memory-feed.ts";
 import { HAFeed } from "./ha-feed.ts";
 import { WatchesFeed } from "./watches-feed.ts";
 import { StocksFeed } from "./stocks-feed.ts";
+import { CalendarFeed } from "./calendar-feed.ts";
+import { LibraryFeed } from "./library-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 import { TelemetryFeed } from "./telemetry-feed.ts";
@@ -97,7 +97,7 @@ import {
    toEmailRef,
    type ReloadedToolResult
 } from "./history-wire.ts";
-import { toCalendarEvent, toContextItem, toLibraryItem } from "./feeds-wire.ts";
+import { toContextItem } from "./feeds-wire.ts";
 import { displayModelName, formatCtx } from "./telemetry-format.ts";
 
 /* Server -> client binary opcodes (webui_server.h). Every audio frame is a 1-byte
@@ -187,7 +187,6 @@ const FOREIGN_GATED_FRAMES = new Set([
 const CONV_LIST_DEBOUNCE_MS = 700; // coalesce a turn's >=2 bumped conversation_list_changed frames into one refresh
 const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
 const REANCHOR_FALLBACK_MS = 3000; // no set_active_conversation_response in this long -> older DAWN, fall back to load_conversation
-const LIB_PAGE = 50; // library-panel page size (doc_library_list limit)
 
 /* Narrow a server-provided provider string to the panel's LlmProvider set. DAWN
    sends it capitalized in llm_runtime ("OpenRouter") and lowercase in a
@@ -370,28 +369,18 @@ export class DawnIngest implements Ingest {
       () => this.sinks.notifications,
       this.alarmChime
    );
-   private calendarTimer = 0; // slow refetch of today's events (also handles midnight rollover)
-   private calendarDebounce = 0; // debounce a burst of calendar_events_changed pushes
-   /* doc_library_list_response is one type for list / search / load-more, so remember
-      what the in-flight request was to label the response for the library panel. */
-   private pendingLibraryAppend = false;
-   private pendingLibrarySearching = false;
-   /* In-flight doc_library_get requests, keyed by document id, so an async full-text
-      read (the reader overlay) resolves against its own response (or null on error). The
-      timeout handle is stored so it can be cleared on response/supersede/dispose (no
-      dangling timer firing into a resolved promise or a torn-down instance). */
-   private readonly pendingDocGets = new Map<
-      number,
-      {
-         resolve: (v: { text: string; filename: string; filetype: string } | null) => void;
-         timer: number;
-      }
-   >();
-   /* A single in-flight doc/note EDIT save (doc_library_note_update / _doc_update). Only one
-      edit is ever open (single-instance reader + Save disabled while saving), so one slot
-      resolved by whichever *_update_response arrives is enough - and it sidesteps note_update
-      omitting the id on its error branches (id correlation would miss those). */
-   private pendingDocEdit: { resolve: (err: string | null) => void; timer: number } | null = null;
+   /* The Calendar card's and the Library panel's feeds. */
+   private readonly calendarFeed = new CalendarFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      () => this.userTz
+   );
+   private readonly libraryFeed = new LibraryFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      () => this.isLinkLive(),
+      (path) => this.dawnUrl(path)
+   );
    /* The Home Assistant, Watches and Stocks / Watchlist boards. */
    private readonly haFeed = new HAFeed(
       (msg) => this.send(msg),
@@ -1087,15 +1076,8 @@ export class DawnIngest implements Ingest {
             track is playing, streams Opus audio as 0x20 binary frames. Subscribe
             alone starts no audio. */
          ws.send(JSON.stringify({ type: "music_subscribe", payload: { quality: "standard" } }));
-         /* Calendar: the id->{name,color} map plus today's occurrences, for the
-            calendar card. A slow refetch keeps it live between calendar_events_changed
-            pushes and rolls the window over at midnight. Both reads, no writes. */
-         this.requestCalendar();
-         window.clearInterval(this.calendarTimer);
-         this.calendarTimer = window.setInterval(() => this.requestCalendar(), 15 * 60 * 1000);
-         /* Library: the notes + documents list for the Library panel. A poll (there is no
-            push feed); the panel's refresh control re-lists on demand. A read, no writes. */
-         this.requestLibrary();
+         this.calendarFeed.linkUp();
+         this.libraryFeed.linkUp();
          this.haFeed.linkUp();
          this.watchesFeed.linkUp();
          this.stocksFeed.linkUp();
@@ -2880,90 +2862,18 @@ export class DawnIngest implements Ingest {
             console.warn("[dawn] music_error:", p.code, p.message);
             break;
 
-         case "calendar_list_my_calendars_response": {
-            /* The id->{name,color} map for the calendar card's color dots. */
-            if (p.success === false) break;
-            const cals = (p.calendars ?? []) as Array<Record<string, unknown>>;
-            const map: CalendarInfo[] = cals.map((c) => ({
-               id: Number(c.id ?? 0),
-               name: str(c.name),
-               color: str(c.color)
-            }));
-            this.sinks.calendar.setCalendars(map);
-            break;
-         }
-
-         case "calendar_upcoming_events_response": {
-            /* Today's occurrences. success:true with an empty array covers both an
-               empty day and a transient read error (same contract as the LLM tool);
-               the panel renders "Nothing scheduled" and the next changed-push heals. */
-            if (p.success === false) break;
-            const evs = (p.events ?? []) as Array<Record<string, unknown>>;
-            this.sinks.calendar.setEvents(evs.map(toCalendarEvent), p.truncated === true);
-            break;
-         }
-
+         case "calendar_list_my_calendars_response":
+         case "calendar_upcoming_events_response":
          case "calendar_events_changed":
-            /* A background CalDAV sync changed something. Refetch (debounced, since a
-               multi-calendar sync can fire several in a burst). */
-            this.scheduleCalendarRefetch();
+            this.calendarFeed.onFrame(type, p);
             break;
 
-         case "doc_library_list_response": {
-            /* Notes + documents for the Library panel. success:false (or an empty set)
-               renders "Nothing in the library"; the panel labels this response by the
-               in-flight request kind (list / search / load-more). */
-            if (p.success === false) break;
-            const docs = (p.documents ?? []) as Array<Record<string, unknown>>;
-            this.sinks.library.setItems(docs.map(toLibraryItem), {
-               append: this.pendingLibraryAppend,
-               searching: this.pendingLibrarySearching,
-               hasMore: p.has_more === true
-            });
-            break;
-         }
-
-         case "doc_library_get_response": {
-            /* Resolve the reader's pending full-text request for this id. success:false
-               (unavailable) resolves null so the reader can fall back. */
-            const id = Number(p.id ?? 0);
-            const pending = this.pendingDocGets.get(id);
-            if (pending) {
-               window.clearTimeout(pending.timer);
-               this.pendingDocGets.delete(id);
-               if (p.success === true && typeof p.text === "string") {
-                  pending.resolve({
-                     text: p.text,
-                     filename: str(p.filename),
-                     filetype: str(p.filetype)
-                  });
-               } else {
-                  pending.resolve(null);
-               }
-            }
-            break;
-         }
-
+         case "doc_library_list_response":
+         case "doc_library_get_response":
          case "doc_library_note_update_response":
-         case "doc_library_doc_update_response": {
-            /* Resolve the single in-flight edit save. success:false carries the reason (a label
-               collision, the pre-v63 "re-save to enable editing" reject, ...); surface it
-               verbatim. note_update omits the id on its error branches, which is why this uses
-               one pending slot rather than id correlation. */
-            const pending = this.pendingDocEdit;
-            if (pending) {
-               window.clearTimeout(pending.timer);
-               this.pendingDocEdit = null;
-               const err =
-                  p.success === true
-                     ? null
-                     : typeof p.error === "string" && p.error
-                       ? p.error
-                       : "Save failed.";
-               pending.resolve(err);
-            }
+         case "doc_library_doc_update_response":
+            this.libraryFeed.onFrame(type, p);
             break;
-         }
 
          case "ha_status_response":
          case "ha_entities_response":
@@ -3847,32 +3757,21 @@ export class DawnIngest implements Ingest {
       });
    }
 
-   /* --- Library (Ingest) -------------------------------------------------- */
+   /* --- Library (Ingest): see library-feed.ts. */
    refreshLibrary(): void {
-      this.requestLibrary();
+      this.libraryFeed.refreshLibrary();
    }
 
    searchLibrary(query: string, opts?: { limit?: number; offset?: number }): void {
-      this.requestLibrary({ query, offset: opts?.offset ?? 0, searching: true });
+      this.libraryFeed.searchLibrary(query, opts);
    }
 
    loadMoreLibrary(offset: number): void {
-      this.requestLibrary({ offset, append: true });
+      this.libraryFeed.loadMoreLibrary(offset);
    }
 
-   /* Fetch a document's original file over the same-origin /api proxy (the cookie rides
-      it). A GET read; the view decodes text or object-URLs binaries for download. The
-      attachment/nosniff headers on the endpoint don't affect a fetch(). */
-   async fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }> {
-      const res = await fetch(
-         this.dawnUrl(`/api/documents/original/${encodeURIComponent(blobId)}`),
-         {
-            credentials: "same-origin"
-         }
-      );
-      if (!res.ok) throw new Error(`document fetch failed: ${res.status}`);
-      const blob = await res.blob();
-      return { blob, contentType: res.headers.get("content-type") ?? "" };
+   fetchDocumentOriginal(blobId: string): Promise<{ blob: Blob; contentType: string }> {
+      return this.libraryFeed.fetchDocumentOriginal(blobId);
    }
 
    /* Upload a document (POST /api/documents, multipart) over the same-origin /api proxy - a
@@ -3952,66 +3851,18 @@ export class DawnIngest implements Ingest {
       return { blob, contentType: res.headers.get("content-type") ?? "" };
    }
 
-   /* doc_library_get over the WS, promise-correlated by id. Resolves null on an error
-      response, a superseding request for the same id, or a 15s timeout (a dropped
-      response must not leak the promise). */
    getDocumentText(
       id: number
    ): Promise<{ text: string; filename: string; filetype: string } | null> {
-      return new Promise((resolve) => {
-         /* Supersede any in-flight request for this id (clear its timer, resolve it null). */
-         const prev = this.pendingDocGets.get(id);
-         if (prev) {
-            window.clearTimeout(prev.timer);
-            prev.resolve(null);
-         }
-         const timer = window.setTimeout(() => {
-            if (this.pendingDocGets.get(id)?.resolve === resolve) {
-               this.pendingDocGets.delete(id);
-               resolve(null);
-            }
-         }, 15000);
-         this.pendingDocGets.set(id, { resolve, timer });
-         this.send({ type: "doc_library_get", payload: { id } });
-      });
+      return this.libraryFeed.getDocumentText(id);
    }
 
-   /* Save an edited note (doc_library_note_update). label is the note's filename. */
    updateNote(id: number, label: string, text: string): Promise<string | null> {
-      return this.editSave({ type: "doc_library_note_update", payload: { id, label, text } });
+      return this.libraryFeed.updateNote(id, label, text);
    }
 
-   /* Save an edited document's stored text (doc_library_doc_update; re-chunks + re-embeds). */
    updateDocText(id: number, text: string): Promise<string | null> {
-      return this.editSave({ type: "doc_library_doc_update", payload: { id, text } });
-   }
-
-   /* Send an edit frame and resolve on the matching *_update_response: null = saved, else a
-      human-readable error string (a label collision, a pre-v63 "re-save to enable editing"
-      reject, ...). Resolves fast when the link is down; a 15s timeout guards a dropped
-      response. One slot - a second save supersedes the first (shouldn't happen: modal-gated). */
-   private editSave(frame: {
-      type: string;
-      payload: Record<string, unknown>;
-   }): Promise<string | null> {
-      return new Promise((resolve) => {
-         if (!this.isLinkLive()) {
-            resolve("Not connected to DAWN - edit not saved.");
-            return;
-         }
-         if (this.pendingDocEdit) {
-            window.clearTimeout(this.pendingDocEdit.timer);
-            this.pendingDocEdit.resolve("Superseded by a newer save.");
-         }
-         const timer = window.setTimeout(() => {
-            if (this.pendingDocEdit?.resolve === resolve) {
-               this.pendingDocEdit = null;
-               resolve("Save timed out.");
-            }
-         }, 15000);
-         this.pendingDocEdit = { resolve, timer };
-         this.send(frame);
-      });
+      return this.libraryFeed.updateDocText(id, text);
    }
 
    /* Binary frame on the MAIN socket: a 1-byte opcode then payload. Only TTS arrives
@@ -4131,7 +3982,7 @@ export class DawnIngest implements Ingest {
       this.sinks.telemetry.setTimezone(tz);
       this.sinks.calendar.setTimezone(tz);
       this.sinks.conversationList.setTimezone(tz);
-      this.requestCalendar();
+      this.calendarFeed.requestCalendar();
    }
 
    musicControl(action: string, params: Record<string, unknown> = {}): void {
@@ -4569,32 +4420,6 @@ export class DawnIngest implements Ingest {
             this.mic.setMuted(false);
          }, MIC_MUTE_COOLDOWN_MS);
       }
-   }
-
-   /* Request the calendar map + today's occurrences (both reads). Called on connect,
-      on the slow interval, and after a debounced calendar_events_changed. */
-   private requestCalendar(): void {
-      const { start, end } = todayWindow(this.userTz);
-      this.send({ type: "calendar_list_my_calendars" });
-      this.send({ type: "calendar_upcoming_events", payload: { start, end } });
-   }
-
-   /* Coalesce a burst of calendar_events_changed pushes into one refetch. */
-   private scheduleCalendarRefetch(): void {
-      window.clearTimeout(this.calendarDebounce);
-      this.calendarDebounce = window.setTimeout(() => this.requestCalendar(), 500);
-   }
-
-   /* Request a page of the document library (list / search / load-more). Records the
-      request kind so the shared doc_library_list_response can be labeled for the panel. */
-   private requestLibrary(
-      opts: { query?: string; offset?: number; append?: boolean; searching?: boolean } = {}
-   ): void {
-      this.pendingLibraryAppend = opts.append === true;
-      this.pendingLibrarySearching = opts.searching === true;
-      const payload: Record<string, unknown> = { limit: LIB_PAGE, offset: opts.offset ?? 0 };
-      if (opts.query) payload.query = opts.query;
-      this.send({ type: "doc_library_list", payload });
    }
 
    /* Open the dedicated dawn-music stream socket and authenticate it with the session
@@ -5803,19 +5628,7 @@ export class DawnIngest implements Ingest {
       this.learnedRetries.clear();
       window.clearTimeout(this.forgetTimer);
       this.forgetTimer = 0;
-      /* Settle any in-flight full-text reads so their promises + timers never dangle across HMR. */
-      for (const pending of this.pendingDocGets.values()) {
-         window.clearTimeout(pending.timer);
-         pending.resolve(null);
-      }
-      this.pendingDocGets.clear();
-      /* Same for an in-flight edit save: clear its 15s timer + resolve so it can't pin this
-         instance across an HMR reload. */
-      if (this.pendingDocEdit) {
-         window.clearTimeout(this.pendingDocEdit.timer);
-         this.pendingDocEdit.resolve("Editor closed.");
-         this.pendingDocEdit = null;
-      }
+      this.libraryFeed.dispose();
       this.tts?.dispose();
       this.music.dispose();
       this.mic.dispose();
@@ -6007,7 +5820,7 @@ export class DawnIngest implements Ingest {
          });
       if (requestType.startsWith("ha_")) this.haFeed.stopPolling();
       if (requestType.startsWith("calendar_")) {
-         window.clearInterval(this.calendarTimer);
+         this.calendarFeed.stopPolling();
          this.sinks.calendar.setUnsupported?.(true);
       }
       /* The Schwab feeds aren't in this DAWN: say so now instead of after the panels' timeout. */
@@ -6039,8 +5852,7 @@ export class DawnIngest implements Ingest {
 
    private stopMetrics(): void {
       this.telemetryFeed.stopPolling();
-      window.clearInterval(this.calendarTimer);
-      window.clearTimeout(this.calendarDebounce);
+      this.calendarFeed.stopPolling();
       this.haFeed.stopPolling();
       this.watchesFeed.stopPolling();
    }
