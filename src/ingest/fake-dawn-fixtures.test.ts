@@ -217,9 +217,9 @@ describe("the answers", () => {
       const frames = answer("jobs_request", {});
       carries(frames[0], ["jobs", "truncated"]);
       /* A stale job, which the snapshot must replace. */
-      c.ing.jobs.set(99, { conversation_id: 99, status: "running" });
+      c.ing.jobsFeed.jobs.set(99, { conversation_id: 99, status: "running" });
       for (const f of frames) c.frame(f);
-      expect(c.ing.jobs.size).toBe(0);
+      expect(c.ing.jobsFeed.jobs.size).toBe(0);
       expect(c.called("notifications", "remove")).toEqual([["jobs"]]);
    });
 

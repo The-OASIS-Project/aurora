@@ -628,7 +628,16 @@ export type SpikeNotice = (
    id: string,
    kind: string,
    summary: string,
-   opts: { tone?: "nominal" | "attention"; hold?: number }
+   opts: {
+      tone?: "nominal" | "attention";
+      hold?: number;
+      detail?: string;
+      persist?: boolean;
+      critical?: boolean;
+      urgent?: boolean;
+      actions?: NoticeAction[];
+      open?: NoticeOpen;
+   }
 ) => void;
 
 export interface Notice {
