@@ -46,7 +46,11 @@ const purify = DOMPurify(window);
    removed too: DOMPurify keeps it by default, but its @import / url() fetch on render, and its
    rules restyle the whole page, not just the reply. So is <template>: the image gate can't see
    inside its contents, so an image there would pass ungated (inert in place, live if anything
-   ever moved it out), and a reply has no use for one. */
+   ever moved it out), and a reply has no use for one. A class or an id is removed as well: with
+   one, a reply could take on Aurora's own styling (a full-screen overlay class covering the app
+   with a fake prompt, saved with the reply so it returns on every load) or a class the app looks
+   for to read its state (a message's "Stopped" mark). Nothing rendered here needs either; the
+   image placeholder's class is added after this. */
 const FORBID_TAGS = [
    "style",
    "link",
@@ -68,6 +72,8 @@ const FORBID_TAGS = [
 ];
 const FORBID_ATTR = [
    "style",
+   "class",
+   "id",
    "srcset",
    "poster",
    "background",
@@ -87,8 +93,6 @@ purify.addHook("afterSanitizeAttributes", (node) => {
    /* A URL only where it's meant to be: href on a link, src on an image (gated below). */
    if (tag !== "a") node.removeAttribute("href");
    if (tag !== "img") node.removeAttribute("src");
-   node.classList.remove("md-img-blocked"); // only gateImages makes those
-   if (!node.classList.length) node.removeAttribute("class");
    /* A reply's image/link to this origin's DAWN API must carry this app's login tag (DAWN's
       per-app logins), or it loads as the WebUI's login. No-op for any other URL. */
    for (const attr of ["src", "href"]) {
