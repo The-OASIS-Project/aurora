@@ -187,3 +187,28 @@ describe("SERVICE_UNAVAILABLE", () => {
       t.ing.stopHeartbeat();
    });
 });
+
+describe("waiting for DAWN to come back", () => {
+   it("retries a dropped link within a few seconds, however long DAWN was gone", () => {
+      const t = setup(down);
+      for (let i = 0; i < 10; i++) t.ing.scheduleMainReconnect(); // ten failed attempts
+      vi.advanceTimersByTime(5000);
+      expect(t.opened()).toBe(1);
+   });
+
+   it("a page load waits about a minute before saying DAWN can't be reached", async () => {
+      const t = setup(down);
+      t.ing.wantConnected = false;
+      await t.ing.tryResume();
+      const waitFor = async (ms: number): Promise<void> => {
+         for (let i = 0; i < ms / 500; i++) {
+            vi.advanceTimersByTime(500);
+            await flush();
+         }
+      };
+      await waitFor(50_000);
+      expect(t.statuses).not.toContain("error");
+      await waitFor(20_000);
+      expect(t.statuses).toContain("error");
+   });
+});
