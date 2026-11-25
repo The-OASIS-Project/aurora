@@ -803,7 +803,7 @@ agent; verified live end to end.
   `CLOUD_PROVIDER_OPENROUTER` enum. **Do NOT read `use_openrouter`** (Aurora never did); the enum is
   the single source of truth for "are we on OpenRouter?"
 
-**What Aurora consumes (MODEL panel, `src/model/`, `src/ingest/dawn-ws.ts`, `src/menu/`):**
+**What Aurora consumes (MODEL panel, `src/model/`, `src/ingest/model-feed.ts`, `src/menu/`):**
 - `openrouter` is a value of `LlmProvider`; an `isLlmProvider()` guard replaced the old silent
   coerce-unknown-provider-to-`claude` in every intake path (get_config, llm_state_update,
   set_session_llm_response echo, load_conversation). An unknown provider is rejected loudly, never
@@ -1242,7 +1242,7 @@ because its key exists. A conversation with no pick of its own follows the dawn.
 - **One message per pick:** `set_session_llm` `{type:"cloud", provider, model}` or `{type:"local",
   model}`, always `type` with a model (a model alone moves the session only when a dawn.toml cloud
   list names it exactly). A provider change clears the model, so the new provider's model rides in
-  the same message (`reconcileModel(pick)` in `dawn-ws.ts`). Choosing Cloud means the provider
+  the same message (`reconcileModel(pick)` in `model-feed.ts`). Choosing Cloud means the provider
   dawn.toml names (`config.llm.cloud.provider`); with none named, the panel says "Pick a provider"
   and nothing is sent until one is. An older DAWN without that field keeps the last provider. A
   model rides with the pick only when it's in the picked list (or llama.cpp's loaded one): with no
