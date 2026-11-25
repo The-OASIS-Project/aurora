@@ -84,6 +84,9 @@ import { WatchesFeed } from "./watches-feed.ts";
 import { StocksFeed } from "./stocks-feed.ts";
 import { CalendarFeed } from "./calendar-feed.ts";
 import { LibraryFeed } from "./library-feed.ts";
+import { AlarmsFeed } from "./alarms-feed.ts";
+import { JobsFeed } from "./jobs-feed.ts";
+import { AttentionFeed } from "./attention-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 import { TelemetryFeed } from "./telemetry-feed.ts";
@@ -231,12 +234,6 @@ const STOP_DRAIN_MAX_MS = 180_000;
 const TURN_WAIT_STOP_AFTER_MS = 5000;
 const TURN_WAIT_STOP_AFTER_MAX_MS = 600_000;
 
-interface JobRow {
-   conversation_id?: number;
-   title?: string;
-   status?: string;
-}
-
 type StatusHandler = (status: LinkStatus, detail?: string) => void;
 
 /* Persisted so a reload/reconnect RESUMES the same DAWN session instead of
@@ -354,12 +351,6 @@ export class DawnIngest implements Ingest {
    private readonly typedEchoes: Array<{ text: string; at: number; ref?: string }> = [];
    /* When a TURN_QUEUE_FULL arrived (its trailing PROCESSING_ERROR is swallowed). */
    private queueFullAt = 0;
-   private readonly jobs = new Map<number, { title: string; running: boolean }>();
-   /* Event ids of currently-ringing ALARMS (not reminders/timers, which DAWN auto-dismisses).
-      Drives the scheduler_action{dismiss} on user close and the shared ringing-tone loop
-      (loop runs while the set is non-empty). Keyed per event so concurrent alarms + a
-      reminder don't clobber each other's cards (each notice is `scheduler-<eventId>`). */
-   private readonly ringingAlarms = new Set<number>();
    /* Client-side chime/loop for scheduled events (the daemon tone is daemon-local). Initial
       enabled state from the persisted "Alarm sounds" preference; the System-menu toggle flips it. */
    private readonly alarmChime = new AlarmChime(localStorage.getItem(ALARM_SOUNDS_KEY) !== "false");
@@ -368,6 +359,21 @@ export class DawnIngest implements Ingest {
       (m) => this.send(m),
       () => this.sinks.notifications,
       this.alarmChime
+   );
+   /* Notices: ringing alarms, background jobs, SAGE attention. */
+   private readonly alarmsFeed = new AlarmsFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      (id, kind, summary, opts) => this.spikeNotice(id, kind, summary, opts),
+      this.alarmChime
+   );
+   private readonly jobsFeed = new JobsFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      (id, kind, summary, opts) => this.spikeNotice(id, kind, summary, opts)
+   );
+   private readonly attentionFeed = new AttentionFeed((id, kind, summary, opts) =>
+      this.spikeNotice(id, kind, summary, opts)
    );
    /* The Calendar card's and the Library panel's feeds. */
    private readonly calendarFeed = new CalendarFeed(
@@ -1136,8 +1142,7 @@ export class DawnIngest implements Ingest {
             belongs to the dead connection, and if the alarm is dismissed/times-out during the
             outage that terminal frame is lost (DAWN won't re-broadcast it on reconnect), so it
             would otherwise beep forever. The persistent card carries the state across. */
-         this.alarmChime.stopLoop();
-         this.ringingAlarms.clear();
+         this.alarmsFeed.linkDown();
          this.phone.reset(); // a call's frames can't arrive on a dead link; a reconnect re-asks
          /* No turn survives the link for this view: Stop goes away until one runs again, and a
             waiting turn's frames aren't re-sent after a reconnect (DAWN keeps it; its own frames
@@ -2905,76 +2910,16 @@ export class DawnIngest implements Ingest {
             this.watchesFeed.onFrame(type, p);
             break;
 
-         case "jobs_snapshot": {
-            /* The complete active set - replace ours wholesale. */
-            this.jobs.clear();
-            for (const j of (p.jobs ?? []) as JobRow[]) this.trackJob(j);
-            this.renderJobs();
-            break;
-         }
-
-         case "job_update": {
-            /* One job's transition. Track by id, drop on any terminal status. A
-               newly-appearing active job also fires a brief toast notice, separate from
-               the sticky jobs card (which just reflects the active set). */
-            const job = (p.job ?? {}) as JobRow;
-            const wasActive = job.conversation_id != null && this.jobs.has(job.conversation_id);
-            this.trackJob(job);
-            const nowActive = job.conversation_id != null && this.jobs.has(job.conversation_id);
-            if (!wasActive && nowActive) {
-               this.spikeNotice(
-                  "job-notice",
-                  "jobs",
-                  `Started: ${job.title || "background job"}`,
-                  {}
-               );
-            }
-            this.renderJobs();
-            break;
-         }
-
+         case "jobs_snapshot":
+         case "job_update":
          case "jobs_invalidate":
-            this.send({ type: "jobs_request" });
-            break;
-
          case "job_notification":
-            /* A job finished: spike a transient notice that recedes on its own. */
-            this.spikeNotice("job-notice", "jobs", str(p.text, "Background job complete"), {});
+            this.jobsFeed.onFrame(type, p);
             break;
 
-         case "attention_alert": {
-            /* SAGE proactive attention - the signature ambient spike. level=alert
-               needs the user (warm + claims the front); level=ambient is an FYI. */
-            const alert = str(p.level, "ambient") === "alert";
-            const summary = str(p.summary);
-            /* Key the notice by its text: distinct alerts get distinct cards (two watches firing
-               close together stack instead of one overwriting the other), while an identical
-               re-fire coalesces onto the same card and re-spikes - so one flapping watch can't
-               crowd the rest out. Content-stable, so it also survives a reload without colliding
-               with a per-session counter (which would reset and inherit stale saved positions). */
-            this.spikeNotice(`attention:${summary}`, "attention", summary, {
-               tone: alert ? "attention" : "nominal",
-               hold: alert ? 9 : 6,
-               persist: alert, // a "needs you" alert stays until docked or closed; an FYI fades
-               urgent: alert // a needs-you alert peeks the standby screensaver; an ambient FYI does not
-               /* Spawn centered, in the reactor's full-height dead strip: docked panels are kept
-                  in the left/right columns flanking it, so a centered notice avoids them. */
-            });
-            break;
-         }
-
+         case "attention_alert":
          case "silent_observation":
-            /* A quieter noticed-something FYI, categorized (calendar/email/…). Keyed by
-               category+note so distinct observations stack and identical ones coalesce (see
-               attention_alert). */
-            {
-               const category = str(p.category, "note");
-               const note = str(p.note);
-               this.spikeNotice(`observation:${category}:${note}`, category, note, {
-                  hold: 5
-                  /* Centered in the dead strip too (see attention_alert), just lower. */
-               });
-            }
+            this.attentionFeed.onFrame(type, p);
             break;
 
          case "context_injection": {
@@ -3013,87 +2958,9 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "scheduler_notification": {
-            /* Alarms/timers/reminders. One movable card per event (`scheduler-<id>`) so
-               concurrent events don't clobber each other. Behaviour mirrors DAWN's own WebUI
-               (www/js/ui/scheduler.js): a client chime on every live notification (skipped
-               for a `missed` replay); a ringing ALARM additionally loops a tone + is tracked
-               for the dismiss->scheduler_action path. Reminders/timers auto-dismiss server-
-               side after their chime, so they are NOT tracked and their auto-dismiss frame is
-               ignored below (else the card would flash and vanish before it can be read). */
-            const status = str(p.status);
-            const message = str(p.message);
-            const eventType = str(p.event_type, "alarm");
-            const eventId = Number(p.event_id ?? 0);
-            const missed = p.missed === true;
-            const noticeId = `scheduler-${eventId}`;
-            /* A morning briefing (event_type "briefing") creates a persistent conversation and
-               carries its id here, so its card is click-to-open. Other scheduler events (alarms/
-               timers/reminders) omit it -> a non-clickable card. Feature-detected: an older
-               daemon or a briefing whose conversation failed to create won't carry it. */
-            const convId = Number(p.conversation_id ?? 0);
-            const wasRinging = this.ringingAlarms.has(eventId);
-            if (status === "ringing" || status === "fired") {
-               /* A live ringing alarm is `critical` so the notification layer's persist-cap
-                  can't silently evict its card - that would leave the loop beeping with no
-                  on-screen control. Reminders/timers and missed replays are ordinary. */
-               const ringingAlarm = eventType === "alarm" && status === "ringing" && !missed;
-               this.spikeNotice(noticeId, eventType, str(p.name, "Alarm"), {
-                  tone: "attention",
-                  hold: 10,
-                  detail: message,
-                  persist: true, // stays readable until dismissed or docked (WebUI parity)
-                  critical: ringingAlarm,
-                  /* A ringing alarm gets Snooze (with a duration dropdown, default 10 = DAWN's
-                     default_snooze_minutes) + Dismiss; both silence the tone. Reminders/timers
-                     keep the plain close (nothing to stop). */
-                  actions: ringingAlarm
-                     ? [
-                          {
-                             id: "snooze",
-                             label: "Snooze",
-                             options: [
-                                { value: "1", label: "1 min" },
-                                { value: "5", label: "5 min" },
-                                { value: "10", label: "10 min" },
-                                { value: "30", label: "30 min" }
-                             ],
-                             defaultValue: "10"
-                          },
-                          { id: "dismiss", label: "Dismiss" }
-                       ]
-                     : undefined,
-                  open: convId > 0 ? { kind: "conversation", id: convId } : undefined,
-                  /* A live (non-missed) fire wakes the standby screensaver (peek): alarms,
-                     timers, reminders, and briefings. A `missed` reconnect replay does not. */
-                  urgent: !missed
-               });
-               /* A live ringing alarm's sound IS the looping tone (started below) - no separate
-                  one-shot, which would double over the loop's first beat. A non-alarm live
-                  notification gets the one ascending chime (skip a missed replay). Only a live
-                  ringing alarm drives the loop AND is tracked for the dismiss->scheduler_action
-                  path; a missed replay is neither, so it leaves no phantom set entry that would
-                  keep the loop beeping. */
-               if (ringingAlarm) {
-                  this.ringingAlarms.add(eventId);
-                  this.alarmChime.startLoop(); // idempotent on a re-broadcast
-               } else if (!missed && !wasRinging) {
-                  this.alarmChime.playChime();
-               }
-            } else {
-               /* Non-ringing (dismissed/cancelled/snoozed/timed_out). A ringing alarm's loop
-                  stops on ANY non-ringing status. Then: IGNORE a server AUTO-dismiss/timeout
-                  (both it and a user dismiss carry status "dismissed", so key on the message
-                  prefix / "timed_out" like WebUI, NOT the status) so it can't wipe the card;
-                  a real user/other-client dismiss removes it. */
-               if (this.ringingAlarms.delete(eventId) && this.ringingAlarms.size === 0) {
-                  this.alarmChime.stopLoop();
-               }
-               const isAuto = status === "timed_out" || message.startsWith("Auto-");
-               if (!isAuto) this.sinks.notifications.remove(noticeId);
-            }
+         case "scheduler_notification":
+            this.alarmsFeed.onFrame(type, p);
             break;
-         }
 
          case "metrics_update":
          case "context":
@@ -5464,17 +5331,9 @@ export class DawnIngest implements Ingest {
       if (i >= 0) this.typedEchoes.splice(i, 1);
    }
 
-   /* A dismissed notice. For a ringing ALARM (`scheduler-<id>`), stop the local ringing loop
-      and tell DAWN to actually silence it (scheduler_action{dismiss}). Reminders/timers are
-      not tracked (DAWN already auto-dismissed them server-side), so their close is local-only.
-      Other notices are cleared locally by the layer. */
+   /* A dismissed notice: a ringing alarm's close silences it at DAWN (alarms-feed.ts). */
    dismiss(id: string): void {
-      if (!id.startsWith("scheduler-")) return;
-      const eventId = Number(id.slice("scheduler-".length));
-      if (this.ringingAlarms.delete(eventId)) {
-         if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
-         this.send({ type: "scheduler_action", payload: { action: "dismiss", event_id: eventId } });
-      }
+      this.alarmsFeed.dismiss(id);
    }
 
    /* A named action on a notice's button. For a ringing alarm's Snooze/Dismiss: stop the local
@@ -5493,19 +5352,7 @@ export class DawnIngest implements Ingest {
          this.phone.action(action); // Answer / Reject / Hang Up / Minimize / Expand
          return;
       }
-      if (!id.startsWith("scheduler-")) return;
-      if (action !== "snooze" && action !== "dismiss") return;
-      const eventId = Number(id.slice("scheduler-".length));
-      if (!this.ringingAlarms.delete(eventId)) return;
-      if (this.ringingAlarms.size === 0) this.alarmChime.stopLoop();
-      const payload: Record<string, unknown> = { action, event_id: eventId };
-      /* Snooze duration from the dropdown (DAWN accepts 1-120; omit to use its default). */
-      if (action === "snooze" && value) {
-         const mins = Number(value);
-         if (Number.isFinite(mins) && mins >= 1 && mins <= 120)
-            payload.snooze_minutes = Math.round(mins);
-      }
-      this.send({ type: "scheduler_action", payload });
+      this.alarmsFeed.noticeAction(id, action, value);
    }
 
    /* Whether any alarm is currently RINGING - the standby screensaver's "don't sleep while an
@@ -5513,7 +5360,7 @@ export class DawnIngest implements Ingest {
       server-timed-out / auto-dismissed alarm (whose card lingers) correctly reads as not
       ringing, unlike the notice's `critical` flag. */
    isAlarmRinging(): boolean {
-      return this.ringingAlarms.size > 0 || this.phone.isRinging(); // a ringing phone keeps the display awake too
+      return this.alarmsFeed.isRinging() || this.phone.isRinging(); // a ringing phone keeps the display awake too
    }
 
    /* Register a callback fired at a wake-word match (the always-on VAD entering "recording"),
@@ -5572,8 +5419,7 @@ export class DawnIngest implements Ingest {
       this.stopMetrics();
       this.stopHeartbeat();
       this.closeMusicStream();
-      this.alarmChime.stopLoop();
-      this.ringingAlarms.clear();
+      this.alarmsFeed.linkDown();
       this.phone.reset();
       this.tts?.stop();
       window.clearTimeout(this.micMuteCooldown);
@@ -5890,41 +5736,6 @@ export class DawnIngest implements Ingest {
          actions: opts.actions,
          hold: opts.hold,
          open: opts.open
-      });
-   }
-
-   /* Track a job in the active set. `queued`/`running` are active; everything else
-      is terminal, so drop it (set membership, never +/-1, so dup/out-of-order
-      frames converge). */
-   private trackJob(j: JobRow): void {
-      if (j.conversation_id == null) return;
-      const running = j.status === "queued" || j.status === "running";
-      if (running)
-         this.jobs.set(j.conversation_id, {
-            title: j.title || "background job",
-            running: j.status === "running"
-         });
-      else this.jobs.delete(j.conversation_id);
-   }
-
-   /* Reflect the active set into the jobs card: a sticky, movable status widget listing
-      running jobs. It snaps like the instruments (central dead zone, side columns) and,
-      being sticky, is always full-presence - never a fading toast. When none are active
-      the card leaves the dashboard entirely. */
-   private renderJobs(): void {
-      const count = this.jobs.size;
-      if (count === 0) {
-         this.sinks.notifications.remove("jobs");
-         return;
-      }
-      const items = [...this.jobs.values()].map((j) => `${j.running ? "▹" : "·"} ${j.title}`);
-      this.sinks.notifications.notify({
-         id: "jobs",
-         kind: "jobs",
-         summary: `${count} active job${count > 1 ? "s" : ""}`,
-         items,
-         sticky: true
-         // defaults to the right region (its old rail side); persists once moved
       });
    }
 
