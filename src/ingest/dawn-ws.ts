@@ -29,7 +29,6 @@ import { LocalUserPrefs, type UserPrefs } from "./prefs.ts";
 import type {
    ActivityStatus,
    LinkStatus,
-   ConversationMeta,
    HAServiceCall,
    Ingest,
    IngestSinks,
@@ -74,6 +73,7 @@ import { JobsFeed } from "./jobs-feed.ts";
 import { AttentionFeed } from "./attention-feed.ts";
 import { MusicFeed } from "./music-feed.ts";
 import { ModelFeed } from "./model-feed.ts";
+import { CONV_PAGE, ConversationListFeed } from "./conversation-list-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
 import { TelemetryFeed } from "./telemetry-feed.ts";
@@ -139,7 +139,6 @@ const PING_INTERVAL_MS = 10000; // heartbeat tick cadence (well under DAWN's 180
 const PONG_TIMEOUT_MS = 6000; // a ping unanswered this long counts as one miss
 const MAX_MISSED_PONGS = 2; // consecutive misses -> the link is dead, force a reconnect
 const MAX_UNSUPPORTED_PROBES = 3; // no pong EVER -> assume an older DAWN, stop probing (no false dead)
-const CONV_PAGE = 50; // conversation-picker page size (must match the component's PAGE)
 /* Forget-what-was-learned (conversation_learned / forget_conversation_memories). DAWN counts
    and forgets one request per user at a time and answers `busy` meanwhile: re-ask the count
    every 5s, up to 12 times (DAWN's own client's limits). A forget waits up to ~120s for an
@@ -160,7 +159,6 @@ const FOREIGN_GATED_FRAMES = new Set([
    "context_injection",
    "context_citations"
 ]);
-const CONV_LIST_DEBOUNCE_MS = 700; // coalesce a turn's >=2 bumped conversation_list_changed frames into one refresh
 const CONV_KEY = "dawn.hero.convId"; // the conversation to reopen on next load (resume where you left off)
 const REANCHOR_FALLBACK_MS = 3000; // no set_active_conversation_response in this long -> older DAWN, fall back to load_conversation
 
@@ -246,10 +244,12 @@ export class DawnIngest implements Ingest {
    private missedPongs = 0; // consecutive unanswered pings, once pong is known-supported
    private pongSupported = false; // DAWN answered a ping at least once (the watchdog's feature gate)
    private unsupportedProbes = 0; // unanswered pings before any pong (an older DAWN that ignores ping)
-   private conversationsLoading = false; // single-flight latch: one list/search request at a time
-   private pendingListAppend = false; // the in-flight list request is a load-more (append), not a replace
-   private pendingListRefresh = false; // a page-0 refresh queued behind an in-flight request (drained on settle). Invariant: pendingListRefresh => conversationsLoading
-   private convListTimer = 0; // debounce for the live conversation_list_changed refresh (coalesce a turn's >=2 bumped frames)
+   /* The conversation picker's list: conversation-list-feed.ts. */
+   private readonly conversationListFeed = new ConversationListFeed(
+      (msg) => this.send(msg),
+      () => this.sinks,
+      () => this.convId
+   );
    private pendingDeleteId = 0; // a conversation delete awaiting its (id-less) response
    private convId = 0; // the active conversation id (turns are tagged to it; DAWN persists them)
    /* Texts submitted from the composer, awaiting DAWN's user-transcript echo. DAWN echoes
@@ -922,8 +922,7 @@ export class DawnIngest implements Ingest {
             most recent conversation into the session, so continuing the chat continues
             it). Jobs are hidden from this list server-side. limit matches the picker's
             page size so pagination math starts on a full page. */
-         this.conversationsLoading = true;
-         this.pendingListAppend = false;
+         this.conversationListFeed.markBootList();
          ws.send(
             JSON.stringify({ type: "list_conversations", payload: { limit: CONV_PAGE, offset: 0 } })
          );
@@ -1015,11 +1014,7 @@ export class DawnIngest implements Ingest {
             refresh + its debounce: the reconnect boot list (onopen list_conversations) is the
             loss-recovery path (the frame is fire-and-forget, never replayed), so a stale
             pending refetch would just be redundant. */
-         this.conversationsLoading = false;
-         this.pendingListAppend = false;
-         this.pendingListRefresh = false;
-         window.clearTimeout(this.convListTimer);
-         this.convListTimer = 0;
+         this.conversationListFeed.linkDown();
          this.sinks.reactor.setState("idle");
          /* Superseded: another connection deliberately took over this session server-side. Do
             NOT auto-reconnect - re-stealing it would restart the very fight the eviction exists
@@ -1755,18 +1750,7 @@ export class DawnIngest implements Ingest {
             break;
 
          case "list_conversations_response": {
-            const raw = (p.conversations ?? []) as Array<Record<string, unknown>>;
-            const append = this.pendingListAppend;
-            this.pendingListAppend = false;
-            const total = typeof p.total === "number" ? p.total : undefined;
-            this.sinks.conversationList.setList(
-               raw.map((c) => this.toMeta(c)),
-               {
-                  total,
-                  append,
-                  searching: false
-               }
-            );
+            const append = this.conversationListFeed.onList(p);
             /* First list on connect: resume the conversation the user last had open,
                persisted across reloads (see CONV_KEY). Reflect it as the active row and
                load it into the session + transcript. A stale/deleted stored id fails the
@@ -1785,22 +1769,13 @@ export class DawnIngest implements Ingest {
             }
             /* Drain a refresh queued while this list was in flight AFTER the boot
                load_conversation is issued, so a redundant refetch never races it. */
-            this.settleListRequest();
+            this.conversationListFeed.settleListRequest();
             break;
          }
 
-         case "search_conversations_response": {
-            this.settleListRequest();
-            const raw = (p.conversations ?? []) as Array<Record<string, unknown>>;
-            this.sinks.conversationList.setList(
-               raw.map((c) => this.toMeta(c)),
-               {
-                  append: false,
-                  searching: true
-               }
-            );
+         case "search_conversations_response":
+            this.conversationListFeed.onFrame(type, p);
             break;
-         }
 
          case "load_conversation_response": {
             const load = this.takeOwed(this.convLoadsOwed, p);
@@ -1844,23 +1819,8 @@ export class DawnIngest implements Ingest {
          }
 
          case "rename_conversation_response":
-            /* No conversation_id echo: the panel already patched optimistically. An older DAWN
-               sends no conversation_renamed for it (DAWN #120 does, before or after this reply,
-               carrying the stored title, so the order doesn't matter). Reconcile on failure by
-               refetching the server's truth; on success a debounced refresh closes the window
-               where a list refetch already in flight (from a concurrent remote change) would
-               otherwise land after and revert the optimistic patch. */
-            if ((p as { success?: boolean }).success === false) this.requestConversations();
-            else this.scheduleListRefresh();
-            break;
-
          case "set_pinned_response":
-            /* Echoes conversation_id + is_pinned; the panel patched optimistically on the
-               click, so accept the success and only refetch to correct a failure. On success a
-               debounced refresh reconciles against a concurrent in-flight list refetch (same
-               revert window as rename). */
-            if ((p as { success?: boolean }).success === false) this.requestConversations();
-            else this.scheduleListRefresh();
+            this.conversationListFeed.onFrame(type, p);
             break;
 
          case "delete_memory_fact_response":
@@ -1895,7 +1855,7 @@ export class DawnIngest implements Ingest {
                break;
             }
             if (forPending && pp.is_private === true) this.settlePrivateCreate(true);
-            this.scheduleListRefresh();
+            this.conversationListFeed.scheduleListRefresh();
             break;
          }
 
@@ -2005,7 +1965,7 @@ export class DawnIngest implements Ingest {
                   hold: 5,
                   tone: "attention"
                });
-               this.requestConversations(); // restore the row the panel optimistically removed
+               this.conversationListFeed.requestConversations(); // restore the row the panel optimistically removed
                this.pendingDeleteId = 0;
                break;
             }
@@ -2025,7 +1985,7 @@ export class DawnIngest implements Ingest {
             this.pendingDeleteId = 0;
             /* Delete emits no conversation_list_changed; a debounced refresh reconciles the
                list (and closes the same optimistic-revert window as rename/pin). */
-            this.scheduleListRefresh();
+            this.conversationListFeed.scheduleListRefresh();
             break;
          }
 
@@ -2055,31 +2015,16 @@ export class DawnIngest implements Ingest {
                   inbound SMS/Telegram) is not our own turn, so no terminal stream_end fires and
                   its `conversation_list_changed {bumped}` is self-echo-filtered - without this the
                   active row's time/order would stay stale. Coalesces with the debounce. */
-               this.scheduleListRefresh();
+               this.conversationListFeed.scheduleListRefresh();
             } else {
                this.sinks.conversationList.markAppended(cid);
             }
             break;
          }
 
-         case "conversation_list_changed": {
-            /* A conversation was created or bumped (got a message) by ANY interface - another
-               tab, voice, messaging, a background job/briefing. Refresh the picker list so the
-               new row / new order shows without a click. Debounced (a turn emits >=2 bumped
-               frames) and latch-safe (requestConversations queues rather than racing). This is
-               list membership/order only; unread-marking stays on conversation_messages_appended.
-               Self-echo: our OWN active conversation's `bumped` is already covered by the
-               own-turn refresh at terminal stream_end, so drop it here (else every token-thread
-               bump refetches). `created` is NOT filtered on convId - on a fresh chat convId is
-               still 0 when DAWN emits `created`, so it could never match; new_conversation_response
-               cancels this debounce instead, collapsing the two paths into one fetch. */
-            const cid = Number((p as { conversation_id?: number }).conversation_id ?? 0);
-            const created = (p as { reason?: string }).reason === "created";
-            if (!Number.isInteger(cid) || cid <= 0) break;
-            if (!created && cid === this.convId) break; // own active turn -> handled at stream_end
-            this.scheduleListRefresh();
+         case "conversation_list_changed":
+            this.conversationListFeed.onFrame(type, p);
             break;
-         }
 
          case "conversation_reset":
             /* A tool (reset_conversation / "start a new conversation") cleared the
@@ -2127,7 +2072,7 @@ export class DawnIngest implements Ingest {
                the view. */
             if (this.discardNextCreate && !serverInitiated) {
                this.discardNextCreate = false;
-               this.scheduleListRefresh();
+               this.conversationListFeed.scheduleListRefresh();
                break;
             }
             this.sinks.context.clear(); // fresh conversation: no injected context yet
@@ -2149,9 +2094,7 @@ export class DawnIngest implements Ingest {
                   response, with convId still 0 so it isn't self-filtered). Cancel that debounced
                   refresh and do the one immediate refetch here, so a fresh chat's first message
                   triggers exactly one list_conversations, not two. */
-               window.clearTimeout(this.convListTimer);
-               this.convListTimer = 0;
-               this.requestConversations(); // the new row now exists - refresh the picker list
+               this.conversationListFeed.refreshNow(); // the new row now exists - refresh the picker list
                if (!serverInitiated && this.isPrivate) {
                   /* Replay a privacy toggle made while convId was 0 (setPrivate can't send
                      without an id): the new conversation inherits the pending intent. Skipped for
@@ -2554,7 +2497,7 @@ export class DawnIngest implements Ingest {
                      this.sinks.conversation.linkStream(conv, streamId, this.sessionId);
                      if (conv !== this.convId) this.stoppedSave = { conv, streamId };
                   }
-                  this.scheduleListRefresh(); // the picker's row gained a reply
+                  this.conversationListFeed.scheduleListRefresh(); // the picker's row gained a reply
                }
                break;
             }
@@ -2602,7 +2545,7 @@ export class DawnIngest implements Ingest {
                   count/time/position would stay stale until some other interface changed something.
                   Debounced + coalesced with the terminal end (one fetch per turn, not per tool
                   iteration), and invisible while the picker is collapsed. */
-               this.scheduleListRefresh();
+               this.conversationListFeed.scheduleListRefresh();
             }
             break;
          }
@@ -2909,68 +2852,9 @@ export class DawnIngest implements Ingest {
       this.setActiveTitle(""); // reset the HUD readout to the fresh-chat placeholder (was lingering the old title)
    }
 
-   /* Map DAWN's conversation object (list/search) into the picker's ConversationMeta.
-      ids are DB AUTOINCREMENT ints, so Number() is exact. */
-   private toMeta(c: Record<string, unknown>): ConversationMeta {
-      return {
-         id: Number(c.id ?? 0),
-         title: typeof c.title === "string" ? c.title : "",
-         createdAt: Number(c.created_at ?? 0),
-         updatedAt: Number(c.updated_at ?? 0),
-         messageCount: Number(c.message_count ?? 0),
-         isArchived: Boolean(c.is_archived),
-         isPrivate: Boolean(c.is_private),
-         isPinned: Boolean(c.is_pinned),
-         origin: typeof c.origin === "string" ? c.origin : "webui"
-      };
-   }
-
-   /* Refetch the first page of the list (a replace), reconciling the picker after a
-      mutation whose response can't be patched in place (rename/delete failure, a new row) or a
-      live conversation_list_changed. Queue-don't-drop: if a list/search request is already in
-      flight, mark a pending refresh and let settleListRequest() re-fire it on the response,
-      rather than sending a second page-0 that races the in-flight one (which could be consumed
-      as an append and duplicate/replace the list). All callers inherit this safety. */
-   private requestConversations(): void {
-      if (this.conversationsLoading) {
-         this.pendingListRefresh = true; // invariant: only set while loading; drained on settle
-         return;
-      }
-      this.pendingListAppend = false;
-      this.conversationsLoading = true;
-      this.send({ type: "list_conversations", payload: { limit: CONV_PAGE, offset: 0 } });
-   }
-
-   /* Clear the single-flight latch on a list/search response, then drain a refresh that was
-      queued while it was in flight. Called from BOTH list and search response handlers so a
-      queued refresh is never stranded behind a search. */
-   private settleListRequest(): void {
-      this.conversationsLoading = false;
-      if (this.pendingListRefresh) {
-         this.pendingListRefresh = false;
-         this.requestConversations();
-      }
-   }
-
-   /* Debounced page-0 refresh for the live conversation_list_changed frame (and the own-turn /
-      mutation-success reconciles). Coalesces a turn's >=2 bumped frames into one refetch. */
-   private scheduleListRefresh(): void {
-      window.clearTimeout(this.convListTimer);
-      this.convListTimer = window.setTimeout(() => {
-         this.convListTimer = 0;
-         this.requestConversations();
-      }, CONV_LIST_DEBOUNCE_MS);
-   }
-
-   /* --- Conversation picker (Ingest) -------------------------------------- */
+   /* --- Conversation picker (Ingest): see conversation-list-feed.ts. */
    listConversations(opts: { limit: number; offset: number }): void {
-      if (this.conversationsLoading) return; // one list/search request in flight at a time
-      this.pendingListAppend = opts.offset > 0;
-      this.conversationsLoading = true;
-      this.send({
-         type: "list_conversations",
-         payload: { limit: opts.limit, offset: opts.offset }
-      });
+      this.conversationListFeed.listConversations(opts);
    }
 
    searchConversations(
@@ -2978,17 +2862,7 @@ export class DawnIngest implements Ingest {
       content: boolean,
       opts?: { limit?: number; offset?: number }
    ): void {
-      this.conversationsLoading = true;
-      this.pendingListAppend = false;
-      this.send({
-         type: "search_conversations",
-         payload: {
-            query,
-            search_content: content,
-            limit: opts?.limit ?? CONV_PAGE,
-            offset: opts?.offset ?? 0
-         }
-      });
+      this.conversationListFeed.searchConversations(query, content, opts);
    }
 
    loadConversation(id: number): void {
@@ -3061,12 +2935,7 @@ export class DawnIngest implements Ingest {
    }
 
    renameConversation(id: number, title: string): void {
-      if (id > 0 && title.trim()) {
-         this.send({ type: "rename_conversation", payload: { conversation_id: id, title } });
-         /* The Learned list follows renames from conversation_renamed alone: only a DAWN that
-            titles its batches (#120) shows one, and that DAWN sends the frame for every rename
-            (a refused one sends none, so nothing wrong is shown). */
-      }
+      this.conversationListFeed.renameConversation(id, title);
    }
 
    deleteConversation(id: number): void {
@@ -3079,8 +2948,7 @@ export class DawnIngest implements Ingest {
    }
 
    setPinned(id: number, pinned: boolean): void {
-      if (id > 0)
-         this.send({ type: "set_pinned", payload: { conversation_id: id, is_pinned: pinned } });
+      this.conversationListFeed.setPinned(id, pinned);
    }
 
    /* --- The Learned list (memory_batches): see memory-feed.ts. */
@@ -4214,9 +4082,7 @@ export class DawnIngest implements Ingest {
          connection, so there is nothing to salvage. Reset the button to idle. */
       this.mic.stop();
       this.emitMicState("idle");
-      window.clearTimeout(this.convListTimer); // no live picker refresh should fire post-teardown
-      this.convListTimer = 0;
-      this.pendingListRefresh = false;
+      this.conversationListFeed.cancelRefresh(); // no live picker refresh should fire post-teardown
       this.ws?.close();
       this.ws = null;
       if (!silent) this.emit("disconnected");
