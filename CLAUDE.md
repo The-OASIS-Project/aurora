@@ -345,10 +345,10 @@ stub-only - kept as the render seam and the extension point for future store-bac
   **dedicated `dawn-music` socket is the SOLE music transport** (port main+1, subprotocol
   `dawn-music`, `{type:auth,token}` handshake with the session token): DAWN removed the
   legacy main-socket music path, so if this socket never attaches there is no audio at
-  all (not a silent degrade) - `DawnIngest` surfaces "Music stream unavailable" after it
+  all (not a silent degrade) - the music feed (`src/ingest/music-feed.ts`) surfaces "Music stream unavailable" after it
   exhausts retries, and a later `music_control` re-arms them. Each frame still carries the
   `0x20` opcode there: the daemon prepends `WS_BIN_MUSIC_DATA`, so the payload is
-  `[0x20][uint16-LE len][opus]` and `DawnIngest` MUST strip the leading opcode byte before
+  `[0x20][uint16-LE len][opus]` and the music feed MUST strip the leading opcode byte before
   handing `[len][opus]` to the decoder (feeding the opcode into the length parser
   misframes every packet -> WebCodecs "Decoding error", silent playback). In dev it is
   proxied at **`/music-ws`** - NOT `/ws-music`, which the broader `/ws` proxy prefix would
@@ -366,7 +366,7 @@ stub-only - kept as the render seam and the extension point for future store-bac
   (the next track, or the natural end-of-queue stop, also tagged) is HELD for the buffered
   depth so the title/stop lands when the audio does (`src/ingest/music-hold.ts`; a second auto
   state replaces the held one, any other state lands it first; Next/seek/Pause have rules in
-  `musicControl`). `loading:true` (Plex fetch) means no audio meanwhile, and the music-socket
+  `music-feed.ts` `musicControl`). `loading:true` (Plex fetch) means no audio meanwhile, and the music-socket
   watch (`music-watch.ts`) must not expect frames then or after Aurora sends a track change.
 - **Music `volume` is server-stored only.** `music_control volume` sets a value DAWN
   echoes in `music_state` but never applies to the audio, so real gain/mute is a

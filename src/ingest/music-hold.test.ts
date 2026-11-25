@@ -26,7 +26,7 @@ function setup(bufferedMs = 2000) {
    const shown: MusicState[] = [];
    const positions: number[] = [];
    const sent: Array<Record<string, unknown>> = [];
-   ing.music = player;
+   ing.musicFeed.music = player;
    ing.sinks = {
       music: {
          setState: (s: MusicState) => shown.push(s),
@@ -35,7 +35,7 @@ function setup(bufferedMs = 2000) {
       }
    };
    ing.ws = { readyState: WebSocket.OPEN, send: (m: string) => sent.push(JSON.parse(m)) };
-   ing.musicEnabled = false; // no music socket in these tests
+   ing.musicFeed.musicEnabled = false; // no music socket in these tests
    const frame = (type: string, payload: Record<string, unknown>): void =>
       ing.onFrame(JSON.stringify({ type, payload }));
    const track = (n: number) => ({
@@ -221,7 +221,7 @@ describe("end-of-track music_state hold", () => {
       t.state(1);
       t.state(2, { advance: "auto" });
       t.ing.musicControl("seek", { position_sec: 30 });
-      expect(t.ing.musicWatch.playing).toBe(false);
+      expect(t.ing.musicFeed.musicWatch.playing).toBe(false);
    });
 
    it("Next on a held end-of-queue stop stops here and sends nothing", () => {
@@ -254,7 +254,7 @@ describe("end-of-track music_state hold", () => {
       t.state(1);
       t.state(2, { advance: "auto", loading: true });
       expect(t.last().loading).toBe(true);
-      expect(t.ing.musicWatch.playing).toBe(false);
+      expect(t.ing.musicFeed.musicWatch.playing).toBe(false);
    });
 
    it("Previous on a held end-of-queue stop steps back from the heard track", () => {
@@ -314,15 +314,15 @@ describe("a track the shared queue no longer holds (queue_index -1)", () => {
       const t = setup();
       t.state(1);
       t.ing.musicControl("previous");
-      expect(t.ing.musicWatch.playing).toBe(false);
+      expect(t.ing.musicFeed.musicWatch.playing).toBe(false);
       t.frame("music_error", { code: "NOTHING_EARLIER", message: "Nothing earlier" });
-      expect(t.ing.musicWatch.playing).toBe(true);
+      expect(t.ing.musicFeed.musicWatch.playing).toBe(true);
    });
 });
 
 describe("after a reconnect", () => {
    const drop = (t: ReturnType<typeof setup>) => {
-      t.ing.prevMusicIndex = null; // what the main socket's close does
+      t.ing.musicFeed.prevMusicIndex = null; // what the main socket's close does
    };
 
    it("drops the old buffered audio when DAWN comes back stopped", () => {

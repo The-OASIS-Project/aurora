@@ -114,7 +114,7 @@ describe("the connect frames", () => {
       for (const f of connectFrames(SCENARIOS.signedIn).slice(0, 3)) c.frame(f);
       expect([...c.ing.serverFeatures].sort()).toEqual([...SCENARIOS.signedIn.features].sort());
       expect(c.ing.dawnVersion).toBe("0.0.0-fake");
-      expect(c.ing.musicEnabled).toBe(false);
+      expect(c.ing.musicFeed.musicEnabled).toBe(false);
    });
 
    it("config from an older DAWN: no flags at all", () => {
