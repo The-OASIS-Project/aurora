@@ -961,7 +961,7 @@ background job/briefing) instead of only on click/reconnect. Verified against
   `conv_db_create*` (after the autocommit INSERT + unlock, so the row is queryable before the
   frame lands); `bumped` fires from `conv_db_add_message` per NON-tool row (user + one assistant
   row per tool-loop iteration -> **>=2 per normal turn**). Fire-and-forget, never replayed.
-- **Consumer (Aurora, `dawn-ws.ts`):** debounce ~700ms trailing, then a page-0
+- **Consumer (Aurora, `conversation-list-feed.ts`):** debounce ~700ms trailing, then a page-0
   `list_conversations` **replace** (there is no per-conversation metadata verb to patch in place).
   **Self-echo:** ignore `bumped` for the active `this.convId` (covered instead by an own-turn
   refresh at terminal `stream_end`, coalesced one-per-turn not per tool iteration); `created` is
