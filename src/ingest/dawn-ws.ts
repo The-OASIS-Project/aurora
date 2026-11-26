@@ -44,8 +44,7 @@ import type {
 } from "./ingest.ts";
 import { TtsPlayback } from "../audio/tts.ts";
 import type { MusicAudio } from "../audio/music.ts";
-import { MicCapture, type MicCaptureState, type MicControl } from "../audio/mic.ts";
-import { RecordingDing } from "../audio/ding.ts";
+import type { MicControl } from "../audio/mic.ts";
 import { AlarmChime } from "../audio/alarm-chime.ts";
 import { collectToolNotes } from "./tool-notes.ts";
 import type { EmailRef, EmailSource } from "./email.ts";
@@ -73,6 +72,7 @@ import { JobsFeed } from "./jobs-feed.ts";
 import { AttentionFeed } from "./attention-feed.ts";
 import { MusicFeed } from "./music-feed.ts";
 import { ModelFeed } from "./model-feed.ts";
+import { VoiceInput } from "./voice-input.ts";
 import { CONV_PAGE, ConversationListFeed } from "./conversation-list-feed.ts";
 import { safeTimeZone } from "../util/tz.ts";
 import { CLIENT_PROTOCOL } from "./contract.ts";
@@ -94,10 +94,7 @@ import { formatCtx } from "./telemetry-format.ts";
    dawn-music socket (the legacy main-socket music path was removed server-side), but
    it still carries the 0x20 opcode there - the daemon prepends WS_BIN_MUSIC_DATA to
    every dedicated-socket frame, so the payload is [0x20][uint16-LE len][opus]. */
-const BIN_AUDIO_IN = 0x01; // mic audio to DAWN ([0x01][raw Int16 PCM] or [0x01][len-prefixed opus])
-const BIN_AUDIO_IN_END = 0x02; // end of a push-to-talk utterance (no payload); triggers ASR
 const TYPED_ECHO_TTL_MS = 15000; // window to match a typed turn's echo before it's stale
-const MIC_MUTE_COOLDOWN_MS = 800; // hold the continuous mute this long after DAWN stops speaking
 const BIN_AUDIO_OUT = 0x11; // a TTS PCM chunk
 const BIN_AUDIO_SEGMENT_END = 0x12; // play the accumulated segment now
 /* Cap the main-socket reconnect backoff (retries indefinitely): low, so the link is back within a
@@ -326,7 +323,7 @@ export class DawnIngest implements Ingest {
          mic stays muted through the whole reply - sentence gaps and tail. No-op outside
          continuous mode, so PTT is unaffected. */
       onActive: (on: boolean) => {
-         this.updateMicMute();
+         this.voiceInput.updateMicMute();
          if (!on && this.speechTail) {
             this.speechTail = false; // the reply's speech has played out
             if (!this.ownTurn) this.sinks.conversation.setTurnActive(false);
@@ -341,55 +338,22 @@ export class DawnIngest implements Ingest {
       () => localStorage.getItem(TOKEN_KEY),
       (path) => this.dawnUrl(path)
    );
-   /* The always-on "ready" ding: a short synthesized tone played on entry into
-      always_on_state:recording, replacing DAWN's dropped spoken greeting. Its own lazy,
-      isolated AudioContext; purely cosmetic (error-swallowed). */
-   private readonly ding = new RecordingDing();
-   /* Microphone capture (voice input). Constructed here so the composer's mic button can
-      bind to it before ingest.start() runs; its AudioContext stays lazy until first use.
-      onLevels feeds the reactor bar ring with the user's voice while speaking (the same
-      hook TTS uses), onState drives the button chrome, onFrame/onEnd carry the AUDIO_IN
-      payload and the utterance-end marker to DAWN (both gated on the session handshake). */
-   private readonly mic = new MicCapture({
-      onLevels: (bins) => this.sinks.reactor.setLevels(bins),
-      onFrame: (payload) => this.sendAudioIn(payload),
-      /* Gate the end marker on the same capsSynced check as the frames, so a reconnect
-         mid-utterance can't ship a bare AUDIO_IN_END whose audio was all dropped. */
-      onEnd: () => {
-         if (this.capsSynced) this.sendBinary(new Uint8Array([BIN_AUDIO_IN_END]));
-      },
-      onState: (s) => this.emitMicState(s),
-      onError: (msg) => {
-         console.warn("[mic]", msg);
-         /* A mic failure/revoke (acquire denied, wrong rate, unplugged) while continuous is
-            latched: disable it server-side instead of leaving DAWN armed with no audio. */
-         if (this.continuousOn) {
-            this.continuousOn = false;
-            this.resumeContinuous = false;
-            this.send({ type: "always_on_disable" });
-         }
-      }
+   /* Voice input: the mic, push-to-talk, continuous listening (voice-input.ts). */
+   private readonly voiceInput = new VoiceInput({
+      send: (msg) => this.send(msg),
+      sendBinary: (bytes) => this.sendBinary(bytes),
+      sinks: () => this.sinks,
+      ws: () => this.ws,
+      capsSynced: () => this.capsSynced,
+      wantConnected: () => this.wantConnected,
+      dawnSpeaking: () => this.dawnSpeaking,
+      tts: () => this.tts
    });
-   private micStateListener: (s: MicCaptureState) => void = () => {};
-   private lastMicState: MicCaptureState = "idle";
    /* True once DAWN has processed our init/reconnect (the `session` frame confirms it), so
       use_opus is set and it is safe to ship Opus. Reset on close: after a drop, Opus sent
       before the new session frame would be decoded as PCM (garbage). */
    private capsSynced = false;
-   /* Continuous-listening (always-on) state. `continuousOn` is the current session's latch;
-      `resumeContinuous` survives a reconnect so the always-on mode is re-enabled from the new
-      session's handshake (DAWN destroys the always-on context on socket close). */
-   private continuousOn = false;
-   private resumeContinuous = false;
    private dawnSpeaking = false; // DAWN's `state` is "speaking" (persists across TTS sentence gaps)
-   /* DAWN's always-on FSM is in "recording" (capturing the user's command), so the mic must
-      stay OPEN here regardless of dawnSpeaking - muting would blank the command window. (DAWN
-      dropped the spoken "Hello" greeting that used to play here with a concurrent
-      state:speaking; a client-side ding replaces it. The mic-open override remains as the
-      command-capture guarantee, and any concurrent TTS is handled AEC-side, not by muting.) */
-   private alwaysOnRecording = false;
-   private voiceWake: (() => void) | null = null; // fired on a wake-word match (standby wake-on-voice)
-   private micMuteCooldown = 0; // timer: reopen the mic a beat after DAWN goes fully quiet
    private ttsEnabled = localStorage.getItem(TTS_KEY) !== "false"; // default on
    /* "Always on (this browser)" session keepalive: the daemon slides this session's login
       expiry forward on heartbeat (capped at 30 days) so the ambient dashboard stays connected
@@ -700,7 +664,7 @@ export class DawnIngest implements Ingest {
       if (this.loggingOut) return; // already under way (a double activation)
       this.loggingOut = true; // revokeSession / a 4002 close during this just record the end
       this.logoutEnded = false;
-      const resumeContinuous = this.resumeContinuous; // a drop in the window would clear it
+      const resumeContinuous = this.voiceInput.resumeContinuous; // a drop in the window would clear it
       this.wantConnected = false; // DAWN closes the socket on success: don't auto-reconnect
       window.clearTimeout(this.wsReconnectTimer);
       /* An older DAWN (no `logout_closes_sockets`) stalls ~30 s freeing a session a live
@@ -744,7 +708,7 @@ export class DawnIngest implements Ingest {
             over meanwhile (then stay backed off - re-stealing it restarts the takeover fight). */
          if (!this.superseded) {
             this.wantConnected = true;
-            this.resumeContinuous = resumeContinuous;
+            this.voiceInput.resumeContinuous = resumeContinuous;
             if (!this.ws) this.openSocket();
          }
          this.notifyUser("Couldn't log out: DAWN didn't confirm. Try again.");
@@ -876,8 +840,8 @@ export class DawnIngest implements Ingest {
             both TTS out and mic in), so advertise `opus` only if we can BOTH encode the mic
             AND decode TTS - otherwise DAWN would send Opus TTS we can't play (static). Lock
             both audio paths to the same codec so nothing is misframed. */
-         const useOpus = this.mic.opusSupported && this.tts.opusSupported;
-         this.mic.setEncoding(useOpus);
+         const useOpus = this.voiceInput.mic.opusSupported && this.tts.opusSupported;
+         this.voiceInput.mic.setEncoding(useOpus);
          this.tts.setOpus(useOpus);
          const caps = {
             capabilities: { audio_codecs: useOpus ? ["opus", "pcm"] : ["pcm"] },
@@ -980,14 +944,7 @@ export class DawnIngest implements Ingest {
             leaving it playing would echo into a re-armed mic (and double-drive the reactor)
             after the reconnect. disconnect() already does this; the drop path must too. */
          this.tts.stop();
-         /* Release the mic on a drop; the session-frame resume re-enables continuous with a
-            fresh always-on context. A deliberate disconnect (wantConnected false) clears the
-            resume so it does NOT auto-re-arm. */
-         if (this.continuousOn) {
-            this.continuousOn = false;
-            this.mic.continuousStop();
-         }
-         if (!this.wantConnected) this.resumeContinuous = false;
+         this.voiceInput.linkDown();
          /* Silence a ringing-alarm loop on the drop like the other audio producers: the tone
             belongs to the dead connection, and if the alarm is dismissed/times-out during the
             outage that terminal frame is lost (DAWN won't re-broadcast it on reconnect), so it
@@ -1404,7 +1361,7 @@ export class DawnIngest implements Ingest {
                still drives the echo-mute; only the visuals are skipped. */
             if (type === "state") {
                this.dawnSpeaking = p.state === "speaking";
-               this.updateMicMute();
+               this.voiceInput.updateMicMute();
             }
             return;
          }
@@ -1491,7 +1448,7 @@ export class DawnIngest implements Ingest {
             /* Re-establish continuous listening after a reconnect: DAWN destroyed the
                always-on context on the drop, so re-enable from HERE (never before the
                handshake, or the enable targets the throwaway connection and is lost). */
-            if (this.resumeContinuous && !this.continuousOn) this.startContinuous();
+            this.voiceInput.resumeIfWanted();
             /* Re-anchor the active conversation. convId is only >0 on a RECONNECT (a fresh
                page load starts at 0 and list_conversations_response resumes via a full
                load_conversation). `reconnected` (added to the session frame server-side) tells
@@ -1579,7 +1536,8 @@ export class DawnIngest implements Ingest {
             this.musicFeed.configured(p);
             /* Mic capture chunks at the server's configured cadence (falls back to a
                default until this arrives). Matches the TTS-out audio_chunk_ms. */
-            if (typeof p.audio_chunk_ms === "number") this.mic.setChunkMs(p.audio_chunk_ms);
+            if (typeof p.audio_chunk_ms === "number")
+               this.voiceInput.mic.setChunkMs(p.audio_chunk_ms);
             break;
          }
 
@@ -2237,20 +2195,7 @@ export class DawnIngest implements Ingest {
                always_on_error). Clear the latch and don't flash the reactor red - a second
                tab (ALREADY_ACTIVE), a mid-PTT enable (PTT_ACTIVE), or an init failure just
                means continuous didn't start. */
-            if (
-               code === "ALREADY_ACTIVE" ||
-               code === "PTT_ACTIVE" ||
-               code === "INVALID_SAMPLE_RATE" ||
-               code === "INIT_FAILED"
-            ) {
-               console.warn("[dawn] continuous listening rejected:", code, p.message);
-               if (this.continuousOn) {
-                  this.continuousOn = false;
-                  this.resumeContinuous = false;
-                  this.mic.continuousStop();
-               }
-               break;
-            }
+            if (this.voiceInput.onAlwaysOnRefusal(code, p)) break;
             /* A turn refused for its images (DAWN image_turns_by_id): it never ran and nothing was
                saved. Give the draft back (text + attachments) and say why; not a reactor error. */
             if (code === "IMAGE_UNAVAILABLE" || code === "IMAGE_LIMIT" || code === "IMAGE_ERROR") {
@@ -2744,42 +2689,9 @@ export class DawnIngest implements Ingest {
             break;
          }
 
-         case "always_on_state": {
-            /* The ONLY always-on push (states: listening | wake_check | wake_pending |
-               recording | processing | disabled). These are DAWN's internal VAD
-               micro-states; we don't map them to the reactor (they'd thrash the busy
-               channel), the normal `state` frames still drive it during an always-on turn. */
-            const st = typeof p.state === "string" ? p.state : "";
-            /* "recording" = DAWN is capturing the user's command; everything else is not.
-               Drives the keep-mic-open override in updateMicMute. `entering` = the once-per-
-               wake transition INTO recording, which triggers the ready ding. */
-            const enteringRecording = st === "recording" && !this.alwaysOnRecording;
-            this.alwaysOnRecording = st === "recording";
-            if (st === "disabled") {
-               /* Server turned us off (60s no-audio auto-disable, or the echo of our own
-                  disable). If our latch is still up it was unsolicited -> tear down + clear
-                  the resume so we don't fight it on reconnect. */
-               if (this.continuousOn) {
-                  this.continuousOn = false;
-                  this.resumeContinuous = false;
-                  this.mic.continuousStop();
-               }
-            } else if (this.continuousOn) {
-               /* Ready ding: replaces DAWN's dropped spoken greeting. Once per wake (guarded
-                  by the transition), and safe to play into the open mic - a pure tone isn't
-                  VAD-scored as speech, so it can't re-trigger the echo stall. */
-               if (enteringRecording) {
-                  this.ding.play();
-                  this.voiceWake?.(); // a wake-word match: wake the standby screensaver
-               }
-               /* Re-evaluate the mute on every micro-state transition: unmute entering
-                  "recording" (capture the command), and let the speaking/tail logic re-mute
-                  for "processing" + the reply. The cooldown means this can't reopen mid-reply
-                  the way a bare unmute would. */
-               this.updateMicMute();
-            }
+         case "always_on_state":
+            this.voiceInput.onFrame(type, p);
             break;
-         }
 
          default:
             /* The mail panel's replies (email_*_response), matched by req in email-wire.ts. */
@@ -3358,74 +3270,7 @@ export class DawnIngest implements Ingest {
       continuous listening are deliberate, user-initiated writes (voice input, in the same
       sanctioned class as chat submit). */
    getMicControl(): MicControl {
-      return {
-         available: () => this.mic.available,
-         pttStart: () => this.mic.pttStart(),
-         pttCommit: () => this.mic.pttCommit(),
-         pttEnd: () => this.mic.pttEnd(),
-         pttCancel: () => this.mic.pttCancel(),
-         toggleContinuous: () => this.toggleContinuous(),
-         onState: (cb) => {
-            this.micStateListener = cb;
-            cb(this.lastMicState);
-         },
-         listDevices: () => this.mic.listDevices(),
-         currentDevice: () => this.mic.getDevice(),
-         setDevice: (id) => {
-            this.mic.setDevice(id);
-            /* Apply immediately if continuous is latched: re-latch on the new device (a
-               fresh always-on context) so the switch takes effect without a manual toggle. */
-            if (this.continuousOn) {
-               this.stopContinuous(true);
-               this.startContinuous();
-            }
-         }
-      };
-   }
-
-   private emitMicState(s: MicCaptureState): void {
-      this.lastMicState = s;
-      this.micStateListener(s);
-   }
-
-   /* Tap-to-latch continuous listening. A deliberate, user-initiated write (same sanctioned
-      class as chat submit): it turns on DAWN's server-side VAD + wake word. */
-   private toggleContinuous(): void {
-      if (this.continuousOn) this.stopContinuous(true);
-      else this.startContinuous();
-   }
-
-   private startContinuous(): void {
-      if (this.continuousOn || !this.mic.available || this.ws?.readyState !== WebSocket.OPEN)
-         return;
-      this.continuousOn = true;
-      /* Never inherit a stale recording flag across a re-arm/reconnect: a stale-true errs
-         UNSAFE (it force-holds the mic open -> DAWN's own voice echoes) until the next
-         always_on_state frame resets it. A fresh latch always starts not-recording. */
-      this.alwaysOnRecording = false;
-      this.resumeContinuous = true; // survive a reconnect
-      /* Enable BEFORE streaming so DAWN sets up its always-on context first; sample_rate is
-         the constant 48000 (its VAD decimation divides by it - reporting the ctx rate would
-         degrade wake detection). */
-      this.send({ type: "always_on_enable", payload: { sample_rate: 48000 } });
-      /* Seed the echo mute: latching while DAWN is mid-reply (speaking or audio still
-         playing) must not capture its voice. updateMicMute drives it after this. */
-      this.mic
-         .continuousStart(this.dawnSpeaking || this.tts.isSpeaking())
-         .catch((e: unknown) => console.warn("[dawn] continuous listening failed to start:", e));
-   }
-
-   /* userInitiated: a tap-off / auto-unlatch clears the resume flag; a transient teardown
-      (server auto-disable, error) leaves it so a reconnect can re-establish. */
-   private stopContinuous(userInitiated: boolean): void {
-      if (!this.continuousOn) return;
-      this.continuousOn = false;
-      this.alwaysOnRecording = false;
-      if (userInitiated) this.resumeContinuous = false;
-      window.clearTimeout(this.micMuteCooldown);
-      this.micMuteCooldown = 0;
-      this.mic.continuousStop(); // synchronous: releases the mic and emits idle
-      this.send({ type: "always_on_disable" });
+      return this.voiceInput.getMicControl();
    }
 
    /* Apply one DAWN machine state to the reactor, echo-mute and conversation chip. */
@@ -3437,7 +3282,7 @@ export class DawnIngest implements Ingest {
          across TTS sentence gaps, so muting on it (not on per-segment TTS playback)
          keeps the mic from hearing DAWN's own voice between sentences. */
       this.dawnSpeaking = st === "speaking";
-      this.updateMicMute();
+      this.voiceInput.updateMicMute();
       this.sinks.reactor.setState(toReactorState(st));
       this.sinks.conversation.setThinking(st === "thinking" || st === "summarizing");
       this.syncTurnActive(st, prev);
@@ -3489,40 +3334,6 @@ export class DawnIngest implements Ingest {
          this.lastState === "listening"
       ) {
          this.applyState("idle");
-      }
-   }
-
-   /* Single echo-mute decision for continuous listening. Muted while DAWN is speaking OR its
-      voice is still audibly playing (the buffered tail after state:idle); when both settle,
-      a short cooldown holds the mute a beat longer, then reopens the mic. Using DAWN's
-      speaking state - which spans the whole reply - closes the inter-sentence gaps that
-      per-segment TTS playback alone would leave open. No-op outside continuous mode. */
-   private updateMicMute(): void {
-      if (!this.continuousOn) {
-         window.clearTimeout(this.micMuteCooldown);
-         this.micMuteCooldown = 0;
-         return;
-      }
-      /* Always-on RECORDING overrides the speaking-mute: nothing may gag the user's command.
-         DAWN speaks no greeting while it records (it dropped the "Hello." that once echoed
-         into the capture); the only sound here is Aurora's ready ding, a tone DAWN's speech
-         detector doesn't take for speech. The browser's echo cancellation stays on for
-         anything else. */
-      if (this.alwaysOnRecording) {
-         window.clearTimeout(this.micMuteCooldown);
-         this.micMuteCooldown = 0;
-         this.mic.setMuted(false);
-         return;
-      }
-      if (this.dawnSpeaking || this.tts.isSpeaking()) {
-         window.clearTimeout(this.micMuteCooldown);
-         this.micMuteCooldown = 0;
-         this.mic.setMuted(true);
-      } else if (this.micMuteCooldown === 0) {
-         this.micMuteCooldown = window.setTimeout(() => {
-            this.micMuteCooldown = 0;
-            this.mic.setMuted(false);
-         }, MIC_MUTE_COOLDOWN_MS);
       }
    }
 
@@ -4019,7 +3830,7 @@ export class DawnIngest implements Ingest {
    /* Register a callback fired at a wake-word match (the always-on VAD entering "recording"),
       so the ambient-standby screensaver can wake on a real voice match. Read-only observer. */
    onVoiceWake(cb: () => void): void {
-      this.voiceWake = cb;
+      this.voiceInput.onVoiceWake(cb);
    }
 
    /* "Alarm sounds" preference (the System-menu toggle): gates the client chime + ringing
@@ -4075,13 +3886,8 @@ export class DawnIngest implements Ingest {
       this.alarmsFeed.linkDown();
       this.phone.reset();
       this.tts?.stop();
-      window.clearTimeout(this.micMuteCooldown);
-      this.micMuteCooldown = 0;
       this.dawnSpeaking = false;
-      /* Drop any in-flight utterance: the server's accumulated audio dies with the
-         connection, so there is nothing to salvage. Reset the button to idle. */
-      this.mic.stop();
-      this.emitMicState("idle");
+      this.voiceInput.stop();
       this.conversationListFeed.cancelRefresh(); // no live picker refresh should fire post-teardown
       this.ws?.close();
       this.ws = null;
@@ -4128,8 +3934,7 @@ export class DawnIngest implements Ingest {
       this.libraryFeed.dispose();
       this.tts?.dispose();
       this.musicFeed.dispose();
-      this.mic.dispose();
-      this.ding.dispose();
+      this.voiceInput.dispose();
       this.phone.dispose();
       this.email.dispose();
       this.alarmChime.dispose();
@@ -4332,19 +4137,6 @@ export class DawnIngest implements Ingest {
       guarded so a frame that arrives after a drop is dropped, not thrown. */
    private sendBinary(bytes: Uint8Array<ArrayBuffer>): void {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(bytes);
-   }
-
-   /* One mic capture chunk -> an AUDIO_IN frame ([0x01][payload]). Voice input is a
-      deliberate, user-initiated write, in the same sanctioned class as chat submit. */
-   private sendAudioIn(payload: Uint8Array): void {
-      /* Hold audio until the session is confirmed: Opus shipped before use_opus is set on
-         the (re)connection would be decoded as PCM. In practice a hold is always long
-         after `session`, so this only guards the reconnect-mid-utterance edge. */
-      if (!this.capsSynced) return;
-      const frame = new Uint8Array(1 + payload.byteLength);
-      frame[0] = BIN_AUDIO_IN;
-      frame.set(payload, 1);
-      this.sendBinary(frame);
    }
 
    private stopMetrics(): void {
