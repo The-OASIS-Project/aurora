@@ -212,11 +212,17 @@ export class VoiceInput {
          currentDevice: () => this.mic.getDevice(),
          setDevice: (id) => {
             this.mic.setDevice(id);
-            /* Apply immediately if continuous is latched: re-latch on the new device (a
-               fresh always-on context) so the switch takes effect without a manual toggle. */
+            /* Apply immediately if continuous is latched: move the capture to the new device,
+               here only. DAWN's always-on context keeps running (the stream stays 48 kHz, like
+               the echo mute's encoder reset). Turning DAWN's listening off and on would race its
+               "disabled" reply, which lands after the re-latch and reads as DAWN turning it off. */
             if (this.continuousOn) {
-               this.stopContinuous(true);
-               this.startContinuous();
+               this.mic.continuousStop();
+               this.mic
+                  .continuousStart(this.dawnSpeaking || this.tts.isSpeaking())
+                  .catch((e: unknown) =>
+                     console.warn("[dawn] continuous listening failed to start:", e)
+                  );
             }
          }
       };

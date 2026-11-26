@@ -202,8 +202,10 @@ export class MicCapture {
       return this.deviceId;
    }
 
-   /* Pick an input device (persisted). Takes effect on the next capture; the caller
-      re-latches continuous if it wants the change to apply immediately. */
+   /* Pick an input device (persisted). Takes effect on the next capture; to apply it to a
+      continuous capture now, the caller restarts the capture (continuousStop, then
+      continuousStart). Never by turning DAWN's listening off and on: DAWN's "disabled" reply
+      to that lands after the re-latch and reads as DAWN turning listening off. */
    setDevice(id: string): void {
       this.deviceId = id;
       if (id) localStorage.setItem(DEVICE_KEY, id);

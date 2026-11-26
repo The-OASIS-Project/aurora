@@ -147,3 +147,18 @@ it("a latch the user set comes back after a reconnect", () => {
    reconnected();
    expect(types()).toContain("always_on_enable");
 });
+
+it("switching the mic while listening keeps listening, without turning DAWN's listening off", () => {
+   const mic = connect();
+   mic.toggleContinuous();
+   sent = [];
+   mic.setDevice("another-mic");
+   /* A disable and re-enable here would race DAWN's "disabled" reply to the first, which lands
+      after the re-latch and reads as DAWN turning listening off: the new mic stopped, the button
+      dark, DAWN still listening to nothing. The capture just moves to the new mic. */
+   expect(types()).toEqual([]);
+   expect(stops).toBe(1); // the old mic released...
+   expect(started).toHaveLength(2); // ...and the new one started
+   frame("always_on_state", { state: "listening" });
+   expect(stops).toBe(1); // still on
+});
