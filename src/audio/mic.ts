@@ -98,6 +98,12 @@ export class MicCapture {
       buffer on the server. Once committed, chunks stream straight through. */
    private pending: Uint8Array[] = [];
    private committed = false;
+   /* A push-to-talk release being sent: its last Opus frames come back from the encoder after
+      its mode has cleared, then its end. Any other audio the encoder hands back with nothing
+      capturing (continuous listening turned off, a cancelled push-to-talk, the mic gone) is
+      dropped: reaching DAWN with no end marker, it would open a push-to-talk recording that
+      never ends, and DAWN would refuse every re-arm (PTT_ACTIVE). */
+   private sendingTail = false;
    private chunkMs = DEFAULT_CHUNK_MS;
    private workletLoaded = false;
    private startPromise: Promise<void> | null = null;
@@ -160,8 +166,10 @@ export class MicCapture {
       this.encoder.onmessage = (e: MessageEvent<EncoderMessage | null>): void => {
          const m = e.data;
          if (m?.type === "encoded") this.handlePayload(new Uint8Array(m.data));
-         else if (m?.type === "end") this.cb.onEnd?.();
-         else if (m?.type === "error") console.warn("[mic] opus encode error:", m.message);
+         else if (m?.type === "end") {
+            this.sendingTail = false;
+            this.cb.onEnd?.();
+         } else if (m?.type === "error") console.warn("[mic] opus encode error:", m.message);
       };
    }
 
@@ -218,9 +226,11 @@ export class MicCapture {
       this.pending = [];
    }
 
-   /* One ready-to-send payload (a raw PCM chunk, or a length-prefixed Opus run): buffer it
-      while a PTT gesture is still pending (a tap discards it), else stream it straight out. */
+   /* One ready-to-send payload (a raw PCM chunk, or a length-prefixed Opus run): dropped when
+      nothing is capturing (unless a sending push-to-talk's tail, see sendingTail), buffered
+      while a PTT gesture is still pending (a tap discards it), else streamed straight out. */
    private handlePayload(payload: Uint8Array): void {
+      if (!this.mode && !this.sendingTail) return;
       if (this.mode === "ptt" && !this.committed) this.pending.push(payload);
       else this.cb.onFrame?.(payload);
    }
@@ -377,6 +387,7 @@ export class MicCapture {
          DAWN is mid-reply doesn't capture the ongoing TTS. */
       this.muted = mode === "continuous" ? initialMuted : false;
       this.mode = mode;
+      this.sendingTail = false;
       this.pending = [];
       this.committed = mode === "continuous"; // continuous streams immediately; PTT waits for commit
       /* Discard any Opus residual the encoder holds from a prior tap/abandoned utterance,
@@ -497,6 +508,7 @@ export class MicCapture {
       this.postWorklet("stop"); // flush the partial buffer -> a final 'audio' message
       /* Let that final chunk reach (Opus: the encode worker; PCM: onFrame) before we end. */
       await new Promise((r) => setTimeout(r, WORKLET_FLUSH_MS));
+      this.sendingTail = send && this.useOpus && this.encoder !== null;
       this.mode = null;
       this.pending = [];
       this.stop();
